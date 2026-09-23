@@ -35,7 +35,7 @@ npx copilotkit@latest project select
 npm run link:environment
 ```
 
-The CLI writes its own `.env` containing `CPK_INTELLIGENCE_API_KEY`. Kite loads `.env` in the process working directory. `link:environment` also stores a file-path reference in Kite’s local settings so the packaged app can find that same CLI-managed file when opened from Finder; it does not copy the credential. Keep it private and untracked. Supply the model API key in the process environment, preferably using a secret manager (`op run`). See `.env.example` for variable names; never put keys in frontend code.
+The CLI writes its own `.env` containing `CPK_INTELLIGENCE_API_KEY`. Kite loads `.env` in the process working directory. `link:environment` also stores a file-path reference in Kite’s local settings so the packaged app can find that same CLI-managed file when opened from Finder; it does not copy the credential. Keep it private and untracked. For OpenAI, enter a key in **Settings → Model connection** for the current session; Kite keeps it only in memory and clears it on quit. Alternatively, supply the model API key in the process environment, preferably using a secret manager (`op run`). See `.env.example` for variable names; never put keys in frontend code.
 
 - `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, or `GOOGLE_API_KEY`, matching `KITE_MODEL`.
 - `KITE_MODEL` defaults to `openai/gpt-4.1`.

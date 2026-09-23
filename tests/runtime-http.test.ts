@@ -27,6 +27,13 @@ test("real runtime discovers AG-UI agent only after loopback authentication", as
     assert.equal(response.status, 200);
     const info = await response.json();
     assert.ok(info.agents.default);
+    const prior = runtime.settings.modelConfigured;
+    assert.throws(() => runtime.setModelKey("invalid"), /valid OpenAI/);
+    assert.equal(runtime.settings.modelConfigured, prior);
+    const fixtureKey = "sk-testfixture00000000000000000000";
+    runtime.setModelKey(fixtureKey);
+    assert.equal(runtime.settings.modelConfigured, true);
+    assert.ok(!JSON.stringify(runtime.settings).includes(fixtureKey));
   } finally {
     await new Promise<void>((resolve, reject) =>
       runtime.server.close((error) => (error ? reject(error) : resolve())),

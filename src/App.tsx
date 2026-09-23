@@ -163,6 +163,7 @@ function Workspace({
   const [title, setTitle] = useState("");
   const [note, setNote] = useState("");
   const [working, setWorking] = useState(false);
+  const [modelKey, setModelKey] = useState("");
   const [agentBusy, setAgentBusy] = useState(false);
   const [request, setRequest] = useState<AgentRequest | null>(null);
   const [draftFor, setDraftFor] = useState<Recording | null>(null);
@@ -999,6 +1000,42 @@ function Workspace({
                   Development permission labels may say Electron or
                   kite-recorder.
                 </p>
+              </div>
+              <div className="settings-card">
+                <h2>Model connection</h2>
+                <p>
+                  Connect an OpenAI key for this session. Kept in memory and
+                  cleared when Kite quits.
+                </p>
+                <form
+                  onSubmit={(event) => {
+                    event.preventDefault();
+                    const key = modelKey;
+                    setModelKey("");
+                    void perform(() => window.kite!.setModelKey(key));
+                  }}
+                >
+                  <input
+                    type="password"
+                    aria-label="OpenAI API key"
+                    autoComplete="off"
+                    placeholder="OpenAI API key"
+                    value={modelKey}
+                    onChange={(event) => setModelKey(event.target.value)}
+                  />
+                  <button
+                    className="button secondary"
+                    disabled={working || agentBusy || !modelKey.trim()}
+                  >
+                    Use key for this session
+                  </button>
+                </form>
+                <Setting
+                  label="Model"
+                  value={
+                    data.settings.modelConfigured ? "Connected" : "Key required"
+                  }
+                />
               </div>
               <div className="settings-card">
                 <h2>Your workspace</h2>

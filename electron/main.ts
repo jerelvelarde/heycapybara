@@ -257,6 +257,10 @@ app
     session.defaultSession.setPermissionRequestHandler(
       (_wc, _permission, callback) => callback(false),
     );
+    handle("setModelKey", async (key) => {
+      runtime.setModelKey(key);
+      broadcast();
+    });
     handle("verifyIntelligence", async () => {
       settings.deliveryStatus = await runtime.checkIntelligence();
       broadcast();

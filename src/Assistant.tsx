@@ -95,7 +95,7 @@ export function Assistant({
     }
     if (!settings.modelConfigured) {
       setError(
-        "Add your model API key to the runtime environment, then restart Kite.",
+        "Connect your OpenAI API key in Settings to start this session.",
       );
       onDone();
       return;

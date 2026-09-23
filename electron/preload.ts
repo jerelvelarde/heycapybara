@@ -1,6 +1,7 @@
 import { contextBridge, ipcRenderer } from "electron";
 import type { KiteAPI } from "../src/types";
 const api: KiteAPI = {
+  setModelKey: (key) => ipcRenderer.invoke("kite:setModelKey", key),
   verifyIntelligence: () => ipcRenderer.invoke("kite:verifyIntelligence"),
   reviewedRecording: (id) => ipcRenderer.invoke("kite:reviewedRecording", id),
   state: () => ipcRenderer.invoke("kite:state"),

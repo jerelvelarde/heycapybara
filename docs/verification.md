@@ -11,8 +11,11 @@
 - Production dependency audit reported zero vulnerabilities.
 - Native and application reviews completed with no remaining reported blockers.
 
+- Shared OpenAI key was connected through the packaged app’s session-only password field; a live `openai/gpt-4.1` response completed through AG-UI. The field cleared after submission and no model key was saved to project files.
+- Session key validation and exclusion from settings snapshots passed the runtime test.
+
 ## Not yet verified
 
-A model provider API key is not configured. AI-generated skill quality, completed model-run ingestion, subsequent automatic analysis, and applying a newly published cloud skill have not been exercised. No model-generated result or autonomous workflow completion is claimed.
+The model key is configured for the current app session only. AI-generated skill quality, cloud-side confirmation of completed model-run ingestion, subsequent automatic analysis, and applying a newly published cloud skill have not been exercised. No autonomous workflow completion is claimed.
 
 The local recording smoke used a narrated verification session in Kite; capture quality across third-party applications varies and needs real-workflow testing. The app is an unsigned local build, not a notarized distribution. Voice and arbitrary autonomous click/type execution are outside this version.

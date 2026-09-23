@@ -47,6 +47,7 @@ export type DesktopAction =
   | { type: "point"; x: number; y: number };
 export interface KiteAPI {
   state(): Promise<Snapshot>;
+  setModelKey(key: string): Promise<void>;
   verifyIntelligence(): Promise<void>;
   reviewedRecording(id: string): Promise<Recording>;
   start(title: string): Promise<Recording>;
