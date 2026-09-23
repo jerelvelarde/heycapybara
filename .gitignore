@@ -1,0 +1,11 @@
+node_modules/
+dist/
+release/
+native/bin/
+.env
+.env.*
+!.env.example
+.DS_Store
+*.log
+artifacts/
+.copilotkit/

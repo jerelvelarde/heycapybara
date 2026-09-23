@@ -1,0 +1,86 @@
+{
+  "name": "kite-sprite",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "dist/electron/main.js",
+  "scripts": {
+    "dev": "node scripts/dev.mjs",
+    "build": "tsc --noEmit && vite build && node scripts/build.mjs",
+    "build:native": "bash scripts/build-native.sh",
+    "start": "electron .",
+    "test": "tsx --test tests/*.test.ts",
+    "typecheck": "tsc --noEmit",
+    "format": "prettier --write src electron server tests scripts docs package.json tsconfig.json vite.config.ts README.md",
+    "format:check": "prettier --check src electron server tests scripts docs package.json tsconfig.json vite.config.ts README.md",
+    "package": "npm run build:native && npm run build && electron-builder --mac dir",
+    "smoke": "node scripts/smoke.mjs",
+    "smoke:recording": "node scripts/smoke.mjs --record",
+    "lint": "eslint src electron server tests scripts vite.config.ts",
+    "verify:intelligence": "node scripts/verify-intelligence.mjs",
+    "smoke:packaged": "node scripts/smoke.mjs --packaged",
+    "link:environment": "node scripts/link-environment.mjs"
+  },
+  "dependencies": {
+    "@ag-ui/client": "^0.0.59",
+    "@ag-ui/core": "^1.0.0",
+    "@copilotkit/react-core": "^1.73.3",
+    "@copilotkit/runtime": "^1.73.3",
+    "@hono/node-server": "^2.1.1",
+    "dotenv": "^18.0.3",
+    "hono": "^4.13.8",
+    "lucide-react": "^1.47.0",
+    "react": "^19.3.0",
+    "react-dom": "^19.3.0",
+    "zod": "^4.6.5"
+  },
+  "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "@playwright/test": "^1.63.0",
+    "@types/node": "^26.6.2",
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.3.0",
+    "@vitejs/plugin-react": "^6.1.1",
+    "electron": "^44.4.5",
+    "electron-builder": "^26.15.3",
+    "esbuild": "^0.28.2",
+    "eslint": "^10.11.0",
+    "globals": "^17.12.0",
+    "prettier": "^3.9.9",
+    "tsx": "^4.23.15",
+    "typescript": "~6.0.2",
+    "typescript-eslint": "^8.70.1",
+    "vite": "^8.3.0"
+  },
+  "description": "A macOS companion that turns cross-app workflows into reusable skills",
+  "author": "Kite",
+  "build": {
+    "appId": "com.kite.sprite",
+    "productName": "Kite",
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "dist/**/*",
+      "package.json"
+    ],
+    "extraResources": [
+      {
+        "from": "native/bin/kite-recorder",
+        "to": "kite-recorder"
+      }
+    ],
+    "mac": {
+      "target": "dir",
+      "category": "public.app-category.productivity",
+      "extendInfo": {
+        "NSMicrophoneUsageDescription": "Kite uses the microphone only when you start voice input.",
+        "NSScreenCaptureUsageDescription": "Kite captures screen context only when you attach a screenshot."
+      },
+      "identity": null
+    }
+  },
+  "overrides": {
+    "undici@<6.28.1": "6.28.1"
+  }
+}

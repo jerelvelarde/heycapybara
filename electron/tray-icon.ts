@@ -1,0 +1,2 @@
+export const trayIcon =
+  "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAYAAABzenr0AAAAbUlEQVR4nO3QQQrAIAxEUe9/6XYluChizCRfUgdc/xdbK7CHjveHxtMRX/E0xCwejliJhyEscTliJy5DeOJuhCK+jVDGzYiI+BEI89C4EuEeGvcg5EPjFkT40PgMkT40PiLw4T9xARjgv5fXAbxOth/vFTnzRgAAAABJRU5ErkJggg==";

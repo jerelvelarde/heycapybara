@@ -1,0 +1,463 @@
+import "dotenv/config";
+import {
+  app,
+  BrowserWindow,
+  ipcMain,
+  globalShortcut,
+  screen,
+  dialog,
+  shell,
+  desktopCapturer,
+  session,
+  Menu,
+  Tray,
+  nativeImage,
+} from "electron";
+import {
+  spawn,
+  execFile,
+  type ChildProcessWithoutNullStreams,
+} from "node:child_process";
+import { promisify } from "node:util";
+import { createInterface } from "node:readline";
+import { fileURLToPath } from "node:url";
+import { join, dirname } from "node:path";
+import { randomUUID } from "node:crypto";
+import { writeFile } from "node:fs/promises";
+import { z } from "zod";
+import { Store } from "./store";
+import { loadLinkedEnvironment } from "./environment";
+import { trayIcon } from "./tray-icon";
+import { startRuntime } from "../server/runtime";
+import type { Permissions, Settings } from "../src/types";
+
+app.setName("Kite");
+if (process.env.KITE_DATA_DIR)
+  app.setPath("userData", process.env.KITE_DATA_DIR);
+const root = app.getAppPath();
+const helper = app.isPackaged
+  ? join(process.resourcesPath, "kite-recorder")
+  : join(root, "native/bin/kite-recorder");
+const exec = promisify(execFile);
+let workspace: BrowserWindow;
+let buddy: BrowserWindow;
+let tray: Tray;
+let recorder: ChildProcessWithoutNullStreams | null = null;
+let store: Store;
+let settings: Settings;
+let runtime: Awaited<ReturnType<typeof startRuntime>>;
+let recordingQueue = Promise.resolve();
+let transitioning = false;
+const broadcast = () =>
+  BrowserWindow.getAllWindows().forEach((w) =>
+    w.webContents.send("kite:update"),
+  );
+async function permissions(): Promise<Permissions> {
+  const { stdout } = await exec(helper, ["--permissions"]);
+  return z
+    .object({ accessibility: z.boolean(), screenCapture: z.boolean() })
+    .parse(JSON.parse(stdout));
+}
+const eventSchema = z.object({
+  id: z.string(),
+  timestamp: z.string(),
+  kind: z.enum(["app", "click", "shortcut", "error", "status"]),
+  app: z.string(),
+  bundleId: z.string(),
+  title: z.string(),
+  detail: z.string(),
+  x: z.number().optional(),
+  y: z.number().optional(),
+});
+async function finishRecording() {
+  if (transitioning) throw new Error("Recording is changing state");
+  transitioning = true;
+  try {
+    const child = recorder;
+    recorder = null;
+    if (child) {
+      child.stdin.write('{"command":"stop"}\n');
+      await new Promise<void>((resolve) => {
+        const timer = setTimeout(() => {
+          child.kill();
+          resolve();
+        }, 1500);
+        child.once("exit", () => {
+          clearTimeout(timer);
+          resolve();
+        });
+      });
+    }
+    await recordingQueue;
+    const result = await store.stop();
+    broadcast();
+    return result;
+  } finally {
+    transitioning = false;
+  }
+}
+async function startRecording(title: string) {
+  if (transitioning || recorder || store.active)
+    throw new Error("Recording is already active or changing state");
+  transitioning = true;
+  try {
+    if (!(await permissions()).accessibility)
+      throw new Error(
+        "Enable Accessibility for Kite in System Settings, then retry.",
+      );
+    const recording = await store.start(title);
+    const child = spawn(helper, [], { stdio: ["pipe", "pipe", "pipe"] });
+    recorder = child;
+    const lines = createInterface({ input: child.stdout });
+    let readyResolve: () => void;
+    let readyReject: (error: Error) => void;
+    const ready = new Promise<void>((resolve, reject) => {
+      readyResolve = resolve;
+      readyReject = reject;
+    });
+    const timer = setTimeout(
+      () => readyReject(new Error("Native recorder did not become ready")),
+      5000,
+    );
+    lines.on("line", (line) => {
+      try {
+        const event = eventSchema.parse(JSON.parse(line));
+        if (event.kind === "error") readyReject(new Error(event.detail));
+        if (event.kind === "status" && event.detail === "Recording started")
+          readyResolve();
+        recordingQueue = recordingQueue
+          .then(async () => {
+            if (store.active?.id === recording.id) {
+              await store.append(event);
+              broadcast();
+            }
+          })
+          .catch(async () => {
+            child.kill();
+            await dialog.showMessageBox({
+              type: "error",
+              message: "Recording stopped because an event could not be saved.",
+            });
+          });
+      } catch {
+        readyReject(new Error("Invalid native recorder event"));
+      }
+    });
+    child.on("error", (error) => readyReject(error));
+    child.on("exit", () => {
+      clearTimeout(timer);
+      lines.close();
+      readyReject(new Error("Native recorder exited"));
+      if (recorder === child) {
+        recorder = null;
+        recordingQueue = recordingQueue
+          .then(async () => {
+            if (store.active) {
+              await store.stop();
+              broadcast();
+            }
+          })
+          .catch(async () => {
+            broadcast();
+            await dialog.showMessageBox({
+              type: "error",
+              message:
+                "Could not finalize the recording. Retry Stop or restart Kite.",
+            });
+          });
+      }
+    });
+    child.stderr.on("data", () => {}); // Native diagnostic text can contain app metadata; do not log it.
+    child.stdin.write('{"command":"start"}\n');
+    try {
+      await ready;
+    } catch (error) {
+      child.kill();
+      recorder = null;
+      await recordingQueue;
+      if (store.active) await store.stop();
+      broadcast();
+      throw error;
+    } finally {
+      clearTimeout(timer);
+    }
+    broadcast();
+    return recording;
+  } finally {
+    transitioning = false;
+  }
+}
+function openWorkspace() {
+  workspace.show();
+  workspace.focus();
+}
+function makeWindow(isBuddy: boolean) {
+  const display = screen.getPrimaryDisplay().workArea;
+  const win = new BrowserWindow({
+    width: isBuddy ? 240 : 1240,
+    height: isBuddy ? 170 : 820,
+    minWidth: isBuddy ? 240 : 960,
+    minHeight: isBuddy ? 170 : 650,
+    x: isBuddy ? display.x + display.width - 258 : undefined,
+    y: isBuddy ? display.y + display.height - 190 : undefined,
+    show: false,
+    title: "Kite",
+    backgroundColor: isBuddy ? "#00000000" : "#f6f5f1",
+    transparent: isBuddy,
+    frame: !isBuddy,
+    ...(!isBuddy ? { titleBarStyle: "hiddenInset" as const } : {}),
+    resizable: !isBuddy,
+    alwaysOnTop: isBuddy,
+    skipTaskbar: isBuddy,
+    webPreferences: {
+      preload: join(dirname(fileURLToPath(import.meta.url)), "preload.cjs"),
+      contextIsolation: true,
+      nodeIntegration: false,
+      sandbox: true,
+    },
+  });
+  win.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
+  win.webContents.on("will-navigate", (event) => event.preventDefault());
+  if (isBuddy)
+    win.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
+  if (process.env.KITE_DEV_URL)
+    void win.loadURL(process.env.KITE_DEV_URL + (isBuddy ? "?buddy=1" : ""));
+  else
+    void win.loadFile(join(root, "dist/renderer/index.html"), {
+      query: isBuddy ? { buddy: "1" } : {},
+    });
+  win.once("ready-to-show", () => win.show());
+  win.on("close", (event) => {
+    if (!(app as typeof app & { quitting?: boolean }).quitting) {
+      event.preventDefault();
+      win.hide();
+    }
+  });
+  return win;
+}
+const text = z.string().max(12000);
+function handle(name: string, fn: (...args: unknown[]) => unknown) {
+  ipcMain.handle("kite:" + name, (event, ...args) => {
+    if (
+      ![workspace?.webContents, buddy?.webContents].includes(event.sender) ||
+      event.senderFrame !== event.sender.mainFrame
+    )
+      throw new Error("Untrusted IPC sender");
+    return fn(...args);
+  });
+}
+app
+  .whenReady()
+  .then(async () => {
+    store = new Store(join(app.getPath("userData"), "library"));
+    await store.load();
+    await loadLinkedEnvironment(app.getPath("userData"));
+    runtime = await startRuntime(store);
+    settings = runtime.settings;
+    session.defaultSession.setPermissionRequestHandler(
+      (_wc, _permission, callback) => callback(false),
+    );
+    handle("verifyIntelligence", async () => {
+      settings.deliveryStatus = await runtime.checkIntelligence();
+      broadcast();
+    });
+    handle("state", async () => ({
+      recordings: store.recordings,
+      skills: store.skills,
+      active: store.active,
+      permissions: await permissions(),
+      settings,
+    }));
+    handle("reviewedRecording", async (id) => {
+      await store.flush();
+      const recording = store.recordings.find(
+        (r) => r.id === z.string().parse(id),
+      );
+      if (!recording?.stoppedAt)
+        throw new Error("A completed recording is required");
+      return structuredClone(recording);
+    });
+    handle("start", (title) =>
+      startRecording(z.string().min(1).max(160).parse(title)),
+    );
+    handle("stop", finishRecording);
+    handle("note", async (value) => {
+      const note = text.min(1).parse(value);
+      await store.append({
+        id: randomUUID(),
+        timestamp: new Date().toISOString(),
+        kind: "note",
+        app: "You",
+        bundleId: "",
+        title: "Narration",
+        detail: note,
+      });
+      broadcast();
+    });
+    handle("removeEvent", async (r, e) => {
+      await store.removeEvent(z.string().parse(r), z.string().parse(e));
+      broadcast();
+    });
+    handle("deleteRecording", async (id) => {
+      await store.deleteRecording(z.string().parse(id));
+      broadcast();
+    });
+    handle("saveSkill", async (input) => {
+      const skill = await store.saveSkill(
+        z
+          .object({
+            id: z.string().optional(),
+            name: z.string(),
+            markdown: z.string(),
+            recordingId: z.string(),
+            approve: z.boolean(),
+          })
+          .parse(input),
+      );
+      broadcast();
+      return skill;
+    });
+    handle("deleteSkill", async (id) => {
+      await store.deleteSkill(z.string().parse(id));
+      broadcast();
+    });
+    handle("exportSkill", async (id) => {
+      const skill = store.skills.find((s) => s.id === id);
+      if (!skill) throw new Error("Skill not found");
+      const result = await dialog.showSaveDialog(workspace, {
+        title: "Export workflow skill",
+        defaultPath: "SKILL.md",
+        filters: [{ name: "Markdown", extensions: ["md"] }],
+      });
+      if (result.canceled || !result.filePath) return false;
+      await writeFile(result.filePath, skill.markdown, { mode: 0o600 });
+      return true;
+    });
+    handle("permissions", async (kind) => {
+      z.enum(["accessibility", "screenCapture"]).parse(kind);
+      await exec(helper, [
+        kind === "accessibility"
+          ? "--request-accessibility"
+          : "--request-screen",
+      ]);
+      return permissions();
+    });
+    handle("screenshot", async () => {
+      if (!(await permissions()).screenCapture)
+        throw new Error("Enable Screen Recording permission in Settings.");
+      const restoreWorkspace = workspace.isVisible();
+      const restoreBuddy = buddy.isVisible();
+      workspace.hide();
+      buddy.hide();
+      try {
+        await new Promise((resolve) => setTimeout(resolve, 200));
+        const sources = await desktopCapturer.getSources({
+          types: ["screen"],
+          thumbnailSize: { width: 1440, height: 900 },
+        });
+        const primary =
+          sources.find(
+            (s) => s.display_id === String(screen.getPrimaryDisplay().id),
+          ) ?? sources[0];
+        if (!primary || primary.thumbnail.isEmpty())
+          throw new Error("Screen capture unavailable");
+        return primary.thumbnail.toDataURL();
+      } finally {
+        if (restoreWorkspace) workspace.show();
+        if (restoreBuddy) buddy.showInactive();
+      }
+    });
+    handle("action", async (input) => {
+      const action = z
+        .discriminatedUnion("type", [
+          z.object({
+            type: z.literal("open-app"),
+            bundleId: z.string().regex(/^[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+$/),
+          }),
+          z.object({
+            type: z.literal("point"),
+            x: z.number().finite(),
+            y: z.number().finite(),
+          }),
+        ])
+        .parse(input);
+      const detail =
+        action.type === "open-app"
+          ? `Open application ${action.bundleId}`
+          : `Show a pointer at (${action.x}, ${action.y})`;
+      const result = await dialog.showMessageBox(workspace, {
+        type: "question",
+        title: "Kite wants to take an action",
+        message: detail,
+        buttons: ["Cancel", "Allow once"],
+        defaultId: 0,
+        cancelId: 0,
+      });
+      if (result.response !== 1) throw new Error("User declined action");
+      const { stdout } = await exec(
+        helper,
+        action.type === "open-app"
+          ? ["--open-app", action.bundleId]
+          : ["--point", String(action.x), String(action.y)],
+      );
+      const events = stdout
+        .trim()
+        .split("\n")
+        .filter(Boolean)
+        .map((line) => JSON.parse(line));
+      const error = events.find((e) => e.kind === "error");
+      if (error) throw new Error(error.detail);
+    });
+    handle("openWorkspace", openWorkspace);
+    handle("openIntelligence", () =>
+      shell.openExternal("https://dashboard.operations.copilotkit.ai"),
+    );
+    workspace = makeWindow(false);
+    buddy = makeWindow(true);
+    if (
+      !globalShortcut.register("CommandOrControl+Shift+K", () => {
+        if (workspace.isVisible() && workspace.isFocused()) workspace.hide();
+        else openWorkspace();
+      })
+    )
+      await dialog.showMessageBox(workspace, {
+        type: "warning",
+        message: "⌘⇧K is in use by another app. Open Kite from the menu bar.",
+      });
+    const icon = nativeImage
+      .createFromDataURL(trayIcon)
+      .resize({ width: 18, height: 18 });
+    icon.setTemplateImage(true);
+    tray = new Tray(icon);
+    tray.setToolTip("Kite");
+    tray.setContextMenu(
+      Menu.buildFromTemplate([
+        { label: "Open Kite", click: openWorkspace },
+        { label: "Show companion", click: () => buddy.show() },
+        {
+          label: "Stop recording",
+          click: () => {
+            if (store.active) void finishRecording();
+          },
+        },
+        { type: "separator" },
+        { label: "Quit Kite", click: () => app.quit() },
+      ]),
+    );
+    app.on("activate", openWorkspace);
+  })
+  .catch(async (error) => {
+    await dialog.showMessageBox({
+      type: "error",
+      message: "Kite could not start",
+      detail: error instanceof Error ? error.message : "Unknown startup error",
+    });
+    app.quit();
+  });
+app.on("before-quit", () => {
+  (app as typeof app & { quitting?: boolean }).quitting = true;
+  recorder?.stdin.end();
+  recorder?.kill();
+  runtime?.server.close();
+  globalShortcut.unregisterAll();
+});
