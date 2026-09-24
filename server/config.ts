@@ -6,19 +6,13 @@ export function runtimeConfig(env: NodeJS.ProcessEnv) {
     containerId.length > 64
   )
     throw new Error("Invalid learning container ID");
-  const model = env.KITE_MODEL || "openai/gpt-4.1";
-  const provider = model.split("/")[0];
-  const keyNames: Record<string, string> = {
-    openai: "OPENAI_API_KEY",
-    anthropic: "ANTHROPIC_API_KEY",
-    google: "GOOGLE_API_KEY",
-  };
-  if (!keyNames[provider])
-    throw new Error("KITE_MODEL must use openai/, anthropic/, or google/");
+  const model = (env.KITE_MODEL || "gpt-5.4").replace(/^openai\//, "");
+  if (!/^gpt-[A-Za-z0-9.-]+$/.test(model))
+    throw new Error("KITE_MODEL must name an OpenAI GPT model for Codex");
   return {
     containerId,
     model,
     intelligenceConfigured: !!env.CPK_INTELLIGENCE_API_KEY,
-    modelConfigured: !!env[keyNames[provider]],
+    modelConfigured: !!env.OPENAI_API_KEY,
   };
 }

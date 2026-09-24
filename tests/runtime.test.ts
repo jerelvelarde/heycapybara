@@ -9,12 +9,10 @@ test("learning container remains stable and invalid IDs fail early", () => {
     /container/,
   );
   assert.equal(runtimeConfig({ OPENAI_API_KEY: "test" }).modelConfigured, true);
-  assert.equal(
-    runtimeConfig({
-      OPENAI_API_KEY: "test",
-      KITE_MODEL: "anthropic/claude-sonnet-4-5",
-    }).modelConfigured,
-    false,
+  assert.equal(runtimeConfig({}).model, "gpt-5.4");
+  assert.throws(
+    () => runtimeConfig({ KITE_MODEL: "anthropic/claude-sonnet-4-5" }),
+    /OpenAI/,
   );
 });
 test("runtime rejects missing or wrong token and foreign origins", () => {

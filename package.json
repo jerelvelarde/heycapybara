@@ -23,15 +23,18 @@
   },
   "dependencies": {
     "@ag-ui/client": "^0.0.59",
-    "@ag-ui/core": "^1.0.0",
+    "@ag-ui/core": "^0.0.59",
     "@copilotkit/react-core": "^1.73.3",
     "@copilotkit/runtime": "^1.73.3",
     "@hono/node-server": "^2.1.1",
+    "@modelcontextprotocol/sdk": "^1.30.1",
+    "@openai/codex-sdk": "^0.156.1",
     "dotenv": "^18.0.3",
     "hono": "^4.13.8",
     "lucide-react": "^1.47.0",
     "react": "^19.3.0",
     "react-dom": "^19.3.0",
+    "rxjs": "^7.8.1",
     "zod": "^4.6.5"
   },
   "devDependencies": {
@@ -62,12 +65,17 @@
     },
     "files": [
       "dist/**/*",
-      "package.json"
+      "package.json",
+      "!node_modules/@openai/codex-darwin-arm64/**/*"
     ],
     "extraResources": [
       {
         "from": "native/bin/kite-recorder",
         "to": "kite-recorder"
+      },
+      {
+        "from": "node_modules/@openai/codex-darwin-arm64/vendor/aarch64-apple-darwin",
+        "to": "codex-runtime"
       }
     ],
     "mac": {

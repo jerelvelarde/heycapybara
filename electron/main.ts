@@ -28,6 +28,16 @@ import { z } from "zod";
 import { Store } from "./store";
 import { loadLinkedEnvironment } from "./environment";
 import { trayIcon } from "./tray-icon";
+import {
+  BUDDY_SIZE,
+  beginBuddyGesture,
+  advanceBuddyGesture,
+  type BuddyGesture,
+  clampBuddyPosition,
+  loadBuddyPosition,
+  saveBuddyPosition,
+} from "./buddy-position";
+import type { Point } from "../src/buddy-drag";
 import { startRuntime } from "../server/runtime";
 import type { Permissions, Settings } from "../src/types";
 
@@ -42,6 +52,27 @@ const exec = promisify(execFile);
 let workspace: BrowserWindow;
 let buddy: BrowserWindow;
 let tray: Tray;
+let buddyPosition: Point | undefined;
+let buddyGesture: BuddyGesture | undefined;
+let buddySaveQueue = Promise.resolve();
+const buddyPositionPath = () =>
+  join(app.getPath("userData"), "buddy-position.json");
+const buddyAreas = () =>
+  screen.getAllDisplays().map((display) => display.workArea);
+function persistBuddyPosition() {
+  const [x, y] = buddy.getPosition();
+  const save = buddySaveQueue.then(() =>
+    saveBuddyPosition(buddyPositionPath(), { x, y }),
+  );
+  // A failed save is reported to its caller; subsequent gestures can retry.
+  buddySaveQueue = save.catch(() => {});
+  return save;
+}
+function moveBuddy(cursor: Point) {
+  if (!buddyGesture) return;
+  const point = advanceBuddyGesture(buddyGesture, cursor, buddyAreas());
+  if (point) buddy.setPosition(point.x, point.y);
+}
 let recorder: ChildProcessWithoutNullStreams | null = null;
 let store: Store;
 let settings: Settings;
@@ -52,6 +83,48 @@ const broadcast = () =>
   BrowserWindow.getAllWindows().forEach((w) =>
     w.webContents.send("kite:update"),
   );
+async function approvedAction(input: unknown) {
+  const action = z
+    .discriminatedUnion("type", [
+      z.object({
+        type: z.literal("open-app"),
+        bundleId: z.string().regex(/^[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+$/),
+      }),
+      z.object({
+        type: z.literal("point"),
+        x: z.number().finite(),
+        y: z.number().finite(),
+      }),
+    ])
+    .parse(input);
+  const detail =
+    action.type === "open-app"
+      ? `Open application ${action.bundleId}`
+      : `Show a pointer at (${action.x}, ${action.y})`;
+  const result = await dialog.showMessageBox(workspace, {
+    type: "question",
+    title: "Kite wants to take an action",
+    message: detail,
+    buttons: ["Cancel", "Allow once"],
+    defaultId: 0,
+    cancelId: 0,
+  });
+  if (result.response !== 1) throw new Error("User declined action");
+  const { stdout } = await exec(
+    helper,
+    action.type === "open-app"
+      ? ["--open-app", action.bundleId]
+      : ["--point", String(action.x), String(action.y)],
+  );
+  const events = stdout
+    .trim()
+    .split("\n")
+    .filter(Boolean)
+    .map((line) => JSON.parse(line));
+  const error = events.find((e) => e.kind === "error");
+  if (error) throw new Error(error.detail);
+}
+
 async function permissions(): Promise<Permissions> {
   const { stdout } = await exec(helper, ["--permissions"]);
   return z
@@ -193,13 +266,22 @@ function openWorkspace() {
 }
 function makeWindow(isBuddy: boolean) {
   const display = screen.getPrimaryDisplay().workArea;
+  const position = isBuddy
+    ? clampBuddyPosition(
+        buddyPosition ?? {
+          x: display.x + display.width - 258,
+          y: display.y + display.height - 190,
+        },
+        buddyAreas(),
+      )
+    : undefined;
   const win = new BrowserWindow({
-    width: isBuddy ? 240 : 1240,
-    height: isBuddy ? 170 : 820,
+    width: isBuddy ? BUDDY_SIZE.width : 1240,
+    height: isBuddy ? BUDDY_SIZE.height : 820,
     minWidth: isBuddy ? 240 : 960,
     minHeight: isBuddy ? 170 : 650,
-    x: isBuddy ? display.x + display.width - 258 : undefined,
-    y: isBuddy ? display.y + display.height - 190 : undefined,
+    x: position?.x,
+    y: position?.y,
     show: false,
     title: "Kite",
     backgroundColor: isBuddy ? "#00000000" : "#f6f5f1",
@@ -208,6 +290,7 @@ function makeWindow(isBuddy: boolean) {
     ...(!isBuddy ? { titleBarStyle: "hiddenInset" as const } : {}),
     resizable: !isBuddy,
     alwaysOnTop: isBuddy,
+    acceptFirstMouse: isBuddy,
     skipTaskbar: isBuddy,
     webPreferences: {
       preload: join(dirname(fileURLToPath(import.meta.url)), "preload.cjs"),
@@ -252,11 +335,28 @@ app
     store = new Store(join(app.getPath("userData"), "library"));
     await store.load();
     await loadLinkedEnvironment(app.getPath("userData"));
-    runtime = await startRuntime(store);
+    runtime = await startRuntime(store, {
+      statePath: join(app.getPath("userData"), "agent"),
+      binaryPath: app.isPackaged
+        ? join(process.resourcesPath, "codex-runtime/bin/codex")
+        : undefined,
+      action: approvedAction,
+    });
     settings = runtime.settings;
     session.defaultSession.setPermissionRequestHandler(
       (_wc, _permission, callback) => callback(false),
     );
+    handle("chooseWorkspace", async () => {
+      const result = await dialog.showOpenDialog(workspace, {
+        title: "Choose Kite's working folder",
+        message: "Codex can edit files and run commands in this folder.",
+        properties: ["openDirectory", "createDirectory"],
+        defaultPath: settings.workspace,
+      });
+      if (result.canceled || !result.filePaths[0]) return;
+      await runtime.setWorkspace(result.filePaths[0]);
+      broadcast();
+    });
     handle("setModelKey", async (key) => {
       runtime.setModelKey(key);
       broadcast();
@@ -371,53 +471,56 @@ app
         if (restoreBuddy) buddy.showInactive();
       }
     });
-    handle("action", async (input) => {
-      const action = z
-        .discriminatedUnion("type", [
-          z.object({
-            type: z.literal("open-app"),
-            bundleId: z.string().regex(/^[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+$/),
-          }),
-          z.object({
-            type: z.literal("point"),
-            x: z.number().finite(),
-            y: z.number().finite(),
-          }),
-        ])
-        .parse(input);
-      const detail =
-        action.type === "open-app"
-          ? `Open application ${action.bundleId}`
-          : `Show a pointer at (${action.x}, ${action.y})`;
-      const result = await dialog.showMessageBox(workspace, {
-        type: "question",
-        title: "Kite wants to take an action",
-        message: detail,
-        buttons: ["Cancel", "Allow once"],
-        defaultId: 0,
-        cancelId: 0,
-      });
-      if (result.response !== 1) throw new Error("User declined action");
-      const { stdout } = await exec(
-        helper,
-        action.type === "open-app"
-          ? ["--open-app", action.bundleId]
-          : ["--point", String(action.x), String(action.y)],
-      );
-      const events = stdout
-        .trim()
-        .split("\n")
-        .filter(Boolean)
-        .map((line) => JSON.parse(line));
-      const error = events.find((e) => e.kind === "error");
-      if (error) throw new Error(error.detail);
-    });
+    handle("action", approvedAction);
     handle("openWorkspace", openWorkspace);
     handle("openIntelligence", () =>
       shell.openExternal("https://dashboard.operations.copilotkit.ai"),
     );
+    buddyPosition = await loadBuddyPosition(buddyPositionPath());
+    ipcMain.handle(
+      "kite:buddyDrag",
+      (event, input: unknown, coordinates: unknown) => {
+        if (
+          event.sender !== buddy?.webContents ||
+          event.senderFrame !== event.sender.mainFrame
+        )
+          throw new Error("Untrusted companion drag sender");
+        const action = z.enum(["begin", "move", "end"]).parse(input);
+        const cursor = z
+          .object({
+            x: z.number().finite().min(-1_000_000).max(1_000_000),
+            y: z.number().finite().min(-1_000_000).max(1_000_000),
+          })
+          .strict()
+          .parse(coordinates);
+        if (action === "begin") {
+          buddyGesture = beginBuddyGesture(cursor, buddy.getBounds());
+        } else if (action === "move") moveBuddy(cursor);
+        else if (buddyGesture) {
+          moveBuddy(cursor);
+          const moved = buddyGesture.moved;
+          buddyGesture = undefined;
+          if (moved) return persistBuddyPosition();
+        }
+      },
+    );
     workspace = makeWindow(false);
     buddy = makeWindow(true);
+    const restoreVisibleBuddy = () => {
+      buddyGesture = undefined;
+      const [x, y] = buddy.getPosition();
+      const position = clampBuddyPosition({ x, y }, buddyAreas());
+      buddy.setPosition(position.x, position.y);
+      void persistBuddyPosition().catch((error: unknown) =>
+        dialog.showMessageBox({
+          type: "error",
+          message: "Could not save companion position",
+          detail: error instanceof Error ? error.message : "Unknown save error",
+        }),
+      );
+    };
+    screen.on("display-removed", restoreVisibleBuddy);
+    screen.on("display-metrics-changed", restoreVisibleBuddy);
     if (
       !globalShortcut.register("CommandOrControl+Shift+K", () => {
         if (workspace.isVisible() && workspace.isFocused()) workspace.hide();
@@ -462,6 +565,6 @@ app.on("before-quit", () => {
   (app as typeof app & { quitting?: boolean }).quitting = true;
   recorder?.stdin.end();
   recorder?.kill();
-  runtime?.server.close();
+  runtime?.close();
   globalShortcut.unregisterAll();
 });

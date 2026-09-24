@@ -1,10 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import {
-  useAgent,
-  useCopilotKit,
-  useFrontendTool,
-} from "@copilotkit/react-core/v2";
-import { z } from "zod";
+import { useAgent, useCopilotKit } from "@copilotkit/react-core/v2";
 import {
   ArrowUp,
   Camera,
@@ -41,38 +36,33 @@ export function Assistant({
   const [error, setError] = useState("");
   const [image, setImage] = useState("");
   const [phase, setPhase] = useState("");
+  const [activities, setActivities] = useState<
+    { id: string; summary: string }[]
+  >([]);
   const cancelled = useRef(false);
   const handled = useRef("");
   const bottom = useRef<HTMLDivElement>(null);
   const busyRef = useRef(false);
-  useFrontendTool(
-    {
-      name: "open_application",
-      description:
-        "Ask the user to approve opening an installed macOS application by bundle id.",
-      parameters: z.object({ bundleId: z.string() }),
-      handler: async ({ bundleId }) => {
-        await window.kite!.action({ type: "open-app", bundleId });
-        return "Application opened with user approval";
-      },
-    },
-    [],
-  );
-  useFrontendTool(
-    {
-      name: "point_on_screen",
-      description:
-        "Ask the user to approve a visual pointer at a verified screen coordinate. Does not click. Use only with fresh screen context.",
-      parameters: z.object({ x: z.number(), y: z.number() }),
-      handler: async ({ x, y }) => {
-        await window.kite!.action({ type: "point", x, y });
-        return "Pointer displayed with user approval";
-      },
-    },
-    [],
-  );
   useEffect(() => {
     const subscription = agent.subscribe({
+      onCustomEvent: ({ event }) => {
+        if (
+          event.name !== "kite.activity" ||
+          typeof event.value?.summary !== "string"
+        )
+          return;
+        const activity = {
+          id: String(event.value.id),
+          summary: event.value.summary,
+        };
+        setPhase(activity.summary.split("\n")[0]);
+        setActivities((previous) =>
+          [
+            ...previous.filter((item) => item.id !== activity.id),
+            activity,
+          ].slice(-20),
+        );
+      },
       onRunErrorEvent: ({ event }) => setError(event.message),
       onToolCallStartEvent: ({ event }) => setPhase(event.toolCallName),
       onTextMessageContentEvent: () => setPhase("Writing"),
@@ -105,6 +95,7 @@ export function Assistant({
     setBusy(true);
     onBusy(true);
     setError("");
+    setActivities([]);
     if (fresh) {
       agent.threadId = crypto.randomUUID();
       agent.setMessages([]);
@@ -128,12 +119,32 @@ export function Assistant({
     setImage("");
     let finished = false;
     let runFailed = false;
+    let failureMessage = "";
     const completion = agent.subscribe({
       onRunFinishedEvent: ({ event }) => {
         finished = !event.outcome || event.outcome.type === "success";
       },
-      onRunErrorEvent: () => {
+      onCustomEvent: ({ event }) => {
+        if (
+          event.name !== "kite.activity" ||
+          typeof event.value?.summary !== "string"
+        )
+          return;
+        const activity = {
+          id: String(event.value.id),
+          summary: event.value.summary,
+        };
+        setPhase(activity.summary.split("\n")[0]);
+        setActivities((previous) =>
+          [
+            ...previous.filter((item) => item.id !== activity.id),
+            activity,
+          ].slice(-20),
+        );
+      },
+      onRunErrorEvent: ({ event }) => {
         runFailed = true;
+        failureMessage = event.message;
       },
     });
     try {
@@ -142,7 +153,8 @@ export function Assistant({
         throw new Error("Run stopped. No skill draft was created.");
       if (runFailed || !finished)
         throw new Error(
-          "The agent run did not finish successfully. Retry after checking the connection.",
+          failureMessage ||
+            "The agent run did not finish successfully. Retry after checking the connection.",
         );
       if (mode === "skill") {
         const message = agent.messages
@@ -192,7 +204,7 @@ export function Assistant({
           <span className="mini-sprite">✦</span>
           <div>
             <strong>Your copilot</strong>
-            <small>Here to connect the dots</small>
+            <small>Codex · {settings.model}</small>
           </div>
         </div>
         <button
@@ -203,6 +215,7 @@ export function Assistant({
             agent.threadId = crypto.randomUUID();
             agent.setMessages([]);
             setError("");
+            setActivities([]);
           }}
         >
           <Plus size={18} />
@@ -257,6 +270,14 @@ export function Assistant({
                   ))}
               </div>
             ))
+        )}
+        {activities.length > 0 && (
+          <details className="agent-activity" open={busy}>
+            <summary>Agent activity · {activities.length}</summary>
+            {activities.map((item) => (
+              <p key={item.id}>{item.summary}</p>
+            ))}
+          </details>
         )}
         {busy && (
           <div className="thinking">
@@ -341,7 +362,10 @@ export function Assistant({
           )}
         </div>
       </form>
-      <footer>Screen context is shared only when you attach it.</footer>
+      <footer title={settings.workspace}>
+        Workspace: {settings.workspace.split("/").at(-1)} · Screenshots shared
+        when attached
+      </footer>
     </aside>
   );
 }

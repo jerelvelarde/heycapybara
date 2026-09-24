@@ -28,6 +28,7 @@ import {
   X,
 } from "lucide-react";
 import { Assistant, type AgentRequest } from "./Assistant";
+import { Buddy } from "./Buddy";
 import { manualDraft, skillPrompt } from "./skill";
 import type { Recording, Skill, Snapshot } from "./types";
 const isBuddy = new URLSearchParams(location.search).has("buddy");
@@ -87,41 +88,9 @@ export function App() {
     );
   if (isBuddy)
     return (
-      <div className="buddy">
-        <button
-          className="buddy-bubble"
-          onClick={() => void window.kite!.openWorkspace()}
-        >
-          {data.active ? (
-            <>
-              <span className="record-dot" /> Learning your moves…
-            </>
-          ) : (
-            <>
-              A little help? <span>⌘ ⇧ K</span>
-            </>
-          )}
-        </button>
-        <button
-          className="buddy-sprite"
-          title="Open Kite"
-          onClick={() => void window.kite!.openWorkspace()}
-        >
-          <Sprite small />
-        </button>
-        {data.active && (
-          <button
-            className="buddy-stop"
-            title="Stop recording"
-            onClick={() =>
-              void window.kite!.stop().catch((e) => setError(e.message))
-            }
-          >
-            <Square size={12} />
-          </button>
-        )}
-        {error && <span className="buddy-error">{error}</span>}
-      </div>
+      <Buddy active={!!data.active} error={error} setError={setError}>
+        <Sprite small />
+      </Buddy>
     );
   return (
     <CopilotKitProvider
@@ -1002,6 +971,27 @@ function Workspace({
                 </p>
               </div>
               <div className="settings-card">
+                <h2>Codex agent</h2>
+                <Setting label="Engine" value={data.settings.backend} />
+                <Setting label="Model" value={data.settings.model} />
+                <Setting
+                  label="Working folder"
+                  value={data.settings.workspace}
+                />
+                <button
+                  className="button secondary"
+                  disabled={working || agentBusy}
+                  onClick={() =>
+                    void perform(() => window.kite!.chooseWorkspace())
+                  }
+                >
+                  Choose working folder
+                </button>
+                <p className="footnote">
+                  Codex can edit files and run commands in this folder. Start a
+                  new conversation after changing folders. Desktop actions still
+                  ask for approval.
+                </p>
                 <h2>Model connection</h2>
                 <p>
                   Connect an OpenAI key for this session. Kept in memory and

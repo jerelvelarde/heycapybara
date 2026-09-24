@@ -1504,7 +1504,7 @@ button {
   position: relative;
   background: transparent;
   overflow: hidden;
-  -webkit-app-region: drag;
+  -webkit-app-region: no-drag;
 }
 .buddy button {
   -webkit-app-region: no-drag;
@@ -1527,6 +1527,9 @@ button {
   margin-left: 6px;
 }
 .buddy-sprite {
+  cursor: grab;
+  touch-action: none;
+  user-select: none;
   position: absolute;
   right: 22px;
   top: 59px;
@@ -1682,4 +1685,22 @@ html:has(.buddy),
 }
 .settings-card > .button + .button {
   margin-left: 8px;
+}
+
+.buddy-sprite.dragging {
+  cursor: grabbing;
+}
+
+.agent-activity {
+  margin: 12px 0;
+  padding: 10px;
+  border: 1px solid #e4e1e8;
+  border-radius: 10px;
+  font-size: 11px;
+  overflow-wrap: anywhere;
+}
+.agent-activity p {
+  white-space: pre-wrap;
+  max-height: 160px;
+  overflow: auto;
 }

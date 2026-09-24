@@ -1,6 +1,7 @@
 import { contextBridge, ipcRenderer } from "electron";
 import type { KiteAPI } from "../src/types";
 const api: KiteAPI = {
+  chooseWorkspace: () => ipcRenderer.invoke("kite:chooseWorkspace"),
   setModelKey: (key) => ipcRenderer.invoke("kite:setModelKey", key),
   verifyIntelligence: () => ipcRenderer.invoke("kite:verifyIntelligence"),
   reviewedRecording: (id) => ipcRenderer.invoke("kite:reviewedRecording", id),
@@ -16,6 +17,8 @@ const api: KiteAPI = {
   permissions: (kind) => ipcRenderer.invoke("kite:permissions", kind),
   screenshot: () => ipcRenderer.invoke("kite:screenshot"),
   action: (action) => ipcRenderer.invoke("kite:action", action),
+  buddyDrag: (action, point) =>
+    ipcRenderer.invoke("kite:buddyDrag", action, point),
   openWorkspace: () => ipcRenderer.invoke("kite:openWorkspace"),
   openIntelligence: () => ipcRenderer.invoke("kite:openIntelligence"),
   onUpdate: (callback) => {

@@ -26,6 +26,8 @@ export type Skill = {
 };
 export type Permissions = { accessibility: boolean; screenCapture: boolean };
 export type Settings = {
+  backend: string;
+  workspace: string;
   containerId: string;
   model: string;
   shortcut: string;
@@ -48,6 +50,7 @@ export type DesktopAction =
 export interface KiteAPI {
   state(): Promise<Snapshot>;
   setModelKey(key: string): Promise<void>;
+  chooseWorkspace(): Promise<void>;
   verifyIntelligence(): Promise<void>;
   reviewedRecording(id: string): Promise<Recording>;
   start(title: string): Promise<Recording>;
@@ -67,6 +70,10 @@ export interface KiteAPI {
   permissions(kind: "accessibility" | "screenCapture"): Promise<Permissions>;
   screenshot(): Promise<string>;
   action(action: DesktopAction): Promise<void>;
+  buddyDrag(
+    action: "begin" | "move" | "end",
+    point: { x: number; y: number },
+  ): Promise<void>;
   openWorkspace(): Promise<void>;
   openIntelligence(): Promise<void>;
   onUpdate(callback: () => void): () => void;

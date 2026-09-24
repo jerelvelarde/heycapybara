@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtemp } from "node:fs/promises";
+import { mkdtemp, realpath } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Store } from "../electron/store";
@@ -16,6 +16,14 @@ test("real runtime discovers AG-UI agent only after loopback authentication", as
       body: JSON.stringify({ method: "info" }),
     });
     assert.equal(denied.status, 401);
+    const deniedMcp = await fetch(
+      new URL("/mcp", runtime.settings.runtimeUrl),
+      {
+        method: "POST",
+        headers: { Authorization: "Bearer " + runtime.settings.runtimeToken },
+      },
+    );
+    assert.equal(deniedMcp.status, 401);
     const response = await fetch(runtime.settings.runtimeUrl, {
       method: "POST",
       headers: {
@@ -27,6 +35,11 @@ test("real runtime discovers AG-UI agent only after loopback authentication", as
     assert.equal(response.status, 200);
     const info = await response.json();
     assert.ok(info.agents.default);
+    const alternate = await mkdtemp(join(tmpdir(), "kite-workspace-test-"));
+    await runtime.setWorkspace(alternate);
+    assert.equal(runtime.settings.workspace, await realpath(alternate));
+    await assert.rejects(runtime.setWorkspace(join(alternate, "missing")));
+    assert.equal(runtime.settings.workspace, await realpath(alternate));
     const prior = runtime.settings.modelConfigured;
     assert.throws(() => runtime.setModelKey("invalid"), /valid OpenAI/);
     assert.equal(runtime.settings.modelConfigured, prior);
