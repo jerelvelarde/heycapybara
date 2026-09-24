@@ -351,7 +351,8 @@ async function startRecording(title: string) {
   }
 }
 function openWorkspace() {
-  companionChat?.hide();
+  if (!workspace || workspace.isDestroyed()) return;
+  if (companionChat && !companionChat.isDestroyed()) companionChat.hide();
   workspace.show();
   workspace.focus();
 }
