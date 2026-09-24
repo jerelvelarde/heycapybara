@@ -38,3 +38,10 @@ The current packaged app shows macOS Accessibility and Screen Recording as not g
 Cloud-side completed-thread ingestion, scheduled learning analysis, and applying a newly published cloud skill have not been independently confirmed in the Intelligence dashboard. Successful delivery of an empty skill catalog does not establish those outcomes.
 
 The original build was unsigned; the current packaging pipeline ad-hoc signs and verifies the sealed bundle identifier. It is not notarized. Native desktop actions remain open-app and visual pointer with approval; arbitrary cross-app clicking/typing and voice are not implemented. Codex workspace-write limits writes, not all reads outside the working folder. Conversation sessions persist in Kite's private agent directory, while the UI currently keeps its displayed conversation for the running app session.
+
+## Original mascot correction
+
+- Replaced the violet approximation with the exact OpenMuse tan capybara asset. SHA-256 matches upstream: `3a323215d0976583d0c3d0748df06bce75db9b05cc955901709b18e3b64e9b34`. Upstream MIT notice retained.
+- Formatting, lint, typecheck, all 26 tests and full signed packaging pass.
+- Relaunch is awaiting the user's macOS Documents-folder permission response. TCC logs identify a new ad-hoc code hash and a pending Documents request; the main process is blocked in file open before windows are created. The updated launch has therefore not yet been visually verified.
+- Notch onboarding and the native .app drag tile are researched and proposed in `superpowers/specs/2026-09-23-notch-onboarding-proposal.md`, not implemented pending design approval.
