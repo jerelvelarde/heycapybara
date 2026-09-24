@@ -434,12 +434,17 @@ function makeCompanionChatWindow() {
   win.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
   win.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
   win.webContents.on("will-navigate", (event) => event.preventDefault());
-  if (process.env.KITE_DEV_URL)
-    void win.loadURL(process.env.KITE_DEV_URL + "?companionChat=1");
-  else
-    void win.loadFile(join(root, "dist/renderer/index.html"), {
-      query: { companionChat: "1" },
-    });
+  const loaded = process.env.KITE_DEV_URL
+    ? win.loadURL(process.env.KITE_DEV_URL + "?companionChat=1")
+    : win.loadFile(join(root, "dist/renderer/index.html"), {
+        query: { companionChat: "1" },
+      });
+  void loaded.catch((error: unknown) =>
+    dialog.showErrorBox(
+      "OpenMuse chat could not load",
+      error instanceof Error ? error.message : "Unknown loading error",
+    ),
+  );
   win.on("close", (event) => {
     if (!(app as typeof app & { quitting?: boolean }).quitting) {
       event.preventDefault();
@@ -844,7 +849,13 @@ app
         {
           label: "Replay setup",
           click: () => {
-            void updatePreferences({ onboardingComplete: false });
+            void updatePreferences({ onboardingComplete: false }).catch(
+              (error: unknown) =>
+                dialog.showErrorBox(
+                  "Could not replay setup",
+                  error instanceof Error ? error.message : "Unknown error",
+                ),
+            );
           },
         },
         {
