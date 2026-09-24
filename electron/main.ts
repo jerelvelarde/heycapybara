@@ -33,6 +33,7 @@ import {
   placementSchema,
 } from "./preferences";
 import { notchPosition } from "./notch-geometry";
+import { CHAT_SIZE, companionChatPosition } from "./companion-chat-position";
 import { loadLinkedEnvironment } from "./environment";
 import { trayIcon } from "./tray-icon";
 import {
@@ -61,6 +62,7 @@ const exec = promisify(execFile);
 let workspace: BrowserWindow;
 let buddy: BrowserWindow;
 let notch: BrowserWindow;
+let companionChat: BrowserWindow;
 let notchExpanded = false;
 let accessibilityGuideActive = false;
 let notchTopInset = 0;
@@ -121,10 +123,27 @@ function syncCompanionWindows() {
   positionNotch();
   if (!settings.onboardingComplete || settings.placement === "notch") {
     buddy.hide();
+    companionChat?.hide();
     notch.showInactive();
   } else {
     notch.hide();
     buddy.showInactive();
+  }
+}
+function positionCompanionChat() {
+  if (!companionChat || companionChat.isDestroyed() || !buddy) return;
+  const point = companionChatPosition(buddy.getBounds(), buddyAreas());
+  companionChat.setPosition(point.x, point.y);
+}
+function openCompanionChat() {
+  if (settings.placement !== "floating" || !settings.onboardingComplete)
+    throw new Error("Select the floating companion to open chat");
+  if (companionChat.isVisible()) {
+    companionChat.hide();
+  } else {
+    positionCompanionChat();
+    companionChat.show();
+    companionChat.focus();
   }
 }
 function persistBuddyPosition() {
@@ -139,7 +158,10 @@ function persistBuddyPosition() {
 function moveBuddy(cursor: Point) {
   if (!buddyGesture) return;
   const point = advanceBuddyGesture(buddyGesture, cursor, buddyAreas());
-  if (point) buddy.setPosition(point.x, point.y);
+  if (point) {
+    buddy.setPosition(point.x, point.y);
+    if (companionChat?.isVisible()) positionCompanionChat();
+  }
 }
 let recorder: ChildProcessWithoutNullStreams | null = null;
 let store: Store;
@@ -329,6 +351,7 @@ async function startRecording(title: string) {
   }
 }
 function openWorkspace() {
+  companionChat?.hide();
   workspace.show();
   workspace.focus();
 }
@@ -379,8 +402,44 @@ function makeWindow(isBuddy: boolean) {
     });
   win.once("ready-to-show", () => {
     if (isBuddy) syncCompanionWindows();
-    else win.show();
+    else if (settings.placement !== "floating" || !settings.onboardingComplete)
+      win.show();
   });
+  win.on("close", (event) => {
+    if (!(app as typeof app & { quitting?: boolean }).quitting) {
+      event.preventDefault();
+      win.hide();
+    }
+  });
+  return win;
+}
+function makeCompanionChatWindow() {
+  const win = new BrowserWindow({
+    ...CHAT_SIZE,
+    show: false,
+    frame: false,
+    transparent: true,
+    resizable: false,
+    alwaysOnTop: true,
+    acceptFirstMouse: true,
+    skipTaskbar: true,
+    backgroundColor: "#00000000",
+    webPreferences: {
+      preload: join(dirname(fileURLToPath(import.meta.url)), "preload.cjs"),
+      contextIsolation: true,
+      nodeIntegration: false,
+      sandbox: true,
+    },
+  });
+  win.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
+  win.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
+  win.webContents.on("will-navigate", (event) => event.preventDefault());
+  if (process.env.KITE_DEV_URL)
+    void win.loadURL(process.env.KITE_DEV_URL + "?companionChat=1");
+  else
+    void win.loadFile(join(root, "dist/renderer/index.html"), {
+      query: { companionChat: "1" },
+    });
   win.on("close", (event) => {
     if (!(app as typeof app & { quitting?: boolean }).quitting) {
       event.preventDefault();
@@ -435,6 +494,7 @@ function handle(name: string, fn: (...args: unknown[]) => unknown) {
         workspace?.webContents,
         buddy?.webContents,
         notch?.webContents,
+        companionChat?.webContents,
       ].includes(event.sender) ||
       event.senderFrame !== event.sender.mainFrame
     )
@@ -648,9 +708,11 @@ app
       const restoreWorkspace = workspace.isVisible();
       const restoreBuddy = buddy.isVisible();
       const restoreNotch = notch.isVisible();
+      const restoreChat = companionChat.isVisible();
       workspace.hide();
       buddy.hide();
       notch.hide();
+      companionChat.hide();
       try {
         await new Promise((resolve) => setTimeout(resolve, 200));
         const sources = await desktopCapturer.getSources({
@@ -668,10 +730,27 @@ app
         if (restoreWorkspace) workspace.show();
         if (restoreBuddy) buddy.showInactive();
         if (restoreNotch) notch.showInactive();
+        if (restoreChat) companionChat.showInactive();
       }
     });
     handle("action", approvedAction);
     handle("openWorkspace", openWorkspace);
+    ipcMain.handle("kite:toggleCompanionChat", (event) => {
+      if (
+        event.sender !== buddy?.webContents ||
+        event.senderFrame !== event.sender.mainFrame
+      )
+        throw new Error("Untrusted companion chat sender");
+      openCompanionChat();
+    });
+    ipcMain.handle("kite:closeCompanionChat", (event) => {
+      if (
+        event.sender !== companionChat?.webContents ||
+        event.senderFrame !== event.sender.mainFrame
+      )
+        throw new Error("Untrusted companion chat sender");
+      companionChat.hide();
+    });
     handle("openIntelligence", () =>
       shell.openExternal("https://dashboard.operations.copilotkit.ai"),
     );
@@ -713,11 +792,13 @@ app
     workspace = makeWindow(false);
     buddy = makeWindow(true);
     notch = makeNotchWindow();
+    companionChat = makeCompanionChatWindow();
     const restoreVisibleBuddy = () => {
       buddyGesture = undefined;
       const [x, y] = buddy.getPosition();
       const position = clampBuddyPosition({ x, y }, buddyAreas());
       buddy.setPosition(position.x, position.y);
+      positionCompanionChat();
       void persistBuddyPosition().catch((error: unknown) =>
         dialog.showMessageBox({
           type: "error",

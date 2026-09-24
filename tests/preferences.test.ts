@@ -23,8 +23,8 @@ test("companion defaults to capybara and persists both choices privately", async
     await saveCompanion(path, "capybara");
     assert.deepEqual(JSON.parse(await readFile(path, "utf8")), {
       companion: "capybara",
-      placement: "notch",
-      onboardingComplete: false,
+      placement: "floating",
+      onboardingComplete: true,
     });
     await writeFile(path, '{"companion":"invalid"}');
     await assert.rejects(loadCompanion(path));
@@ -35,20 +35,20 @@ test("companion defaults to capybara and persists both choices privately", async
   }
 });
 
-test("new installs and legacy preferences start in notch onboarding", async () => {
+test("new installs and legacy preferences start with the floating sprite", async () => {
   const directory = await mkdtemp(join(tmpdir(), "notch-preferences-"));
   try {
     const path = join(directory, "preferences.json");
     assert.deepEqual(await loadPreferences(path), {
       companion: "capybara",
-      placement: "notch",
-      onboardingComplete: false,
+      placement: "floating",
+      onboardingComplete: true,
     });
     await writeFile(path, '{"companion":"kite"}');
     assert.deepEqual(await loadPreferences(path), {
       companion: "kite",
-      placement: "notch",
-      onboardingComplete: false,
+      placement: "floating",
+      onboardingComplete: true,
     });
   } finally {
     await rm(directory, { recursive: true, force: true });

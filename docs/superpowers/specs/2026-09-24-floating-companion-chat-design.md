@@ -1,6 +1,6 @@
 # Floating companion chat
 
-Status: design approved by the user on 2026-09-24. Implementation is pending review of this written spec.
+Status: design approved by the user on 2026-09-24 and implemented in the HeyCapybara desktop app.
 
 ## Behavior
 

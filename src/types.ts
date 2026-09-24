@@ -88,6 +88,8 @@ export interface KiteAPI {
     action: "begin" | "move" | "end",
     point: { x: number; y: number },
   ): Promise<void>;
+  toggleCompanionChat(): Promise<void>;
+  closeCompanionChat(): Promise<void>;
   openWorkspace(): Promise<void>;
   openIntelligence(): Promise<void>;
   onUpdate(callback: () => void): () => void;

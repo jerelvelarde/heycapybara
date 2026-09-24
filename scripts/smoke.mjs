@@ -1,8 +1,17 @@
 import { _electron as electron, expect } from "@playwright/test";
-import { mkdtemp, mkdir, readFile } from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 const dataDir = await mkdtemp(join(tmpdir(), "kite-smoke-"));
+// Keep the legacy notch tour under test while production defaults to the sprite.
+await writeFile(
+  join(dataDir, "preferences.json"),
+  JSON.stringify({
+    companion: "capybara",
+    placement: "notch",
+    onboardingComplete: false,
+  }),
+);
 const app = await electron.launch({
   ...(process.argv.includes("--packaged")
     ? {
@@ -30,7 +39,8 @@ try {
             (p) =>
               p.url().includes("index.html") &&
               !p.url().includes("buddy=1") &&
-              !p.url().includes("notch=1"),
+              !p.url().includes("notch=1") &&
+              !p.url().includes("companionChat=1"),
           ),
       { timeout: 30000 },
     )
@@ -41,7 +51,8 @@ try {
       (p) =>
         p.url().includes("index.html") &&
         !p.url().includes("buddy=1") &&
-        !p.url().includes("notch=1"),
+        !p.url().includes("notch=1") &&
+        !p.url().includes("companionChat=1"),
     );
   await expect
     .poll(() => app.windows().some((p) => p.url().includes("notch=1")), {
@@ -159,6 +170,58 @@ try {
       ),
     )
     .toBe(false);
+  const buddy = app
+    .windows()
+    .find((window) => window.url().includes("buddy=1"));
+  const chat = app
+    .windows()
+    .find((window) => window.url().includes("companionChat=1"));
+  if (!buddy || !chat) throw new Error("Companion or chat window did not load");
+  await buddy
+    .getByRole("button", { name: /Chat with OpenMuse or drag/ })
+    .click();
+  await expect(
+    chat.getByRole("textbox", { name: "Ask OpenMuse" }),
+  ).toBeVisible();
+  await chat
+    .getByRole("textbox", { name: "Ask OpenMuse" })
+    .fill("Remember this draft");
+  await chat.getByRole("button", { name: "Close chat" }).click();
+  await expect
+    .poll(() =>
+      app.evaluate(({ BrowserWindow }) =>
+        BrowserWindow.getAllWindows()
+          .find((window) =>
+            window.webContents.getURL().includes("companionChat=1"),
+          )
+          ?.isVisible(),
+      ),
+    )
+    .toBe(false);
+  await buddy
+    .getByRole("button", { name: /Chat with OpenMuse or drag/ })
+    .click();
+  await expect(chat.getByRole("textbox", { name: "Ask OpenMuse" })).toHaveValue(
+    "Remember this draft",
+  );
+  await chat.getByRole("button", { name: "Send" }).click();
+  await expect(
+    chat.getByText(
+      "Connect your OpenAI API key in Settings to start this session.",
+    ),
+  ).toBeVisible();
+  await chat.getByRole("button", { name: "Workspace" }).click();
+  await expect
+    .poll(() =>
+      app.evaluate(({ BrowserWindow }) =>
+        BrowserWindow.getAllWindows()
+          .find((window) =>
+            window.webContents.getURL().includes("companionChat=1"),
+          )
+          ?.isVisible(),
+      ),
+    )
+    .toBe(false);
   await page.getByRole("button", { name: "Learning", exact: true }).click();
   await expect(
     page.getByRole("heading", { name: "Practice makes progress." }),
@@ -232,7 +295,7 @@ try {
     );
   }
   console.log(
-    "Desktop smoke passed: notch tour, drag guide, replay, placement, workspace, permissions, learning setup, recording dialog.",
+    "Desktop smoke passed: notch tour, drag guide, floating chat, draft persistence, workspace, permissions, learning setup, recording dialog.",
   );
 } finally {
   await app.close();

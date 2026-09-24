@@ -36,26 +36,32 @@ export function Buddy({
     gesture.current = null;
     setDragging(false);
   }
+  function toggleChat() {
+    void window
+      .kite!.toggleCompanionChat()
+      .catch((error: unknown) =>
+        setError(
+          error instanceof Error ? error.message : "Could not open chat",
+        ),
+      );
+  }
   return (
     <div className="buddy">
-      <button
-        className="buddy-bubble"
-        onClick={() => void window.kite!.openWorkspace()}
-      >
+      <button className="buddy-bubble" onClick={toggleChat}>
         {active ? (
           <>
             <span className="record-dot" /> Learning your moves…
           </>
         ) : (
           <>
-            A little help? <span>⌘ ⇧ K</span>
+            Chat with me <span>⌘ ⇧ K workspace</span>
           </>
         )}
       </button>
       <button
         className={"buddy-sprite" + (dragging ? " dragging" : "")}
-        title="Click to open OpenMuse · drag to move"
-        aria-label="Open OpenMuse or drag to move companion"
+        title="Click to chat · drag to move"
+        aria-label="Chat with OpenMuse or drag to move companion"
         onPointerDown={(event) => {
           if (event.button !== 0 || !event.isPrimary) return;
           // Recover if macOS interrupted the previous gesture before release.
@@ -113,7 +119,7 @@ export function Buddy({
             suppressClick.current = false;
             return;
           }
-          void window.kite!.openWorkspace();
+          toggleChat();
         }}
       >
         {children}

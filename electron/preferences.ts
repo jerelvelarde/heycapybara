@@ -18,13 +18,13 @@ const preferencesSchema = z.strictObject({
 });
 const storedPreferencesSchema = z.strictObject({
   companion: companionSchema,
-  placement: placementSchema.default("notch"),
-  onboardingComplete: z.boolean().default(false),
+  placement: placementSchema.default("floating"),
+  onboardingComplete: z.boolean().default(true),
 });
 const defaultPreferences: Preferences = {
   companion: "capybara",
-  placement: "notch",
-  onboardingComplete: false,
+  placement: "floating",
+  onboardingComplete: true,
 };
 
 export async function loadPreferences(path: string): Promise<Preferences> {

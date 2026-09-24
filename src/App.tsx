@@ -29,12 +29,15 @@ import {
 } from "lucide-react";
 import { Assistant, type AgentRequest } from "./Assistant";
 import { Buddy } from "./Buddy";
+import { CompanionChat } from "./CompanionChat";
 import { Notch } from "./Notch";
 import { Sprite } from "./Sprite";
 import { manualDraft, skillPrompt } from "./skill";
 import type { Recording, Skill, Snapshot } from "./types";
 const isBuddy = new URLSearchParams(location.search).has("buddy");
 const isNotch = new URLSearchParams(location.search).get("notch") === "1";
+const isCompanionChat =
+  new URLSearchParams(location.search).get("companionChat") === "1";
 const time = (date: string) =>
   new Date(date).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
 const day = (date: string) =>
@@ -82,6 +85,17 @@ export function App() {
       </Buddy>
     );
   if (isNotch) return <Notch data={data} refresh={refresh} />;
+  if (isCompanionChat)
+    return (
+      <CopilotKitProvider
+        runtimeUrl={data.settings.runtimeUrl}
+        useSingleEndpoint
+        headers={{ Authorization: "Bearer " + data.settings.runtimeToken }}
+        showDevConsole={false}
+      >
+        <CompanionChat settings={data.settings} />
+      </CopilotKitProvider>
+    );
   return (
     <CopilotKitProvider
       runtimeUrl={data.settings.runtimeUrl}

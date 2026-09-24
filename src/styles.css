@@ -751,6 +751,17 @@ button {
   width: 35px;
   height: 35px;
 }
+.mini-sprite img {
+  width: 32px;
+  height: 32px;
+  object-fit: contain;
+}
+.chat-capybara {
+  width: 70px;
+  height: 70px;
+  object-fit: contain;
+  margin-bottom: 10px;
+}
 .assistant-heading strong {
   font-size: 12px;
   font-weight: 600;
@@ -1574,6 +1585,76 @@ body:has(.buddy),
 html:has(.buddy),
 #root:has(.buddy) {
   background: transparent;
+}
+html:has(.companion-chat),
+body:has(.companion-chat),
+#root:has(.companion-chat) {
+  background: transparent;
+  height: 100%;
+}
+.companion-chat {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: 18px;
+  background: var(--canvas);
+  box-shadow: 0 18px 50px #11191c2a;
+}
+.companion-chat-toolbar {
+  height: 48px;
+  flex: 0 0 48px;
+  padding: 6px 10px 6px 15px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  border-bottom: 1px solid var(--line);
+  -webkit-app-region: drag;
+}
+.companion-chat-toolbar > span,
+.companion-chat-toolbar > div,
+.companion-chat-toolbar button {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.companion-chat-toolbar > span {
+  font-weight: 700;
+}
+.companion-chat-toolbar img {
+  width: 26px;
+  height: 26px;
+  object-fit: contain;
+}
+.companion-chat-toolbar button {
+  padding: 7px;
+  border-radius: 7px;
+  color: var(--muted);
+  -webkit-app-region: no-drag;
+}
+.companion-chat-toolbar button:hover {
+  background: var(--sky);
+}
+.companion-chat .assistant {
+  flex: 1;
+  border: 0;
+}
+.companion-chat .assistant > header {
+  height: 55px;
+  padding: 8px 16px;
+}
+.companion-chat .chat-welcome {
+  padding-top: 22px;
+}
+.companion-chat .conversation {
+  padding: 14px 18px;
+}
+.companion-chat .assistant > footer {
+  padding: 8px;
+}
+.companion-chat .inline-error {
+  margin: 8px;
 }
 .is-recording .hero-tag {
   color: #965446;

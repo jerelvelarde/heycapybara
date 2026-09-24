@@ -33,6 +33,8 @@ const api: KiteAPI = {
   action: (action) => ipcRenderer.invoke("kite:action", action),
   buddyDrag: (action, point) =>
     ipcRenderer.invoke("kite:buddyDrag", action, point),
+  toggleCompanionChat: () => ipcRenderer.invoke("kite:toggleCompanionChat"),
+  closeCompanionChat: () => ipcRenderer.invoke("kite:closeCompanionChat"),
   openWorkspace: () => ipcRenderer.invoke("kite:openWorkspace"),
   openIntelligence: () => ipcRenderer.invoke("kite:openIntelligence"),
   onUpdate: (callback) => {
