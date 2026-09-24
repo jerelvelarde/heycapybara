@@ -179,10 +179,37 @@ try {
   if (!buddy || !chat) throw new Error("Companion or chat window did not load");
   await buddy
     .getByRole("button", { name: /Chat with OpenMuse or drag/ })
+    .hover();
+  await expect
+    .poll(() =>
+      buddy
+        .locator(".sprite-capybara img")
+        .evaluate((element) => getComputedStyle(element).animationName),
+    )
+    .toBe("capybara-greet");
+  await buddy.emulateMedia({ reducedMotion: "reduce" });
+  await expect
+    .poll(() =>
+      buddy
+        .locator(".sprite-capybara img")
+        .evaluate((element) => getComputedStyle(element).animationName),
+    )
+    .toBe("none");
+  await buddy.emulateMedia({ reducedMotion: "no-preference" });
+  await expect(
+    buddy.getByRole("button", { name: "Chat with OpenMuse", exact: true }),
+  ).toBeVisible();
+  await expect(
+    buddy.getByRole("button", { name: "Record a workflow", exact: true }),
+  ).toBeVisible();
+  await buddy.screenshot({ path: "artifacts/pet-hover.png" });
+  await buddy
+    .getByRole("button", { name: /Chat with OpenMuse or drag/ })
     .click();
   await expect(
     chat.getByRole("textbox", { name: "Ask OpenMuse" }),
   ).toBeVisible();
+  await chat.screenshot({ path: "artifacts/pet-chat.png" });
   await chat
     .getByRole("textbox", { name: "Ask OpenMuse" })
     .fill("Remember this draft");
@@ -199,6 +226,44 @@ try {
     )
     .toBe(false);
   await buddy
+    .getByRole("button", { name: "Record a workflow", exact: true })
+    .click();
+  await expect(
+    chat.getByRole("textbox", { name: "What should I learn?" }),
+  ).toBeVisible();
+  await chat
+    .getByRole("textbox", { name: "What should I learn?" })
+    .fill("Organize a file");
+  await chat.getByRole("button", { name: "Start recording" }).click();
+  await expect
+    .poll(async () => {
+      if (await chat.getByText("Recording now").isVisible()) return "started";
+      if (
+        await chat
+          .getByText(/Enable Accessibility for OpenMuse Desktop/)
+          .isVisible()
+      )
+        return "denied";
+      return "pending";
+    })
+    .not.toBe("pending");
+  if (await chat.getByText("Recording now").isVisible()) {
+    await expect(chat.getByText("Recording now")).toBeVisible();
+    await chat.getByRole("button", { name: "Stop recording" }).click();
+    await expect
+      .poll(() =>
+        chat.evaluate(() =>
+          window.kite.state().then((state) => !!state.active),
+        ),
+      )
+      .toBe(false);
+  } else {
+    await expect(
+      chat.getByText(/Enable Accessibility for OpenMuse Desktop/),
+    ).toBeVisible();
+  }
+  await chat.getByRole("button", { name: "Close chat" }).click();
+  await buddy
     .getByRole("button", { name: /Chat with OpenMuse or drag/ })
     .click();
   await expect(chat.getByRole("textbox", { name: "Ask OpenMuse" })).toHaveValue(
@@ -210,6 +275,10 @@ try {
       "Connect your OpenAI API key in Settings to start this session.",
     ),
   ).toBeVisible();
+  await chat.getByRole("button", { name: "New conversation" }).click();
+  await expect(chat.getByRole("textbox", { name: "Ask OpenMuse" })).toHaveValue(
+    "",
+  );
   await chat.getByRole("button", { name: "Workspace" }).click();
   await expect
     .poll(() =>
@@ -295,7 +364,7 @@ try {
     );
   }
   console.log(
-    "Desktop smoke passed: notch tour, drag guide, floating chat, draft persistence, workspace, permissions, learning setup, recording dialog.",
+    "Desktop smoke passed: notch tour, drag guide, pet hover/reduced motion, chat persistence, recording flow, workspace, permissions, learning setup.",
   );
 } finally {
   await app.close();

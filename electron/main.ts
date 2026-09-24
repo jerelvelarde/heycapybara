@@ -33,7 +33,11 @@ import {
   placementSchema,
 } from "./preferences";
 import { notchPosition } from "./notch-geometry";
-import { CHAT_SIZE, companionChatPosition } from "./companion-chat-position";
+import {
+  CHAT_SIZE,
+  RECORD_SIZE,
+  companionTrayPosition,
+} from "./companion-chat-position";
 import { loadLinkedEnvironment } from "./environment";
 import { trayIcon } from "./tray-icon";
 import {
@@ -47,7 +51,7 @@ import {
 } from "./buddy-position";
 import type { Point } from "../src/buddy-drag";
 import { startRuntime } from "../server/runtime";
-import type { Permissions, Settings } from "../src/types";
+import type { CompanionTrayMode, Permissions, Settings } from "../src/types";
 
 // Preserve the installed app's data across the display-name rebrand.
 app.setPath("userData", join(app.getPath("appData"), "Kite"));
@@ -63,6 +67,7 @@ let workspace: BrowserWindow;
 let buddy: BrowserWindow;
 let notch: BrowserWindow;
 let companionChat: BrowserWindow;
+let trayMode: CompanionTrayMode = "chat";
 let notchExpanded = false;
 let accessibilityGuideActive = false;
 let notchTopInset = 0;
@@ -132,18 +137,26 @@ function syncCompanionWindows() {
 }
 function positionCompanionChat() {
   if (!companionChat || companionChat.isDestroyed() || !buddy) return;
-  const point = companionChatPosition(buddy.getBounds(), buddyAreas());
+  const point = companionTrayPosition(
+    buddy.getBounds(),
+    buddyAreas(),
+    trayMode === "chat" ? CHAT_SIZE : RECORD_SIZE,
+  );
   companionChat.setPosition(point.x, point.y);
 }
-function openCompanionChat() {
+function openCompanionTray(mode: CompanionTrayMode, toggle = false) {
   if (settings.placement !== "floating" || !settings.onboardingComplete)
-    throw new Error("Select the floating companion to open chat");
-  if (companionChat.isVisible()) {
+    throw new Error("Select the floating companion to open its controls");
+  if (toggle && companionChat.isVisible() && trayMode === mode) {
     companionChat.hide();
   } else {
+    trayMode = mode;
+    const size = mode === "chat" ? CHAT_SIZE : RECORD_SIZE;
+    companionChat.setSize(size.width, size.height);
     positionCompanionChat();
     companionChat.show();
     companionChat.focus();
+    broadcast();
   }
 }
 function persistBuddyPosition() {
@@ -633,6 +646,7 @@ app
       active: store.active,
       permissions: await permissions(),
       settings,
+      trayMode,
     }));
     handle("reviewedRecording", async (id) => {
       await store.flush();
@@ -747,7 +761,15 @@ app
         event.senderFrame !== event.sender.mainFrame
       )
         throw new Error("Untrusted companion chat sender");
-      openCompanionChat();
+      openCompanionTray("chat", true);
+    });
+    ipcMain.handle("kite:openCompanionTray", (event, input) => {
+      if (
+        event.sender !== buddy?.webContents ||
+        event.senderFrame !== event.sender.mainFrame
+      )
+        throw new Error("Untrusted companion tray sender");
+      openCompanionTray(z.enum(["chat", "record"]).parse(input));
     });
     ipcMain.handle("kite:closeCompanionChat", (event) => {
       if (

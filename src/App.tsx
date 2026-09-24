@@ -93,7 +93,11 @@ export function App() {
         headers={{ Authorization: "Bearer " + data.settings.runtimeToken }}
         showDevConsole={false}
       >
-        <CompanionChat settings={data.settings} />
+        <CompanionChat
+          settings={data.settings}
+          mode={data.trayMode}
+          active={data.active}
+        />
       </CopilotKitProvider>
     );
   return (

@@ -1531,30 +1531,13 @@ button {
 .buddy button {
   -webkit-app-region: no-drag;
 }
-.buddy-bubble {
-  position: absolute;
-  top: 12px;
-  left: 9px;
-  background: var(--canvas);
-  border: 1px solid var(--line);
-  border-radius: 11px;
-  padding: 10px 13px;
-  color: var(--muted);
-  font-size: 10px;
-  box-shadow: 0 3px 9px #11191c13;
-}
-.buddy-bubble span:not(.record-dot) {
-  color: var(--muted);
-  font-size: 9px;
-  margin-left: 6px;
-}
 .buddy-sprite {
   cursor: grab;
   touch-action: none;
   user-select: none;
   position: absolute;
-  right: 22px;
-  top: 59px;
+  left: 65px;
+  top: 4px;
 }
 .sprite.small {
   transform: scale(0.61);
@@ -1562,15 +1545,57 @@ button {
   width: 110px;
   height: 160px;
 }
-.buddy-stop {
+.buddy-actions {
   position: absolute;
-  right: 24px;
-  top: 84px;
-  padding: 8px;
-  background: var(--canvas);
+  left: 51px;
+  bottom: 6px;
+  width: 138px;
+  height: 44px;
+  display: flex;
+  align-items: center;
+  justify-content: space-evenly;
+  background: var(--white);
   border: 1px solid var(--line);
-  color: #965446;
+  border-radius: 24px;
+  box-shadow: 0 10px 28px #11191c24;
+  opacity: 0;
+  transform: translateY(6px) scale(0.94);
+  pointer-events: none;
+  transition:
+    opacity 180ms ease,
+    transform 180ms ease;
+}
+.buddy:hover .buddy-actions,
+.buddy:focus-within .buddy-actions,
+.buddy.recording .buddy-actions {
+  opacity: 1;
+  transform: translateY(0) scale(1);
+  pointer-events: auto;
+}
+.buddy-actions button {
+  width: 42px;
+  height: 36px;
+  border-radius: 18px;
+  color: var(--blue-dark);
+}
+.buddy-actions button:hover {
+  background: var(--sky);
+}
+.buddy-actions-divider {
+  width: 1px;
+  height: 23px;
+  background: var(--line);
+}
+.buddy-recording-indicator {
+  position: absolute;
+  top: 10px;
+  right: 59px;
+  width: 9px;
+  height: 9px;
+  background: #b75b48;
+  border: 2px solid white;
   border-radius: 50%;
+  box-shadow: 0 0 0 3px #b75b4833;
 }
 .buddy-error {
   font-size: 9px;
@@ -1627,6 +1652,14 @@ body:has(.companion-chat),
   height: 26px;
   object-fit: contain;
 }
+.companion-kite-mark {
+  width: 26px;
+  height: 26px;
+  display: grid;
+  place-items: center;
+  color: var(--blue-dark);
+  font-size: 24px;
+}
 .companion-chat-toolbar button {
   padding: 7px;
   border-radius: 7px;
@@ -1636,25 +1669,91 @@ body:has(.companion-chat),
 .companion-chat-toolbar button:hover {
   background: var(--sky);
 }
+.companion-chat-assistant {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+}
+.companion-chat-assistant[hidden] {
+  display: none;
+}
 .companion-chat .assistant {
   flex: 1;
   border: 0;
 }
 .companion-chat .assistant > header {
-  height: 55px;
-  padding: 8px 16px;
+  display: none;
 }
 .companion-chat .chat-welcome {
-  padding-top: 22px;
+  padding-top: 8px;
+}
+.companion-chat .chat-welcome .chat-capybara,
+.companion-chat .chat-welcome .kite-face,
+.companion-chat .chat-welcome .suggestion {
+  display: none;
+}
+.companion-chat .chat-welcome p {
+  margin-bottom: 4px;
 }
 .companion-chat .conversation {
-  padding: 14px 18px;
+  padding: 12px 18px;
 }
 .companion-chat .assistant > footer {
   padding: 8px;
 }
 .companion-chat .inline-error {
   margin: 8px;
+}
+.companion-record {
+  flex: 1;
+  min-height: 0;
+  padding: 17px 20px;
+  overflow: auto;
+}
+.companion-record form {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+}
+.companion-record label,
+.companion-record strong {
+  font-size: 13px;
+  font-weight: 700;
+}
+.companion-record input {
+  margin: 12px 0 8px;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: var(--white);
+}
+.companion-record p {
+  font-size: 10px;
+  line-height: 1.5;
+  color: var(--muted);
+}
+.companion-record-primary {
+  width: 100%;
+  margin-top: 16px;
+  padding: 10px 13px;
+  border-radius: 9px;
+  background: var(--blue-dark);
+  color: white;
+  font-weight: 700;
+}
+.companion-record-primary:hover:not(:disabled) {
+  background: #105fa6;
+}
+.companion-record-status {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 10px;
+  color: #965446;
+  margin-bottom: 7px;
+}
+.companion-record-status .record-dot {
+  position: static;
 }
 .is-recording .hero-tag {
   color: #965446;
@@ -1893,6 +1992,39 @@ body:has(.companion-chat),
 .buddy .sprite-capybara > img {
   animation: capybara-float 4s ease-in-out infinite;
 }
+.buddy:hover .sprite-capybara > img {
+  animation: capybara-greet 900ms ease-in-out 1;
+}
+.buddy:hover .sprite-shape {
+  animation: kite-greet 850ms ease-in-out 1;
+}
+@keyframes capybara-greet {
+  0%,
+  100% {
+    transform: translateY(0) rotate(-3deg) scale(1);
+  }
+  25% {
+    transform: translateY(-11px) rotate(5deg) scale(1.06);
+  }
+  55% {
+    transform: translateY(1px) rotate(-6deg) scale(0.98);
+  }
+  75% {
+    transform: translateY(-4px) rotate(2deg) scale(1.02);
+  }
+}
+@keyframes kite-greet {
+  0%,
+  100% {
+    transform: translateY(0) rotate(45deg) scale(1);
+  }
+  30% {
+    transform: translateY(-10px) rotate(57deg) scale(1.07);
+  }
+  65% {
+    transform: translateY(2px) rotate(38deg) scale(0.98);
+  }
+}
 @keyframes capybara-float {
   0%,
   100% {
@@ -1946,8 +2078,13 @@ body:has(.companion-chat),
   margin-top: 10px;
 }
 @media (prefers-reduced-motion: reduce) {
-  .buddy .sprite-capybara > img {
+  .buddy .sprite-capybara > img,
+  .buddy:hover .sprite-capybara > img,
+  .buddy:hover .sprite-shape {
     animation: none;
+  }
+  .buddy-actions {
+    transition: none;
   }
 }
 

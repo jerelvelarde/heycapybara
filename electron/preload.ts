@@ -34,6 +34,8 @@ const api: KiteAPI = {
   buddyDrag: (action, point) =>
     ipcRenderer.invoke("kite:buddyDrag", action, point),
   toggleCompanionChat: () => ipcRenderer.invoke("kite:toggleCompanionChat"),
+  openCompanionTray: (mode) =>
+    ipcRenderer.invoke("kite:openCompanionTray", mode),
   closeCompanionChat: () => ipcRenderer.invoke("kite:closeCompanionChat"),
   openWorkspace: () => ipcRenderer.invoke("kite:openWorkspace"),
   openIntelligence: () => ipcRenderer.invoke("kite:openIntelligence"),

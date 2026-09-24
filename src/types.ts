@@ -27,6 +27,7 @@ export type Skill = {
 export type Permissions = { accessibility: boolean; screenCapture: boolean };
 export type Companion = "capybara" | "kite";
 export type Placement = "notch" | "floating";
+export type CompanionTrayMode = "chat" | "record";
 export type Settings = {
   companion: Companion;
   placement: Placement;
@@ -48,6 +49,7 @@ export type Snapshot = {
   active: Recording | null;
   permissions: Permissions;
   settings: Settings;
+  trayMode: CompanionTrayMode;
 };
 export type DesktopAction =
   | { type: "open-app"; bundleId: string }
@@ -89,6 +91,7 @@ export interface KiteAPI {
     point: { x: number; y: number },
   ): Promise<void>;
   toggleCompanionChat(): Promise<void>;
+  openCompanionTray(mode: CompanionTrayMode): Promise<void>;
   closeCompanionChat(): Promise<void>;
   openWorkspace(): Promise<void>;
   openIntelligence(): Promise<void>;

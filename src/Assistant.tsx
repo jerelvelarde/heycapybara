@@ -22,12 +22,14 @@ export function Assistant({
   onDraft,
   onDone,
   onBusy,
+  newConversationSignal = 0,
 }: {
   settings: Settings;
   request: AgentRequest | null;
   onDraft: (markdown: string) => void;
   onDone: () => void;
   onBusy: (busy: boolean) => void;
+  newConversationSignal?: number;
 }) {
   const { agent, isReady } = useAgent();
   const { copilotkit } = useCopilotKit();
@@ -43,6 +45,16 @@ export function Assistant({
   const handled = useRef("");
   const bottom = useRef<HTMLDivElement>(null);
   const busyRef = useRef(false);
+  useEffect(() => {
+    if (!newConversationSignal) return;
+    agent.threadId = crypto.randomUUID();
+    agent.setMessages([]);
+    setInput("");
+    setImage("");
+    setError("");
+    setActivities([]);
+    setPhase("");
+  }, [newConversationSignal]);
   useEffect(() => {
     const subscription = agent.subscribe({
       onCustomEvent: ({ event }) => {

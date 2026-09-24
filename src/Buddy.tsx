@@ -1,5 +1,5 @@
 import { useRef, useState, type ReactNode } from "react";
-import { Square } from "lucide-react";
+import { Circle, MessageCircle, Square } from "lucide-react";
 import { crossedDragThreshold, type Point } from "./buddy-drag";
 export function Buddy({
   active,
@@ -45,19 +45,17 @@ export function Buddy({
         ),
       );
   }
+  function openMode(mode: "chat" | "record") {
+    void window
+      .kite!.openCompanionTray(mode)
+      .catch((error: unknown) =>
+        setError(
+          error instanceof Error ? error.message : "Could not open controls",
+        ),
+      );
+  }
   return (
-    <div className="buddy">
-      <button className="buddy-bubble" onClick={toggleChat}>
-        {active ? (
-          <>
-            <span className="record-dot" /> Learning your moves…
-          </>
-        ) : (
-          <>
-            Chat with me <span>⌘ ⇧ K workspace</span>
-          </>
-        )}
-      </button>
+    <div className={"buddy" + (active ? " recording" : "")}>
       <button
         className={"buddy-sprite" + (dragging ? " dragging" : "")}
         title="Click to chat · drag to move"
@@ -124,18 +122,42 @@ export function Buddy({
       >
         {children}
       </button>
-      {active && (
+      <div className="buddy-actions" aria-label="Companion actions">
         <button
-          className="buddy-stop"
-          title="Stop recording"
-          onClick={() =>
-            void window
-              .kite!.stop()
-              .catch((error: Error) => setError(error.message))
-          }
+          title="Chat with OpenMuse"
+          aria-label="Chat with OpenMuse"
+          onClick={() => openMode("chat")}
         >
-          <Square size={12} />
+          <MessageCircle size={18} />
         </button>
+        <span className="buddy-actions-divider" />
+        {active ? (
+          <button
+            title="Stop recording"
+            aria-label="Stop recording"
+            onClick={() =>
+              void window
+                .kite!.stop()
+                .catch((error: Error) => setError(error.message))
+            }
+          >
+            <Square size={16} />
+          </button>
+        ) : (
+          <button
+            title="Record a workflow"
+            aria-label="Record a workflow"
+            onClick={() => openMode("record")}
+          >
+            <Circle size={17} />
+          </button>
+        )}
+      </div>
+      {active && (
+        <span
+          className="buddy-recording-indicator"
+          title="Recording in progress"
+        />
       )}
       {error && <span className="buddy-error">{error}</span>}
     </div>
