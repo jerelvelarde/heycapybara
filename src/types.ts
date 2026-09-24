@@ -26,8 +26,11 @@ export type Skill = {
 };
 export type Permissions = { accessibility: boolean; screenCapture: boolean };
 export type Companion = "capybara" | "kite";
+export type Placement = "notch" | "floating";
 export type Settings = {
   companion: Companion;
+  placement: Placement;
+  onboardingComplete: boolean;
   backend: string;
   workspace: string;
   containerId: string;
@@ -52,6 +55,12 @@ export type DesktopAction =
 export interface KiteAPI {
   state(): Promise<Snapshot>;
   setCompanion(companion: Companion): Promise<void>;
+  setPlacement(placement: Placement): Promise<void>;
+  completeOnboarding(): Promise<void>;
+  replayOnboarding(): Promise<void>;
+  startAppDrag(): void;
+  revealAppInFinder(): Promise<void>;
+  setNotchExpanded(expanded: boolean): Promise<void>;
   setModelKey(key: string): Promise<void>;
   chooseWorkspace(): Promise<void>;
   verifyIntelligence(): Promise<void>;

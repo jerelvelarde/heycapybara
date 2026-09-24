@@ -28,7 +28,9 @@ try {
           .windows()
           .some(
             (p) =>
-              p.url().includes("index.html") && !p.url().includes("buddy=1"),
+              p.url().includes("index.html") &&
+              !p.url().includes("buddy=1") &&
+              !p.url().includes("notch=1"),
           ),
       { timeout: 30000 },
     )
@@ -36,8 +38,60 @@ try {
   const page = app
     .windows()
     .find(
-      (p) => p.url().includes("index.html") && !p.url().includes("buddy=1"),
+      (p) =>
+        p.url().includes("index.html") &&
+        !p.url().includes("buddy=1") &&
+        !p.url().includes("notch=1"),
     );
+  await expect
+    .poll(() => app.windows().some((p) => p.url().includes("notch=1")), {
+      timeout: 30000,
+    })
+    .toBe(true);
+  const notch = app.windows().find((p) => p.url().includes("notch=1"));
+  if (!notch) throw new Error("Notch window did not load");
+  await expect(
+    notch.getByRole("heading", { name: "Meet your new work buddy." }),
+  ).toBeVisible();
+  await mkdir("artifacts", { recursive: true });
+  await notch.screenshot({ path: "artifacts/notch-welcome.png" });
+  await notch.getByRole("button", { name: /Let’s get started/ }).click();
+  await expect(
+    notch.getByRole("heading", { name: "Let me follow along." }),
+  ).toBeVisible();
+  await expect(
+    notch.getByRole("button", { name: /OpenMuse Desktop Drag this app/ }),
+  ).toHaveAttribute("draggable", "true");
+  await notch.screenshot({ path: "artifacts/notch-accessibility.png" });
+  await notch
+    .getByRole("button", { name: "Continue without recording" })
+    .click();
+  await expect(
+    notch.getByRole("heading", { name: "Share a screenshot when you want." }),
+  ).toBeVisible();
+  await notch.getByRole("button", { name: "Skip for now" }).click();
+  await notch.getByRole("button", { name: /Finish setup/ }).click();
+  await expect(
+    notch.getByRole("button", { name: "OpenMuse companion" }),
+  ).toBeVisible();
+  await expect
+    .poll(
+      async () => (await notch.evaluate(() => window.kite.state())).settings,
+    )
+    .toMatchObject({ onboardingComplete: true, placement: "notch" });
+  await notch.getByRole("button", { name: "OpenMuse companion" }).click();
+  await expect(notch.locator(".notch-home-panel")).toBeVisible();
+  await notch.getByRole("button", { name: "Replay setup" }).click();
+  await expect(
+    notch.getByRole("heading", { name: "Meet your new work buddy." }),
+  ).toBeVisible();
+  await notch.getByRole("button", { name: /Let’s get started/ }).click();
+  await notch
+    .getByRole("button", { name: "Continue without recording" })
+    .click();
+  await notch.getByRole("button", { name: "Skip for now" }).click();
+  await notch.getByRole("button", { name: /Finish setup/ }).click();
+  await expect(notch.locator(".notch-home-panel")).toHaveCount(0);
   page.on("pageerror", (error) =>
     console.error("Renderer error:", error.message),
   );
@@ -51,6 +105,19 @@ try {
   await expect(
     page.getByRole("heading", { name: "macOS permissions" }),
   ).toBeVisible();
+  await page.getByRole("button", { name: /Floating companion/ }).click();
+  await expect
+    .poll(async () => (await page.evaluate(() => window.kite.state())).settings)
+    .toMatchObject({ onboardingComplete: true, placement: "floating" });
+  await expect
+    .poll(() =>
+      app.evaluate(({ BrowserWindow }) =>
+        BrowserWindow.getAllWindows()
+          .find((window) => window.webContents.getURL().includes("notch=1"))
+          ?.isVisible(),
+      ),
+    )
+    .toBe(false);
   await page.getByRole("button", { name: "Learning", exact: true }).click();
   await expect(
     page.getByRole("heading", { name: "Practice makes progress." }),
@@ -124,7 +191,7 @@ try {
     );
   }
   console.log(
-    "Desktop smoke passed: workspace, permissions, learning setup, recording dialog.",
+    "Desktop smoke passed: notch tour, replay, placement, workspace, permissions, learning setup, recording dialog.",
   );
 } finally {
   await app.close();

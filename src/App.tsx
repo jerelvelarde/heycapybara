@@ -29,10 +29,12 @@ import {
 } from "lucide-react";
 import { Assistant, type AgentRequest } from "./Assistant";
 import { Buddy } from "./Buddy";
+import { Notch } from "./Notch";
 import { Sprite } from "./Sprite";
 import { manualDraft, skillPrompt } from "./skill";
 import type { Recording, Skill, Snapshot } from "./types";
 const isBuddy = new URLSearchParams(location.search).has("buddy");
+const isNotch = new URLSearchParams(location.search).get("notch") === "1";
 const time = (date: string) =>
   new Date(date).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
 const day = (date: string) =>
@@ -67,7 +69,7 @@ export function App() {
     );
   if (!data)
     return (
-      <div className="loading">
+      <div className={isNotch ? "loading notch-loading" : "loading"}>
         <Sprite />
         <p>{error || "Waking up OpenMuse…"}</p>
         {error && <button onClick={() => void refresh()}>Try again</button>}
@@ -79,6 +81,7 @@ export function App() {
         <Sprite companion={data.settings.companion} small />
       </Buddy>
     );
+  if (isNotch) return <Notch data={data} refresh={refresh} />;
   return (
     <CopilotKitProvider
       runtimeUrl={data.settings.runtimeUrl}
@@ -914,6 +917,52 @@ function Workspace({
               <div className="settings-card">
                 <h2>Desktop companion</h2>
                 <p>Choose a little companion for your workspace and desktop.</p>
+                <div
+                  className="placement-options"
+                  aria-label="Companion placement"
+                >
+                  {(["notch", "floating"] as const).map((placement) => (
+                    <button
+                      key={placement}
+                      className="placement-option"
+                      aria-pressed={data.settings.placement === placement}
+                      disabled={working}
+                      onClick={() =>
+                        void perform(() => window.kite!.setPlacement(placement))
+                      }
+                    >
+                      {placement === "notch" ? (
+                        <Monitor size={17} />
+                      ) : (
+                        <MousePointer2 size={17} />
+                      )}
+                      <span>
+                        <strong>
+                          {placement === "notch"
+                            ? "By the notch"
+                            : "Floating companion"}
+                        </strong>
+                        <small>
+                          {placement === "notch"
+                            ? "Opens from the top of your screen"
+                            : "Drag your buddy anywhere on screen"}
+                        </small>
+                      </span>
+                      {data.settings.placement === placement && (
+                        <Check size={15} />
+                      )}
+                    </button>
+                  ))}
+                </div>
+                <button
+                  className="text-button placement-replay"
+                  disabled={working}
+                  onClick={() =>
+                    void perform(() => window.kite!.replayOnboarding())
+                  }
+                >
+                  Replay setup tour <ArrowRight size={14} />
+                </button>
                 <div
                   className="companion-options"
                   aria-label="Desktop companion"

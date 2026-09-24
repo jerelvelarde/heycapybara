@@ -3,6 +3,14 @@ import type { KiteAPI } from "../src/types";
 const api: KiteAPI = {
   setCompanion: (companion) =>
     ipcRenderer.invoke("kite:setCompanion", companion),
+  setPlacement: (placement) =>
+    ipcRenderer.invoke("kite:setPlacement", placement),
+  completeOnboarding: () => ipcRenderer.invoke("kite:completeOnboarding"),
+  replayOnboarding: () => ipcRenderer.invoke("kite:replayOnboarding"),
+  startAppDrag: () => ipcRenderer.send("kite:startAppDrag"),
+  revealAppInFinder: () => ipcRenderer.invoke("kite:revealAppInFinder"),
+  setNotchExpanded: (expanded) =>
+    ipcRenderer.invoke("kite:setNotchExpanded", expanded),
   chooseWorkspace: () => ipcRenderer.invoke("kite:chooseWorkspace"),
   setModelKey: (key) => ipcRenderer.invoke("kite:setModelKey", key),
   verifyIntelligence: () => ipcRenderer.invoke("kite:verifyIntelligence"),

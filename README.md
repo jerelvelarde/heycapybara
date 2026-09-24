@@ -4,7 +4,7 @@ An OpenMuse-inspired macOS desktop companion, developed in [jerelvelarde/heycapy
 
 The default capybara companion uses OpenMuse’s original warm tan artwork, including its original face and proportions. Choose **Settings → Desktop companion → Kite** for the original sprite. Both choices share drag/click behavior, and your choice is remembered between launches. The interface keeps the original friendly layout with colors from [OpenMuse](https://github.com/CopilotKit/openmuse/blob/main/apps/mobile/src/ui.tsx).
 
-A macOS desktop companion powered by the official Codex SDK, with AG-UI and a record-to-skill workflow. Electron hosts the floating companion and workspace; a Swift helper observes activity across native applications during explicitly started recordings.
+A macOS desktop companion powered by the official Codex SDK, with AG-UI and a record-to-skill workflow. Electron hosts the notch companion, optional floating sprite, and workspace; a Swift helper observes activity across native applications during explicitly started recordings.
 
 ## Run
 
@@ -16,7 +16,9 @@ npm run build:native
 npm run dev
 ```
 
-Drag the sprite itself to move OpenMuse; its position is remembered across launches and recovers when a display is removed. Click the sprite to open the workspace.
+On first launch, OpenMuse opens a short setup panel below the Mac's menu-bar area. Grant Accessibility to record workflows across apps; Screen Recording is optional and used only for screenshots you explicitly attach. The panel shows macOS's actual permission status and can be replayed from **Settings → Desktop companion** or the menu-bar item. The outgoing app tile can be dragged into **System Settings → Privacy & Security → Accessibility** in a packaged `.app`; click the tile or **Show app in Finder** if macOS needs you to add it manually. Development runs expose the Finder fallback but do not offer a valid `.app` bundle to drag.
+
+After setup, OpenMuse appears by the notch on the primary display and expands on hover or focus. Use **Settings → Desktop companion → Floating sprite** to switch to the original draggable companion. Drag that sprite to move it; its position is remembered across launches and recovers when a display is removed. Click it to open the workspace. The capybara and Kite artwork choices work in either placement.
 
 Use **⌘⇧K** to show/hide the workspace. Closing the workspace leaves the buddy and menu-bar item running. Quit from the OpenMuse Desktop menu-bar item.
 
