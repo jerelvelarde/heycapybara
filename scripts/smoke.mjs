@@ -63,6 +63,47 @@ try {
     notch.getByRole("button", { name: /OpenMuse Desktop Drag this app/ }),
   ).toHaveAttribute("draggable", "true");
   await notch.screenshot({ path: "artifacts/notch-accessibility.png" });
+  await app.evaluate(({ shell }) => {
+    shell.openExternal = async (url) => {
+      if (
+        url !==
+        "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility"
+      )
+        throw new Error(`Unexpected settings destination: ${url}`);
+    };
+  });
+  await notch.getByRole("button", { name: "Open System Settings" }).click();
+  await expect(notch.locator(".notch-permission-guide")).toBeVisible();
+  await notch.screenshot({ path: "artifacts/notch-drag-guide.png" });
+  await expect(
+    notch.getByRole("button", { name: /OpenMuse Desktop/ }),
+  ).toHaveAttribute("draggable", "true");
+  if (process.argv.includes("--packaged")) {
+    await app.evaluate(({ BrowserWindow }) => {
+      const window = BrowserWindow.getAllWindows().find((candidate) =>
+        candidate.webContents.getURL().includes("notch=1"),
+      );
+      if (!window) throw new Error("Notch window missing during drag test");
+      window.webContents.startDrag = (item) => {
+        globalThis.__smokeDragItem = {
+          file: item.file,
+          iconEmpty: item.icon.isEmpty(),
+        };
+      };
+    });
+    await expect(
+      notch.getByRole("button", { name: /OpenMuse Desktop/ }),
+    ).toBeEnabled();
+    await notch.locator(".notch-guide-app-tile").dispatchEvent("dragstart");
+    await expect
+      .poll(() => app.evaluate(() => globalThis.__smokeDragItem))
+      .toMatchObject({ iconEmpty: false });
+    const dragged = await app.evaluate(() => globalThis.__smokeDragItem);
+    if (!dragged.file.endsWith("/OpenMuse Desktop.app"))
+      throw new Error(`Drag did not carry the app bundle: ${dragged.file}`);
+  }
+  await notch.getByRole("button", { name: /Back to setup/ }).click();
+  await expect(notch.locator(".notch-permission-guide")).toHaveCount(0);
   await notch
     .getByRole("button", { name: "Continue without recording" })
     .click();
@@ -191,7 +232,7 @@ try {
     );
   }
   console.log(
-    "Desktop smoke passed: notch tour, replay, placement, workspace, permissions, learning setup, recording dialog.",
+    "Desktop smoke passed: notch tour, drag guide, replay, placement, workspace, permissions, learning setup, recording dialog.",
   );
 } finally {
   await app.close();

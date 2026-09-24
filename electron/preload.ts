@@ -8,6 +8,10 @@ const api: KiteAPI = {
   completeOnboarding: () => ipcRenderer.invoke("kite:completeOnboarding"),
   replayOnboarding: () => ipcRenderer.invoke("kite:replayOnboarding"),
   startAppDrag: () => ipcRenderer.send("kite:startAppDrag"),
+  openAccessibilitySettings: () =>
+    ipcRenderer.invoke("kite:openAccessibilitySettings"),
+  closeAccessibilityGuide: () =>
+    ipcRenderer.invoke("kite:closeAccessibilityGuide"),
   revealAppInFinder: () => ipcRenderer.invoke("kite:revealAppInFinder"),
   setNotchExpanded: (expanded) =>
     ipcRenderer.invoke("kite:setNotchExpanded", expanded),

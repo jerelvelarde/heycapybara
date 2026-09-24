@@ -62,6 +62,7 @@ let workspace: BrowserWindow;
 let buddy: BrowserWindow;
 let notch: BrowserWindow;
 let notchExpanded = false;
+let accessibilityGuideActive = false;
 let notchTopInset = 0;
 let appDragIcon: Electron.NativeImage;
 let tray: Tray;
@@ -75,7 +76,9 @@ const buddyAreas = () =>
   screen.getAllDisplays().map((display) => display.workArea);
 function notchSize() {
   return !settings?.onboardingComplete
-    ? { width: 460, height: 640 }
+    ? accessibilityGuideActive
+      ? { width: 460, height: 190 }
+      : { width: 460, height: 640 }
     : notchExpanded
       ? { width: 360, height: 260 }
       : { width: 250, height: 62 };
@@ -84,7 +87,7 @@ function fittedNotchBounds() {
   const display = screen.getPrimaryDisplay();
   const requested = notchSize();
   const location = notchPosition(display, notchTopInset, requested);
-  return {
+  const bounds = {
     ...location,
     width: requested.width,
     height: Math.max(
@@ -95,6 +98,12 @@ function fittedNotchBounds() {
       ),
     ),
   };
+  if (accessibilityGuideActive && !settings?.onboardingComplete)
+    bounds.y = Math.max(
+      display.workArea.y,
+      display.workArea.y + display.workArea.height - bounds.height - 20,
+    );
+  return bounds;
 }
 function positionNotch() {
   if (!notch || notch.isDestroyed()) return;
@@ -464,7 +473,10 @@ app
         settings.companion = next.companion;
         settings.placement = next.placement;
         settings.onboardingComplete = next.onboardingComplete;
-        if ("onboardingComplete" in change) notchExpanded = false;
+        if ("onboardingComplete" in change) {
+          notchExpanded = false;
+          accessibilityGuideActive = false;
+        }
         syncCompanionWindows();
         broadcast();
       });
@@ -486,6 +498,33 @@ app
     );
     handle("revealAppInFinder", () => {
       shell.showItemInFolder(app.isPackaged ? appBundlePath() : root);
+    });
+    ipcMain.handle("kite:openAccessibilitySettings", async (event) => {
+      if (
+        event.sender !== notch?.webContents ||
+        event.senderFrame !== event.sender.mainFrame
+      )
+        throw new Error("Untrusted setup sender");
+      accessibilityGuideActive = true;
+      positionNotch();
+      try {
+        await shell.openExternal(
+          "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility",
+        );
+      } catch (error) {
+        accessibilityGuideActive = false;
+        positionNotch();
+        throw error;
+      }
+    });
+    ipcMain.handle("kite:closeAccessibilityGuide", (event) => {
+      if (
+        event.sender !== notch?.webContents ||
+        event.senderFrame !== event.sender.mainFrame
+      )
+        throw new Error("Untrusted setup sender");
+      accessibilityGuideActive = false;
+      positionNotch();
     });
     handle("setNotchExpanded", (input) => {
       notchExpanded = z.boolean().parse(input);

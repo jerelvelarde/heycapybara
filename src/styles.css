@@ -2313,6 +2313,84 @@ body:has(.notch-loading) {
 .notch-home-actions svg {
   color: var(--blue-dark);
 }
+.notch-permission-guide {
+  display: flex;
+  align-items: center;
+  gap: 13px;
+  width: calc(100% - 16px);
+  min-height: 164px;
+  margin: 8px;
+  padding: 15px;
+  border: 1px solid #daeaf5;
+  border-radius: 20px;
+  background: white;
+  box-shadow: 0 14px 40px #102b3d35;
+}
+.notch-guide-app-tile {
+  display: flex;
+  flex: none;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 3px;
+  width: 115px;
+  min-height: 122px;
+  border: 1px solid #c9e6f9;
+  border-radius: 13px;
+  background: var(--sky);
+  text-align: center;
+  cursor: grab;
+}
+.notch-guide-app-tile:active {
+  cursor: grabbing;
+}
+.notch-guide-app-tile img {
+  width: 55px;
+  height: 55px;
+  object-fit: contain;
+  pointer-events: none;
+  -webkit-user-drag: none;
+}
+.notch-guide-app-tile strong {
+  font-size: 10px;
+}
+.notch-guide-copy {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 7px;
+  min-width: 0;
+}
+.notch-guide-copy > strong {
+  font-size: 12px;
+  line-height: 1.25;
+}
+.notch-guide-copy > span {
+  color: var(--muted);
+  font-size: 10px;
+  line-height: 1.4;
+}
+.notch-guide-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 9px;
+  margin-top: 3px;
+}
+.notch-guide-actions button {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--blue-dark);
+  font-size: 10px;
+  font-weight: 700;
+}
+.notch-guide-error {
+  position: absolute;
+  bottom: 6px;
+  left: 150px;
+  color: #8c3f33;
+  font-size: 9px;
+}
 @media (prefers-reduced-motion: reduce) {
   .notch *,
   .notch *::before,

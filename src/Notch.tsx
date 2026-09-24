@@ -30,6 +30,7 @@ export function Notch({
   const [busy, setBusy] = useState(false);
   const [checking, setChecking] = useState(false);
   const [accessibilityRequested, setAccessibilityRequested] = useState(false);
+  const [accessibilityGuide, setAccessibilityGuide] = useState(false);
   const [expanded, setExpanded] = useState(false);
   const checkInFlight = useRef(false);
   const expandedRef = useRef(false);
@@ -39,6 +40,7 @@ export function Notch({
     if (setup) {
       setStep("welcome");
       setExpanded(false);
+      setAccessibilityGuide(false);
       expandedRef.current = false;
     }
   }, [setup]);
@@ -140,7 +142,7 @@ export function Notch({
       >
         <button
           className="notch-pill"
-          onClick={() => expand(!expanded)}
+          onClick={() => expand(true)}
           aria-expanded={expanded}
           aria-label="OpenMuse companion"
         >
@@ -192,6 +194,56 @@ export function Notch({
               </p>
             )}
           </div>
+        )}
+      </main>
+    );
+  }
+
+  if (accessibilityGuide && step === "accessibility") {
+    return (
+      <main className="notch notch-permission-guide">
+        <button
+          draggable
+          className="notch-guide-app-tile"
+          disabled={busy}
+          onDragStart={dragApp}
+          onClick={() => void run(() => window.kite!.revealAppInFinder())}
+          title="Drag OpenMuse into Accessibility settings or click to show in Finder"
+        >
+          <img src="./capybara.png" alt="" />
+          <strong>OpenMuse Desktop</strong>
+        </button>
+        <div className="notch-guide-copy">
+          <strong>Drag me into the Accessibility list</strong>
+          <span>
+            Drop the app in System Settings, then turn it on. Already listed?
+            Toggle it off and on, then restart OpenMuse. Finder is the fallback.
+          </span>
+          <div className="notch-guide-actions">
+            <button
+              disabled={busy}
+              onClick={() => void run(() => window.kite!.revealAppInFinder())}
+            >
+              <FolderOpen size={14} /> Show in Finder
+            </button>
+            <button
+              disabled={busy}
+              onClick={() =>
+                void run(async () => {
+                  await window.kite!.closeAccessibilityGuide();
+                  setAccessibilityGuide(false);
+                  await checkStatus();
+                })
+              }
+            >
+              <ArrowRight size={14} /> Back to setup
+            </button>
+          </div>
+        </div>
+        {error && (
+          <p className="notch-guide-error" role="alert">
+            {error}
+          </p>
         )}
       </main>
     );
@@ -275,9 +327,15 @@ export function Notch({
               disabled={busy}
               onClick={() =>
                 void run(async () => {
+                  setAccessibilityGuide(true);
                   setAccessibilityRequested(true);
-                  await window.kite!.permissions("accessibility");
-                  await checkStatus();
+                  try {
+                    await window.kite!.openAccessibilitySettings();
+                    await checkStatus();
+                  } catch (cause) {
+                    setAccessibilityGuide(false);
+                    throw cause;
+                  }
                 })
               }
             >
@@ -315,8 +373,9 @@ export function Notch({
             </button>
           </div>
           <p className="notch-hint">
-            Toggle OpenMuse on in System Settings. macOS may ask you to restart
-            the app after granting access. The drag tile needs a packaged app.
+            If OpenMuse is already in the list, toggle it off and on instead of
+            dragging a duplicate. Restart the app if macOS asks. The drag tile
+            needs a packaged app.
           </p>
           <div className="notch-bottom-actions">
             <button

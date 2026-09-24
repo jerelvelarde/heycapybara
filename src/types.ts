@@ -59,6 +59,8 @@ export interface KiteAPI {
   completeOnboarding(): Promise<void>;
   replayOnboarding(): Promise<void>;
   startAppDrag(): void;
+  openAccessibilitySettings(): Promise<void>;
+  closeAccessibilityGuide(): Promise<void>;
   revealAppInFinder(): Promise<void>;
   setNotchExpanded(expanded: boolean): Promise<void>;
   setModelKey(key: string): Promise<void>;
