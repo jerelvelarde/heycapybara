@@ -1,6 +1,8 @@
 import { contextBridge, ipcRenderer } from "electron";
 import type { KiteAPI } from "../src/types";
 const api: KiteAPI = {
+  setCompanion: (companion) =>
+    ipcRenderer.invoke("kite:setCompanion", companion),
   chooseWorkspace: () => ipcRenderer.invoke("kite:chooseWorkspace"),
   setModelKey: (key) => ipcRenderer.invoke("kite:setModelKey", key),
   verifyIntelligence: () => ipcRenderer.invoke("kite:verifyIntelligence"),

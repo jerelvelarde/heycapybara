@@ -1,5 +1,16 @@
 # Verification — 2026-09-23
 
+## OpenMuse Desktop / HeyCapybara rebrand
+
+- Preserved the original illustration composition and layout while applying OpenMuse's blue/white palette. Native screenshots verified the generated capybara and original Kite in the hero.
+- Native Settings UI switched between both companions; a full quit/relaunch retained Kite and displayed it in the floating buddy. Restored Capybara as the saved choice afterward.
+- Dragging the capybara saved a new position, and clicking it opened the workspace.
+- Model connection restored through the secure session-only field; the UI reported Connected and cleared the input.
+- All 26 tests, formatting, ESLint and explicit typecheck passed. Full Swift/renderer/Electron package passed with the new capybara icon.
+- Strict recursive signing verification passed with sealed bundle metadata/resources and identity `com.kite.sprite`. This corrects the previous unbound Electron signature. Current Accessibility and Screen Recording checks still report not granted: reapproval for the newly signed build remains necessary before capture can be tested.
+- Independent source review found two regressions (low-contrast keyboard focus and stale packaged verification path); both were fixed and re-reviewed.
+- New public repository is `jerelvelarde/heycapybara`. Remote `heykite` remains at `c432d48f7f3ef1bcbfa638fbd95202aa54e16945`; no upstream OpenMuse PR was opened.
+
 ## Codex upgrade
 
 - Official Codex SDK 0.156.1 installed; packaged native executable reports `codex-cli 0.156.1`.
@@ -26,4 +37,4 @@ The current packaged app shows macOS Accessibility and Screen Recording as not g
 
 Cloud-side completed-thread ingestion, scheduled learning analysis, and applying a newly published cloud skill have not been independently confirmed in the Intelligence dashboard. Successful delivery of an empty skill catalog does not establish those outcomes.
 
-The application is unsigned, not notarized. Native desktop actions remain open-app and visual pointer with approval; arbitrary cross-app clicking/typing and voice are not implemented. Codex workspace-write limits writes, not all reads outside the working folder. Conversation sessions persist in Kite's private agent directory, while the UI currently keeps its displayed conversation for the running app session.
+The original build was unsigned; the current packaging pipeline ad-hoc signs and verifies the sealed bundle identifier. It is not notarized. Native desktop actions remain open-app and visual pointer with approval; arbitrary cross-app clicking/typing and voice are not implemented. Codex workspace-write limits writes, not all reads outside the working folder. Conversation sessions persist in Kite's private agent directory, while the UI currently keeps its displayed conversation for the running app session.

@@ -25,7 +25,9 @@ export type Skill = {
   approvedAt?: string;
 };
 export type Permissions = { accessibility: boolean; screenCapture: boolean };
+export type Companion = "capybara" | "kite";
 export type Settings = {
+  companion: Companion;
   backend: string;
   workspace: string;
   containerId: string;
@@ -49,6 +51,7 @@ export type DesktopAction =
   | { type: "point"; x: number; y: number };
 export interface KiteAPI {
   state(): Promise<Snapshot>;
+  setCompanion(companion: Companion): Promise<void>;
   setModelKey(key: string): Promise<void>;
   chooseWorkspace(): Promise<void>;
   verifyIntelligence(): Promise<void>;

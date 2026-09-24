@@ -1,7 +1,14 @@
 import { _electron as electron, expect } from "@playwright/test";
 import { resolve } from "node:path";
+import { readFile } from "node:fs/promises";
+const manifest = JSON.parse(
+  await readFile(new URL("../package.json", import.meta.url), "utf8"),
+);
+const product = manifest.build.productName;
 const app = await electron.launch({
-  executablePath: resolve("release/mac-arm64/Kite.app/Contents/MacOS/Kite"),
+  executablePath: resolve(
+    `release/mac-arm64/${product}.app/Contents/MacOS/${product}`,
+  ),
   args: [],
   cwd: "/tmp",
 });

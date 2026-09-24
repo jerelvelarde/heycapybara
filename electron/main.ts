@@ -26,6 +26,7 @@ import { randomUUID } from "node:crypto";
 import { writeFile } from "node:fs/promises";
 import { z } from "zod";
 import { Store } from "./store";
+import { loadCompanion, saveCompanion, companionSchema } from "./preferences";
 import { loadLinkedEnvironment } from "./environment";
 import { trayIcon } from "./tray-icon";
 import {
@@ -41,7 +42,9 @@ import type { Point } from "../src/buddy-drag";
 import { startRuntime } from "../server/runtime";
 import type { Permissions, Settings } from "../src/types";
 
-app.setName("Kite");
+// Preserve the installed app's data across the display-name rebrand.
+app.setPath("userData", join(app.getPath("appData"), "Kite"));
+app.setName("OpenMuse Desktop");
 if (process.env.KITE_DATA_DIR)
   app.setPath("userData", process.env.KITE_DATA_DIR);
 const root = app.getAppPath();
@@ -103,7 +106,7 @@ async function approvedAction(input: unknown) {
       : `Show a pointer at (${action.x}, ${action.y})`;
   const result = await dialog.showMessageBox(workspace, {
     type: "question",
-    title: "Kite wants to take an action",
+    title: "OpenMuse wants to take an action",
     message: detail,
     buttons: ["Cancel", "Allow once"],
     defaultId: 0,
@@ -176,7 +179,7 @@ async function startRecording(title: string) {
   try {
     if (!(await permissions()).accessibility)
       throw new Error(
-        "Enable Accessibility for Kite in System Settings, then retry.",
+        "Enable Accessibility for OpenMuse Desktop in System Settings, then retry.",
       );
     const recording = await store.start(title);
     const child = spawn(helper, [], { stdio: ["pipe", "pipe", "pipe"] });
@@ -235,7 +238,7 @@ async function startRecording(title: string) {
             await dialog.showMessageBox({
               type: "error",
               message:
-                "Could not finalize the recording. Retry Stop or restart Kite.",
+                "Could not finalize the recording. Retry Stop or restart OpenMuse Desktop.",
             });
           });
       }
@@ -283,8 +286,8 @@ function makeWindow(isBuddy: boolean) {
     x: position?.x,
     y: position?.y,
     show: false,
-    title: "Kite",
-    backgroundColor: isBuddy ? "#00000000" : "#f6f5f1",
+    title: "OpenMuse Desktop",
+    backgroundColor: isBuddy ? "#00000000" : "#fcfcfc",
     transparent: isBuddy,
     frame: !isBuddy,
     ...(!isBuddy ? { titleBarStyle: "hiddenInset" as const } : {}),
@@ -343,12 +346,26 @@ app
       action: approvedAction,
     });
     settings = runtime.settings;
+    const preferencesPath = join(app.getPath("userData"), "preferences.json");
+    settings.companion = await loadCompanion(preferencesPath);
+    let preferenceQueue = Promise.resolve();
+    handle("setCompanion", (input) => {
+      const companion = companionSchema.parse(input);
+      const update = preferenceQueue.then(async () => {
+        await saveCompanion(preferencesPath, companion);
+        settings.companion = companion;
+        broadcast();
+      });
+      // Return errors to this caller, but allow a later save to retry.
+      preferenceQueue = update.catch(() => {});
+      return update;
+    });
     session.defaultSession.setPermissionRequestHandler(
       (_wc, _permission, callback) => callback(false),
     );
     handle("chooseWorkspace", async () => {
       const result = await dialog.showOpenDialog(workspace, {
-        title: "Choose Kite's working folder",
+        title: "Choose OpenMuse's working folder",
         message: "Codex can edit files and run commands in this folder.",
         properties: ["openDirectory", "createDirectory"],
         defaultPath: settings.workspace,
@@ -529,17 +546,18 @@ app
     )
       await dialog.showMessageBox(workspace, {
         type: "warning",
-        message: "⌘⇧K is in use by another app. Open Kite from the menu bar.",
+        message:
+          "⌘⇧K is in use by another app. Open OpenMuse from the menu bar.",
       });
     const icon = nativeImage
       .createFromDataURL(trayIcon)
       .resize({ width: 18, height: 18 });
     icon.setTemplateImage(true);
     tray = new Tray(icon);
-    tray.setToolTip("Kite");
+    tray.setToolTip("OpenMuse Desktop");
     tray.setContextMenu(
       Menu.buildFromTemplate([
-        { label: "Open Kite", click: openWorkspace },
+        { label: "Open OpenMuse", click: openWorkspace },
         { label: "Show companion", click: () => buddy.show() },
         {
           label: "Stop recording",
@@ -548,7 +566,7 @@ app
           },
         },
         { type: "separator" },
-        { label: "Quit Kite", click: () => app.quit() },
+        { label: "Quit OpenMuse Desktop", click: () => app.quit() },
       ]),
     );
     app.on("activate", openWorkspace);
@@ -556,7 +574,7 @@ app
   .catch(async (error) => {
     await dialog.showMessageBox({
       type: "error",
-      message: "Kite could not start",
+      message: "OpenMuse Desktop could not start",
       detail: error instanceof Error ? error.message : "Unknown startup error",
     });
     app.quit();

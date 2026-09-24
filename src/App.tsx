@@ -29,6 +29,7 @@ import {
 } from "lucide-react";
 import { Assistant, type AgentRequest } from "./Assistant";
 import { Buddy } from "./Buddy";
+import { Sprite } from "./Sprite";
 import { manualDraft, skillPrompt } from "./skill";
 import type { Recording, Skill, Snapshot } from "./types";
 const isBuddy = new URLSearchParams(location.search).has("buddy");
@@ -36,20 +37,6 @@ const time = (date: string) =>
   new Date(date).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
 const day = (date: string) =>
   new Date(date).toLocaleDateString([], { month: "short", day: "numeric" });
-function Sprite({ small = false }: { small?: boolean }) {
-  return (
-    <div className={"sprite " + (small ? "small" : "")}>
-      <div className="sprite-shape">
-        <span className="eye left" />
-        <span className="eye right" />
-        <span className="mouth" />
-      </div>
-      <svg viewBox="0 0 80 80">
-        <path d="M42 0C10 24 67 22 35 43S32 64 15 74" />
-      </svg>
-    </div>
-  );
-}
 export function App() {
   const [data, setData] = useState<Snapshot | null>(null);
   const [error, setError] = useState("");
@@ -57,7 +44,7 @@ export function App() {
     try {
       setData(await window.kite!.state());
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Could not load Kite");
+      setError(e instanceof Error ? e.message : "Could not load OpenMuse");
     }
   }, []);
   useEffect(() => {
@@ -70,7 +57,7 @@ export function App() {
     return (
       <div className="browser-notice">
         <Sprite />
-        <h1>Kite lives on your Mac.</h1>
+        <h1>OpenMuse lives on your Mac.</h1>
         <p>
           Open the desktop app to record workflows across your applications.
         </p>
@@ -82,14 +69,14 @@ export function App() {
     return (
       <div className="loading">
         <Sprite />
-        <p>{error || "Waking up Kite…"}</p>
+        <p>{error || "Waking up OpenMuse…"}</p>
         {error && <button onClick={() => void refresh()}>Try again</button>}
       </div>
     );
   if (isBuddy)
     return (
       <Buddy active={!!data.active} error={error} setError={setError}>
-        <Sprite small />
+        <Sprite companion={data.settings.companion} small />
       </Buddy>
     );
   return (
@@ -190,7 +177,10 @@ function Workspace({
       <nav className="sidebar">
         <div className="traffic-space" />
         <div className="brand">
-          <div className="brand-mark">✦</div>kite<span>DESKTOP</span>
+          <div className="brand-mark">✦</div>
+          <div className="brand-name">
+            OpenMuse<span>DESKTOP</span>
+          </div>
         </div>
         <button
           className="workspace-switch"
@@ -234,7 +224,7 @@ function Workspace({
             <Settings2 size={18} /> Settings
           </button>
           <button className="nav-item" onClick={() => selectTab("Help")}>
-            <CircleHelp size={18} /> How Kite works
+            <CircleHelp size={18} /> How OpenMuse works
           </button>
           <div className="sidebar-footer">
             <span className="kite-mini">✦</span> Made to learn with you{" "}
@@ -333,7 +323,7 @@ function Workspace({
                         setEditor(null);
                         setRecordingId("");
                         setTab("Skill library");
-                        notify("Skill approved. Kite can use it now.");
+                        notify("Skill approved. OpenMuse can use it now.");
                       })
                     }
                   >
@@ -426,10 +416,10 @@ function Workspace({
                   </h1>
                   <p>
                     {tab === "Overview"
-                      ? "Do it once. Teach Kite. Make it second nature."
+                      ? "Do it once. Teach OpenMuse. Make it second nature."
                       : tab === "Recordings"
                         ? "Your workflows, captured across the apps you use."
-                        : "The things you’ve taught Kite, ready for next time."}
+                        : "The things you’ve taught OpenMuse, ready for next time."}
                   </p>
                 </div>
                 {tab !== "Overview" && (
@@ -467,8 +457,8 @@ function Workspace({
                       </h2>
                       <p>
                         {active
-                          ? "Go about your workflow. Kite is capturing the steps across your apps. Come back when you’re done."
-                          : "Show Kite how you work, and turn your everyday workflows into skills that stick."}
+                          ? "Go about your workflow. OpenMuse is capturing the steps across your apps. Come back when you’re done."
+                          : "Show OpenMuse how you work, and turn your everyday workflows into skills that stick."}
                       </p>
                       <button
                         className="button primary"
@@ -514,7 +504,7 @@ function Workspace({
                       <div className="floating-app app-pointer">
                         <MousePointer2 size={23} />
                       </div>
-                      <Sprite />
+                      <Sprite companion={data.settings.companion} />
                       <div className="art-caption">I’ll learn your way.</div>
                       <span className="spark spark-one">✧</span>
                       <span className="spark spark-two">✦</span>
@@ -686,7 +676,7 @@ function Workspace({
                     <Empty
                       icon={<BookOpen size={24} />}
                       title="Your know-how belongs here."
-                      body="Record something you do often. Review it, give it a name, and teach Kite your way."
+                      body="Record something you do often. Review it, give it a name, and teach OpenMuse your way."
                       action={() => setNewRecording(true)}
                     />
                   )}
@@ -837,8 +827,8 @@ function Workspace({
                   },
                   {
                     n: "03",
-                    title: "Bring it back to Kite",
-                    body: "Review and publish skills in Intelligence. Kite loads them on future runs.",
+                    title: "Bring it back to OpenMuse",
+                    body: "Review and publish skills in Intelligence. OpenMuse loads them on future runs.",
                     icon: BookOpen,
                   },
                 ].map(({ n, title, body, icon: Icon }) => (
@@ -902,7 +892,7 @@ function Workspace({
                 <p>
                   From this project directory, sign in and select your
                   Intelligence project. Set your model key in the runtime
-                  environment, then restart Kite.
+                  environment, then restart OpenMuse.
                 </p>
                 <pre>
                   npx copilotkit@latest login{"\n"}npx copilotkit@latest project
@@ -919,7 +909,37 @@ function Workspace({
             <>
               <div className="section-top">
                 <h1>Make yourself at home.</h1>
-                <p>A few permissions help Kite work alongside you.</p>
+                <p>A few permissions help OpenMuse work alongside you.</p>
+              </div>
+              <div className="settings-card">
+                <h2>Desktop companion</h2>
+                <p>Choose a little companion for your workspace and desktop.</p>
+                <div
+                  className="companion-options"
+                  aria-label="Desktop companion"
+                >
+                  {(["capybara", "kite"] as const).map((companion) => (
+                    <button
+                      key={companion}
+                      className="companion-option"
+                      aria-pressed={data.settings.companion === companion}
+                      disabled={working}
+                      onClick={() =>
+                        void perform(() => window.kite!.setCompanion(companion))
+                      }
+                    >
+                      <span className="companion-preview" aria-hidden="true">
+                        <Sprite companion={companion} small />
+                      </span>
+                      <span>
+                        {companion === "capybara" ? "Capybara" : "Kite"}
+                      </span>
+                      {data.settings.companion === companion && (
+                        <Check size={14} aria-hidden="true" />
+                      )}
+                    </button>
+                  ))}
+                </div>
               </div>
               <div className="settings-card">
                 <h2>macOS permissions</h2>
@@ -965,8 +985,8 @@ function Workspace({
                   Refresh permissions
                 </button>
                 <p className="footnote">
-                  macOS may require restarting Kite after a permission change.
-                  Development permission labels may say Electron or
+                  macOS may require restarting OpenMuse after a permission
+                  change. Development permission labels may say Electron or
                   kite-recorder.
                 </p>
               </div>
@@ -995,7 +1015,7 @@ function Workspace({
                 <h2>Model connection</h2>
                 <p>
                   Connect an OpenAI key for this session. Kept in memory and
-                  cleared when Kite quits.
+                  cleared when OpenMuse quits.
                 </p>
                 <form
                   onSubmit={(event) => {
@@ -1029,7 +1049,7 @@ function Workspace({
               </div>
               <div className="settings-card">
                 <h2>Your workspace</h2>
-                <Setting label="Show / hide Kite" value="⌘ ⇧ K" />
+                <Setting label="Show / hide OpenMuse" value="⌘ ⇧ K" />
                 <Setting
                   label="Recording storage"
                   value="Local · Application Support/Kite/library"
@@ -1072,8 +1092,8 @@ function Workspace({
                   </li>
                   <li>
                     <strong>Use it next time.</strong> Open your library and
-                    choose “Use this skill.” Kite loads it and guides you step
-                    by step.
+                    choose “Use this skill.” OpenMuse loads it and guides you
+                    step by step.
                   </li>
                   <li>
                     <strong>Let experience improve it.</strong> Connect
@@ -1082,8 +1102,8 @@ function Workspace({
                   </li>
                 </ol>
                 <p>
-                  In this version, Kite can guide any recorded workflow, open
-                  apps, and point on screen with approval. It does not
+                  In this version, OpenMuse can guide any recorded workflow,
+                  open apps, and point on screen with approval. It does not
                   automatically click or type through arbitrary applications.
                 </p>
               </div>
@@ -1116,10 +1136,10 @@ function Workspace({
         )}
         <div className="workspace-footer">
           <span>
-            <ShieldCheck size={12} /> You choose what Kite sees.
+            <ShieldCheck size={12} /> You choose what OpenMuse sees.
           </span>
           <span>
-            Kite v0.1 <span className="footer-dot">·</span> Built with AG-UI
+            OpenMuse v0.1 <span className="footer-dot">·</span> Built with AG-UI
           </span>
         </div>
       </div>
@@ -1164,7 +1184,7 @@ function Workspace({
             <span className="stat-icon lilac">
               <Radio size={24} />
             </span>
-            <h2>Show Kite your way.</h2>
+            <h2>Show OpenMuse your way.</h2>
             <p>
               Give this workflow a name, then do it naturally across your apps.
             </p>
@@ -1275,7 +1295,7 @@ function Timeline({
             </span>
             <div>
               <strong>
-                {e.app || "Kite"} <span>{e.kind}</span>
+                {e.app || "OpenMuse"} <span>{e.kind}</span>
               </strong>
               <p>{e.detail}</p>
               {e.title && <small>{e.title}</small>}

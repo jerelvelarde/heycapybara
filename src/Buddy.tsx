@@ -54,8 +54,8 @@ export function Buddy({
       </button>
       <button
         className={"buddy-sprite" + (dragging ? " dragging" : "")}
-        title="Click to open Kite · drag to move"
-        aria-label="Open Kite or drag to move companion"
+        title="Click to open OpenMuse · drag to move"
+        aria-label="Open OpenMuse or drag to move companion"
         onPointerDown={(event) => {
           if (event.button !== 0 || !event.isPrimary) return;
           // Recover if macOS interrupted the previous gesture before release.

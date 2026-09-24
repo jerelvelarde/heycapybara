@@ -308,10 +308,10 @@ export function Assistant({
           </div>
         )}
         <textarea
-          aria-label="Ask Kite"
+          aria-label="Ask OpenMuse"
           value={input}
           onChange={(e) => setInput(e.target.value)}
-          placeholder="Ask Kite anything…"
+          placeholder="Ask OpenMuse anything…"
           onKeyDown={(e) => {
             if (e.key === "Enter" && !e.shiftKey) {
               e.preventDefault();

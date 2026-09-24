@@ -1,5 +1,5 @@
 {
-  "name": "kite-sprite",
+  "name": "heycapybara",
   "version": "0.1.0",
   "private": true,
   "type": "module",
@@ -13,13 +13,14 @@
     "typecheck": "tsc --noEmit",
     "format": "prettier --write src electron server tests scripts docs package.json tsconfig.json vite.config.ts README.md",
     "format:check": "prettier --check src electron server tests scripts docs package.json tsconfig.json vite.config.ts README.md",
-    "package": "npm run build:native && npm run build && electron-builder --mac dir",
+    "package": "npm run build:native && npm run build && electron-builder --mac dir && npm run verify:signing",
     "smoke": "node scripts/smoke.mjs",
     "smoke:recording": "node scripts/smoke.mjs --record",
     "lint": "eslint src electron server tests scripts vite.config.ts",
     "verify:intelligence": "node scripts/verify-intelligence.mjs",
     "smoke:packaged": "node scripts/smoke.mjs --packaged",
-    "link:environment": "node scripts/link-environment.mjs"
+    "link:environment": "node scripts/link-environment.mjs",
+    "verify:signing": "node scripts/verify-signing.mjs"
   },
   "dependencies": {
     "@ag-ui/client": "^0.0.59",
@@ -55,11 +56,11 @@
     "typescript-eslint": "^8.70.1",
     "vite": "^8.3.0"
   },
-  "description": "A macOS companion that turns cross-app workflows into reusable skills",
-  "author": "Kite",
+  "description": "OpenMuse-inspired macOS companion with record-to-skill and Codex",
+  "author": "HeyCapybara contributors",
   "build": {
     "appId": "com.kite.sprite",
-    "productName": "Kite",
+    "productName": "OpenMuse Desktop",
     "directories": {
       "output": "release"
     },
@@ -82,10 +83,10 @@
       "target": "dir",
       "category": "public.app-category.productivity",
       "extendInfo": {
-        "NSMicrophoneUsageDescription": "Kite uses the microphone only when you start voice input.",
-        "NSScreenCaptureUsageDescription": "Kite captures screen context only when you attach a screenshot."
+        "NSScreenCaptureUsageDescription": "OpenMuse captures screen context only when you attach a screenshot."
       },
-      "identity": null
+      "identity": "-",
+      "icon": "public/capybara.png"
     }
   },
   "overrides": {

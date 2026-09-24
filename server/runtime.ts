@@ -139,6 +139,7 @@ export async function startRuntime(
   mcpUrl = `http://127.0.0.1:${address.port}/mcp`;
   const settings = {
     backend: "Codex SDK",
+    companion: "capybara" as const,
     workspace,
     ...config,
     deliveryStatus: config.intelligenceConfigured

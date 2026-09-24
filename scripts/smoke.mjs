@@ -6,7 +6,8 @@ const dataDir = await mkdtemp(join(tmpdir(), "kite-smoke-"));
 const app = await electron.launch({
   ...(process.argv.includes("--packaged")
     ? {
-        executablePath: "release/mac-arm64/Kite.app/Contents/MacOS/Kite",
+        executablePath:
+          "release/mac-arm64/OpenMuse Desktop.app/Contents/MacOS/OpenMuse Desktop",
         args: [],
       }
     : { args: ["."] }),
@@ -72,7 +73,7 @@ try {
     .getByRole("button", { name: "Record a workflow", exact: true })
     .click();
   await expect(
-    page.getByRole("heading", { name: "Show Kite your way." }),
+    page.getByRole("heading", { name: "Show OpenMuse your way." }),
   ).toBeVisible();
   await page.getByRole("button", { name: "Close", exact: true }).click();
   if (process.argv.includes("--record")) {
