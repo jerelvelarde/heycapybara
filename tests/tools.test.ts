@@ -167,8 +167,13 @@ test("MCP exposes real skill tools and validates native action arguments", async
       (tool: { name: string }) => tool.name === "point_on_screen",
     );
     assert.ok(pointOnScreenTool);
-    assert.ok(
-      !JSON.stringify(pointOnScreenTool.inputSchema).includes('"pattern":"^[^'),
+    assert.equal(
+      pointOnScreenTool.inputSchema.properties.label.pattern,
+      undefined,
+    );
+    assert.equal(
+      pointOnScreenTool.inputSchema.properties.screenshotId.pattern,
+      "^shot_[0-9a-f]{8}$",
     );
   } finally {
     await rm(root, { recursive: true, force: true });

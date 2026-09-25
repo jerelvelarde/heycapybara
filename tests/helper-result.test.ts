@@ -107,6 +107,19 @@ test("runHelper resolves without throwing on a status-only result", async () => 
   );
 });
 
+test("runHelper rejects when a status-0 result reports an error", async () => {
+  let caught: unknown;
+  try {
+    await runHelper(() =>
+      Promise.resolve({ stdout: '{"kind":"error","detail":"x"}\n' }),
+    );
+  } catch (error) {
+    caught = error;
+  }
+  assert.ok(caught instanceof Error);
+  assert.equal(caught.message, "x");
+});
+
 test("runHelper rethrows a non-exec error unchanged", async () => {
   const original = new TypeError("boom");
   await assert.rejects(
