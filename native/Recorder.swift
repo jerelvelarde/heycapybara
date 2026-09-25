@@ -28,15 +28,32 @@ func axElement(_ element: AXUIElement, _ attribute: CFString) -> AXUIElement? {
     return (value as! AXUIElement)
 }
 
-func isSecure(_ element: AXUIElement) -> Bool {
+enum SecureState { case clear, secure, unknown }
+
+// Whether the element, or one of its eight nearest ancestors, is a secure
+// text field. An element with no subrole is fine; a subrole read that fails
+// on the element itself, a timeout included, is unknown, never clear. A
+// failed read further up, or a failed parent lookup, ends the walk.
+func secureState(_ element: AXUIElement) -> SecureState {
     var current: AXUIElement? = element
-    for _ in 0..<8 {
+    for depth in 0..<8 {
         guard let item = current else { break }
-        if axString(item, kAXSubroleAttribute as CFString) == "AXSecureTextField" { return true }
+        var value: CFTypeRef?
+        switch AXUIElementCopyAttributeValue(item, kAXSubroleAttribute as CFString, &value) {
+        case .success:
+            if value as? String == "AXSecureTextField" { return .secure }
+        case .noValue, .attributeUnsupported: break
+        default:
+            if depth == 0 { return .unknown }
+            return .clear
+        }
         current = axElement(item, kAXParentAttribute as CFString)
     }
-    return false
+    return .clear
 }
+
+// The recorder redacts anything it can't show to be clear.
+func isSecure(_ element: AXUIElement) -> Bool { secureState(element) != .clear }
 
 func primaryTop() -> CGFloat { NSScreen.screens.first?.frame.maxY ?? 0 }
 func quartzPoint(_ cocoa: NSPoint) -> CGPoint { CGPoint(x: cocoa.x, y: primaryTop() - cocoa.y) }
@@ -235,71 +252,116 @@ let ringTail = 0.3
 func eventAccessGranted() -> Bool { AXIsProcessTrusted() && CGPreflightPostEventAccess() }
 let eventAccessError = "OpenMuse needs Accessibility permission to control the Mac. Ask the user to turn on OpenMuse Desktop in System Settings > Privacy & Security > Accessibility, then try again."
 
-// The helper's parent is OpenMuse's main process, so this is whether
-// OpenMuse is the frontmost app, where keys would reach OpenMuse itself.
-func openMuseIsFrontmost() -> Bool {
-    NSWorkspace.shared.frontmostApplication?.processIdentifier == getppid()
+// Apps where typed text or a Return can run a command. --type and --keys
+// refuse them whatever the task.
+let refusedTypingApps: Set<String> = [
+    "com.apple.Terminal", "com.googlecode.iterm2", "dev.warp.Warp-Stable", "com.mitchellh.ghostty",
+    "com.apple.ScriptEditor2", "com.apple.Automator",
+]
+
+// The frontmost app, which keys and text will reach, or an error event and
+// exit. macOS not saying which app that is refuses too. The helper's parent
+// is OpenMuse's main process, where keys would reach OpenMuse itself.
+func frontmostTarget(ownAppError: String) -> NSRunningApplication {
+    guard let front = NSWorkspace.shared.frontmostApplication else {
+        recorder.event("error", detail: "OpenMuse couldn't tell which app is frontmost, so it sent nothing. Wait a moment and try again.")
+        exit(EXIT_FAILURE)
+    }
+    guard front.processIdentifier != getppid() else { recorder.event("error", detail: ownAppError); exit(EXIT_FAILURE) }
+    guard !refusedTypingApps.contains(front.bundleIdentifier ?? "") else {
+        recorder.event("error", detail: "OpenMuse doesn't type into terminals or script editors; ask the user to run the command themselves.")
+        exit(EXIT_FAILURE)
+    }
+    return front
 }
 
-// Whether the focused element, or one of its eight nearest ancestors, is a
-// secure text field (isSecure, as the recorder uses it). An app that doesn't
-// report its password fields can't be caught.
-func focusedFieldIsSecure() -> Bool {
+// Whether the focused element is a secure text field (secureState). Nothing
+// focused is clear; any other error, a timeout included, is unknown. An app
+// that doesn't report its password fields can't be caught.
+func focusedFieldCheck() -> SecureState {
     let system = AXUIElementCreateSystemWide()
     AXUIElementSetMessagingTimeout(system, 0.3)
-    guard let focused = axElement(system, kAXFocusedUIElementAttribute as CFString) else { return false }
-    return isSecure(focused)
+    var value: CFTypeRef?
+    switch AXUIElementCopyAttributeValue(system, kAXFocusedUIElementAttribute as CFString, &value) {
+    case .success: break
+    case .noValue: return .clear
+    default: return .unknown
+    }
+    guard let value = value, CFGetTypeID(value) == AXUIElementGetTypeID() else { return .unknown }
+    return secureState(value as! AXUIElement)
 }
 
-func postClick(at point: CGPoint, button: CGMouseButton, clicks: Int) {
+// The post functions create every event before sending the first, and return
+// false, having sent nothing, when macOS can't create one.
+let eventsFailedError = "macOS couldn't create the input events, so OpenMuse sent nothing. Try again."
+
+func postClick(at point: CGPoint, button: CGMouseButton, clicks: Int) -> Bool {
     let source = CGEventSource(stateID: .hidSystemState)
     let (down, up): (CGEventType, CGEventType) = button == .right ? (.rightMouseDown, .rightMouseUp) : (.leftMouseDown, .leftMouseUp)
-    CGEvent(mouseEventSource: source, mouseType: .mouseMoved, mouseCursorPosition: point, mouseButton: button)?.post(tap: .cghidEventTap)
-    usleep(30_000)
+    guard let move = CGEvent(mouseEventSource: source, mouseType: .mouseMoved, mouseCursorPosition: point, mouseButton: button) else { return false }
+    var presses: [CGEvent] = []
     for click in 1...clicks {
         for kind in [down, up] {
-            let event = CGEvent(mouseEventSource: source, mouseType: kind, mouseCursorPosition: point, mouseButton: button)
+            guard let event = CGEvent(mouseEventSource: source, mouseType: kind, mouseCursorPosition: point, mouseButton: button) else { return false }
             // The count within a double or triple click, which is how apps
             // tell one from separate clicks.
-            event?.setIntegerValueField(.mouseEventClickState, value: Int64(click))
-            event?.post(tap: .cghidEventTap)
+            event.setIntegerValueField(.mouseEventClickState, value: Int64(click))
+            presses.append(event)
         }
     }
+    move.post(tap: .cghidEventTap)
+    usleep(30_000)
+    presses.forEach { $0.post(tap: .cghidEventTap) }
+    return true
 }
 
 // Lines per wheel notch, about what one notch of a mouse wheel scrolls.
 let linesPerNotch: Int32 = 3
 
-func postScroll(at point: CGPoint, direction: String, notches: Int) {
+func postScroll(at point: CGPoint, direction: String, notches: Int) -> Bool {
     let source = CGEventSource(stateID: .hidSystemState)
-    CGEvent(mouseEventSource: source, mouseType: .mouseMoved, mouseCursorPosition: point, mouseButton: .left)?.post(tap: .cghidEventTap)
-    usleep(30_000)
+    guard let move = CGEvent(mouseEventSource: source, mouseType: .mouseMoved, mouseCursorPosition: point, mouseButton: .left) else { return false }
     // Wheel 1 is vertical and wheel 2 horizontal. Positive values scroll up
     // and left, the way a wheel turned away from the user does.
     let vertical: Int32 = direction == "up" ? linesPerNotch : direction == "down" ? -linesPerNotch : 0
     let horizontal: Int32 = direction == "left" ? linesPerNotch : direction == "right" ? -linesPerNotch : 0
+    var wheels: [CGEvent] = []
     for _ in 0..<notches {
-        CGEvent(scrollWheelEvent2Source: source, units: .line, wheelCount: 2, wheel1: vertical, wheel2: horizontal, wheel3: 0)?.post(tap: .cghidEventTap)
+        guard let wheel = CGEvent(scrollWheelEvent2Source: source, units: .line, wheelCount: 2, wheel1: vertical, wheel2: horizontal, wheel3: 0) else { return false }
+        wheels.append(wheel)
+    }
+    move.post(tap: .cghidEventTap)
+    usleep(30_000)
+    for wheel in wheels {
+        wheel.post(tap: .cghidEventTap)
         usleep(20_000)
     }
+    return true
 }
 
-func postText(_ text: String) {
+func postText(_ text: String) -> Bool {
     let source = CGEventSource(stateID: .hidSystemState)
+    var pairs: [[CGEvent]] = []
     for character in text {
         // One key event pair per character, carrying the character itself,
         // so it types the same on any keyboard layout. A character made of
         // several code points, such as an emoji with a skin tone, goes in
         // one event.
         let units = Array(String(character).utf16)
+        var pair: [CGEvent] = []
         for isDown in [true, false] {
-            let event = CGEvent(keyboardEventSource: source, virtualKey: 0, keyDown: isDown)
-            event?.flags = []
-            event?.keyboardSetUnicodeString(stringLength: units.count, unicodeString: units)
-            event?.post(tap: .cghidEventTap)
+            guard let event = CGEvent(keyboardEventSource: source, virtualKey: 0, keyDown: isDown) else { return false }
+            event.flags = []
+            event.keyboardSetUnicodeString(stringLength: units.count, unicodeString: units)
+            pair.append(event)
         }
+        pairs.append(pair)
+    }
+    for pair in pairs {
+        pair.forEach { $0.post(tap: .cghidEventTap) }
         usleep(4_000)
     }
+    return true
 }
 
 // Must list exactly server/computer-schema.ts's KEY_NAMES (guarded by a
@@ -336,16 +398,29 @@ let modifierFlags: [String: CGEventFlags] = [
     "command": .maskCommand, "shift": .maskShift, "option": .maskAlternate, "control": .maskControl,
 ]
 
-func postKeys(_ code: CGKeyCode, flags: CGEventFlags) {
+// Must list exactly server/computer-schema.ts's BLOCKED_CHORDS (guarded by a
+// parity test in tests/recorder-source.test.ts): log out, lock the screen and
+// Force Quit. --keys refuses these, and any chord that holds every modifier
+// of one and more, whatever the main process already checked.
+let blockedChords: [(key: String, modifiers: [String])] = [
+    (key: "q", modifiers: ["command", "shift"]),
+    (key: "q", modifiers: ["command", "control"]),
+    (key: "escape", modifiers: ["command", "option"]),
+]
+
+func postKeys(_ code: CGKeyCode, flags: CGEventFlags) -> Bool {
     let source = CGEventSource(stateID: .hidSystemState)
+    var events: [CGEvent] = []
     for isDown in [true, false] {
-        let event = CGEvent(keyboardEventSource: source, virtualKey: code, keyDown: isDown)
+        guard let event = CGEvent(keyboardEventSource: source, virtualKey: code, keyDown: isDown) else { return false }
         // Exactly these modifiers, whatever keys the user is holding. No
         // separate modifier key events are sent, so none can be left held
         // down if Stop kills this process halfway.
-        event?.flags = flags
-        event?.post(tap: .cghidEventTap)
+        event.flags = flags
+        events.append(event)
     }
+    events.forEach { $0.post(tap: .cghidEventTap) }
+    return true
 }
 
 if args.count > 1 {
@@ -395,6 +470,12 @@ if args.count > 1 {
             recorder.event("error", detail: "Only https web addresses with a host can be opened")
             exit(EXIT_FAILURE)
         }
+        // As server/computer-schema.ts checks: an address can hide where it
+        // goes behind a user name, or carry a password.
+        guard url.user == nil, url.password == nil else {
+            recorder.event("error", detail: "Use a web address without a user name or password")
+            exit(EXIT_FAILURE)
+        }
         let config = NSWorkspace.OpenConfiguration()
         config.activates = true
         NSWorkspace.shared.open([url], withApplicationAt: appURL, configuration: config) { app, error in
@@ -413,7 +494,11 @@ if args.count > 1 {
         guard eventAccessGranted() else { recorder.event("error", detail: eventAccessError); exit(EXIT_FAILURE) }
         let panel = showRing(at: point)
         DispatchQueue.main.asyncAfter(deadline: .now() + ringLead) {
-            postClick(at: point, button: button, clicks: clicks)
+            guard postClick(at: point, button: button, clicks: clicks) else {
+                panel.orderOut(nil)
+                recorder.event("error", detail: eventsFailedError)
+                exit(EXIT_FAILURE)
+            }
             recorder.event("status", detail: "Click sent", point: point)
             DispatchQueue.main.asyncAfter(deadline: .now() + ringTail) { panel.orderOut(nil); exit(EXIT_SUCCESS) }
         }
@@ -428,7 +513,11 @@ if args.count > 1 {
         guard eventAccessGranted() else { recorder.event("error", detail: eventAccessError); exit(EXIT_FAILURE) }
         let panel = showRing(at: point)
         DispatchQueue.main.asyncAfter(deadline: .now() + ringLead) {
-            postScroll(at: point, direction: args[4], notches: notches)
+            guard postScroll(at: point, direction: args[4], notches: notches) else {
+                panel.orderOut(nil)
+                recorder.event("error", detail: eventsFailedError)
+                exit(EXIT_FAILURE)
+            }
             recorder.event("status", detail: "Scroll sent", point: point)
             DispatchQueue.main.asyncAfter(deadline: .now() + ringTail) { panel.orderOut(nil); exit(EXIT_SUCCESS) }
         }
@@ -445,15 +534,17 @@ if args.count > 1 {
             exit(EXIT_FAILURE)
         }
         guard eventAccessGranted() else { recorder.event("error", detail: eventAccessError); exit(EXIT_FAILURE) }
-        guard !openMuseIsFrontmost() else {
-            recorder.event("error", detail: "OpenMuse is the frontmost app, so the text would go to OpenMuse itself. Click the field you want to type into first.")
-            exit(EXIT_FAILURE)
-        }
-        guard !focusedFieldIsSecure() else {
+        _ = frontmostTarget(ownAppError: "OpenMuse is the frontmost app, so the text would go to OpenMuse itself. Click the field you want to type into first.")
+        switch focusedFieldCheck() {
+        case .clear: break
+        case .secure:
             recorder.event("error", detail: "The focused field is a password field. OpenMuse doesn't type into password fields; ask the user to type it themselves.")
             exit(EXIT_FAILURE)
+        case .unknown:
+            recorder.event("error", detail: "OpenMuse couldn't check whether the focused field is a password field. Wait a moment, click the field and try again.")
+            exit(EXIT_FAILURE)
         }
-        postText(text)
+        guard postText(text) else { recorder.event("error", detail: eventsFailedError); exit(EXIT_FAILURE) }
         recorder.event("status", detail: "Text typed")
         exit(EXIT_SUCCESS)
     case "--keys":
@@ -469,21 +560,31 @@ if args.count > 1 {
             }
             flags.insert(flag)
         }
-        guard eventAccessGranted() else { recorder.event("error", detail: eventAccessError); exit(EXIT_FAILURE) }
-        guard !openMuseIsFrontmost() else {
-            recorder.event("error", detail: "OpenMuse is the frontmost app, so the keys would go to OpenMuse itself. Click in the app you want, or open it with open_application or open_url, first.")
+        guard !blockedChords.contains(where: { chord in
+            chord.key == args[2] && flags.isSuperset(of: CGEventFlags(chord.modifiers.compactMap { modifierFlags[$0] }))
+        }) else {
+            recorder.event("error", detail: "That shortcut logs out, locks the Mac or opens Force Quit, so OpenMuse doesn't send it. Ask the user to do it themselves.")
             exit(EXIT_FAILURE)
         }
+        guard eventAccessGranted() else { recorder.event("error", detail: eventAccessError); exit(EXIT_FAILURE) }
+        _ = frontmostTarget(ownAppError: "OpenMuse is the frontmost app, so the keys would go to OpenMuse itself. Click in the app you want, or open it with open_application or open_url, first.")
         // A character key types its character with no modifiers, Shift or
         // Option (Option-S types ß); Command or Control makes it a shortcut.
         // Command-V, with or without more modifiers, pastes.
         let typesCharacter = characterKeys.contains(args[2]) && flags.isDisjoint(with: [.maskCommand, .maskControl])
         let pastes = args[2] == "v" && flags.contains(.maskCommand)
-        guard !((typesCharacter || pastes) && focusedFieldIsSecure()) else {
-            recorder.event("error", detail: "The focused field is a password field. OpenMuse doesn't type into password fields; ask the user to type it themselves.")
-            exit(EXIT_FAILURE)
+        if typesCharacter || pastes {
+            switch focusedFieldCheck() {
+            case .clear: break
+            case .secure:
+                recorder.event("error", detail: "The focused field is a password field. OpenMuse doesn't type into password fields; ask the user to type it themselves.")
+                exit(EXIT_FAILURE)
+            case .unknown:
+                recorder.event("error", detail: "OpenMuse couldn't check whether the focused field is a password field. Wait a moment, click the field and try again.")
+                exit(EXIT_FAILURE)
+            }
         }
-        postKeys(code, flags: flags)
+        guard postKeys(code, flags: flags) else { recorder.event("error", detail: eventsFailedError); exit(EXIT_FAILURE) }
         recorder.event("status", detail: "Keys pressed")
         exit(EXIT_SUCCESS)
     default: recorder.event("error", detail: "Unknown argument"); exit(EXIT_FAILURE)
