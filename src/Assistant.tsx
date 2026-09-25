@@ -12,6 +12,7 @@ import {
 import { validateSkillMarkdown } from "./skill-format";
 import {
   createEpoch,
+  displayText,
   ipcErrorMessage,
   requestAttachment,
   userContent,
@@ -296,26 +297,22 @@ export function Assistant({
         ) : (
           agent.messages
             .filter((m) => m.role === "user" || m.role === "assistant")
-            .map((m) => (
-              <div key={m.id} className={"message " + m.role}>
-                <small>{m.role === "user" ? "YOU" : "OPENMUSE"}</small>
-                <p>
-                  {typeof m.content === "string"
-                    ? m.content.length > 2400 && m.role === "user"
-                      ? m.content.slice(0, 240) +
-                        "\n[Reviewed recording attached]"
-                      : m.content
-                    : "Screen context attached"}
-                </p>
-                {m.role === "assistant" &&
-                  "toolCalls" in m &&
-                  m.toolCalls?.map((t) => (
-                    <span className="tool-chip" key={t.id}>
-                      {t.function.name}
-                    </span>
-                  ))}
-              </div>
-            ))
+            .map((m) => {
+              const text = displayText(m);
+              return (
+                <div key={m.id} className={"message " + m.role}>
+                  <small>{m.role === "user" ? "YOU" : "OPENMUSE"}</small>
+                  {text !== null && <p>{text}</p>}
+                  {m.role === "assistant" &&
+                    "toolCalls" in m &&
+                    m.toolCalls?.map((t) => (
+                      <span className="tool-chip" key={t.id}>
+                        {t.function.name}
+                      </span>
+                    ))}
+                </div>
+              );
+            })
         )}
         {activities.length > 0 && (
           <details className="agent-activity" open={busy}>
