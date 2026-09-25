@@ -6,7 +6,9 @@ import {
   describeScreenshot,
   exceeds,
   fitsPromptBudget,
+  isFresh,
   pngSize,
+  resolvePoint,
   screenPoint,
   unreferencedImageNote,
   type Screenshot,
@@ -197,13 +199,23 @@ test("pointing refuses stale, moved, missing or out-of-range screenshots", () =>
     /more than 10 minutes old/,
   );
   assert.throws(
+    () => screenPoint(shot, { x: 1, y: 1 }, display, now - 1),
+    /clock changed/,
+  );
+  assert.throws(
     () => screenPoint(shot, { x: 1, y: 1 }, undefined, now),
     /no longer connected/,
   );
-  assert.throws(
-    () => screenPoint(shot, { x: 1, y: 1 }, { ...display, width: 1800 }, now),
-    /changed/,
-  );
+  for (const moved of [
+    { ...display, width: 1800 },
+    { ...display, x: 100 },
+    { ...display, y: -50 },
+    { ...display, height: 1000 },
+  ])
+    assert.throws(
+      () => screenPoint(shot, { x: 1, y: 1 }, moved, now),
+      /changed/,
+    );
   for (const point of [
     { x: 1386, y: 1 },
     { x: -1, y: 1 },
@@ -211,6 +223,74 @@ test("pointing refuses stale, moved, missing or out-of-range screenshots", () =>
     { x: Number.NaN, y: 1 },
   ])
     assert.throws(() => screenPoint(shot, point, display, now), /outside/);
+});
+
+test("pointing succeeds exactly at the 10 minute boundary", () => {
+  const atLimit = screenPoint(
+    shot,
+    { x: 1, y: 1 },
+    display,
+    1_000_000 + 10 * 60 * 1000,
+  );
+  assert.deepEqual(
+    atLimit,
+    screenPoint(shot, { x: 1, y: 1 }, display, 1_000_000),
+  );
+});
+
+test("isFresh treats exactly 10 minutes as fresh and a clock rewind as stale", () => {
+  assert.equal(isFresh(shot, shot.capturedAt), true);
+  assert.equal(isFresh(shot, shot.capturedAt + 10 * 60 * 1000), true);
+  assert.equal(isFresh(shot, shot.capturedAt + 10 * 60 * 1000 + 1), false);
+  assert.equal(isFresh(shot, shot.capturedAt - 1), false);
+});
+
+test("resolvePoint looks up the screenshot and its live display before pointing", () => {
+  const registry = new ScreenshotRegistry(16, () => 1_000_000);
+  const bounds = { x: 0, y: 0, width: 1512, height: 982 };
+  const stored = registry.add({
+    displayId: "7",
+    label: "Built-in Retina Display",
+    bounds,
+    width: 1386,
+    height: 900,
+  });
+  const request = { screenshotId: stored.id, x: 692, y: 449 };
+  assert.throws(
+    () =>
+      resolvePoint(
+        registry,
+        [{ id: 7, bounds }],
+        { ...request, screenshotId: "shot_ffffffff" },
+        1_000_000,
+      ),
+    /no longer available/,
+  );
+  const resolved = resolvePoint(
+    registry,
+    [{ id: 7, bounds }],
+    request,
+    1_000_000,
+  );
+  assert.equal(resolved.shot, stored);
+  assert.deepEqual(
+    resolved.point,
+    screenPoint(stored, request, bounds, 1_000_000),
+  );
+  assert.throws(
+    () => resolvePoint(registry, [{ id: 8, bounds }], request, 1_000_000),
+    /no longer connected/,
+  );
+  assert.throws(
+    () =>
+      resolvePoint(
+        registry,
+        [{ id: 7, bounds: { ...bounds, x: 50 } }],
+        request,
+        1_000_000,
+      ),
+    /changed/,
+  );
 });
 
 test("the model is told which image is which screenshot, and its pixel size", () => {

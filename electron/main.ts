@@ -58,10 +58,11 @@ import {
   exceeds,
   fitsPromptBudget,
   pngSize,
-  screenPoint,
+  resolvePoint,
 } from "../server/screenshots";
 import type {
   CompanionTrayMode,
+  DesktopAction,
   Permissions,
   ScreenshotAttachment,
   Settings,
@@ -204,6 +205,17 @@ const broadcast = () =>
   BrowserWindow.getAllWindows().forEach((w) =>
     w.webContents.send("kite:update"),
   );
+function pointDetail(action: Extract<DesktopAction, { type: "point" }>) {
+  // Resolve before asking so the user isn't asked to approve a point that already can't land.
+  const { shot } = resolvePoint(screenshots, screen.getAllDisplays(), action);
+  return `Point at “${action.label}” on ${shot.label}`;
+}
+function helperArgs(action: DesktopAction) {
+  if (action.type === "open-app") return ["--open-app", action.bundleId];
+  // Resolve again: the display can change, or the screenshot expire, while the dialog is open.
+  const { point } = resolvePoint(screenshots, screen.getAllDisplays(), action);
+  return ["--point", String(point.x), String(point.y)];
+}
 async function approvedAction(input: unknown) {
   const action = z
     .discriminatedUnion("type", [
@@ -228,25 +240,10 @@ async function approvedAction(input: unknown) {
       }),
     ])
     .parse(input);
-  let detail: string;
-  let args: string[];
-  if (action.type === "open-app") {
-    detail = `Open application ${action.bundleId}`;
-    args = ["--open-app", action.bundleId];
-  } else {
-    const shot = screenshots.get(action.screenshotId);
-    if (!shot)
-      throw new Error(
-        "That screenshot is no longer available. Ask the user to attach a new one.",
-      );
-    const display = screen
-      .getAllDisplays()
-      .find((candidate) => String(candidate.id) === shot.displayId);
-    // Check the geometry before asking, so the user never approves a point that cannot land.
-    const point = screenPoint(shot, action, display?.bounds);
-    detail = `Point at “${action.label}” on ${shot.label}`;
-    args = ["--point", String(point.x), String(point.y)];
-  }
+  const detail =
+    action.type === "open-app"
+      ? `Open application ${action.bundleId}`
+      : pointDetail(action);
   const result = await dialog.showMessageBox(workspace, {
     type: "question",
     title: "OpenMuse wants to take an action",
@@ -257,7 +254,7 @@ async function approvedAction(input: unknown) {
   });
   if (result.response !== 1) throw new Error("User declined action");
   await runHelper(
-    () => exec(helper, args, helperTimeout),
+    () => exec(helper, helperArgs(action), helperTimeout),
     action.type === "open-app" ? "Application opened" : "Point displayed",
   );
 }

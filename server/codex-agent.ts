@@ -23,7 +23,7 @@ import { codexEvents } from "./codex-events";
 import {
   describeScreenshot,
   unreferencedImageNote,
-  type Screenshot,
+  type ScreenshotLookup,
 } from "./screenshots";
 
 export const instructions = `You are OpenMuse, a capable macOS workflow agent powered by Codex.
@@ -36,7 +36,7 @@ Be concise and practical. Keep working through recoverable errors, and verify th
 export type CodexRunnerOptions = {
   statePath: string;
   binaryPath?: string;
-  screenshots?: { get(id: string): Screenshot | undefined };
+  screenshots?: ScreenshotLookup;
   createClient?: (options: CodexOptions) => {
     startThread(options: ThreadOptions): Pick<Thread, "runStreamed">;
     resumeThread(

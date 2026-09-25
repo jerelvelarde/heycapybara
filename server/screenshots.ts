@@ -105,15 +105,17 @@ export class ScreenshotRegistry {
   }
 }
 
+export type ScreenshotLookup = Pick<ScreenshotRegistry, "get">;
+
 export function screenPoint(
   shot: Screenshot,
   point: { x: number; y: number },
   current: Rect | undefined,
   now = Date.now(),
 ) {
-  if (now - shot.capturedAt > MAX_AGE_MS)
+  if (!isFresh(shot, now))
     throw new Error(
-      "That screenshot is more than 10 minutes old. Ask the user to attach a new one.",
+      "That screenshot is more than 10 minutes old, or the clock changed since it was taken. Ask the user to attach a new one.",
     );
   if (!current)
     throw new Error(
@@ -141,6 +143,30 @@ export function screenPoint(
     x: bounds.x + ((Math.floor(point.x) + 0.5) * bounds.width) / shot.width,
     y: bounds.y + ((Math.floor(point.y) + 0.5) * bounds.height) / shot.height,
   };
+}
+
+// A negative age means the clock moved backwards since the capture, so its
+// age is unknown and it is treated as stale.
+export function isFresh(shot: Screenshot, now = Date.now()) {
+  const age = now - shot.capturedAt;
+  return age >= 0 && age <= MAX_AGE_MS;
+}
+
+export function resolvePoint(
+  lookup: ScreenshotLookup,
+  displays: readonly { id: number | string; bounds: Rect }[],
+  request: { screenshotId: string; x: number; y: number },
+  now = Date.now(),
+) {
+  const shot = lookup.get(request.screenshotId);
+  if (!shot)
+    throw new Error(
+      "That screenshot is no longer available. Ask the user to attach a new one.",
+    );
+  const display = displays.find(
+    (candidate) => String(candidate.id) === shot.displayId,
+  );
+  return { shot, point: screenPoint(shot, request, display?.bounds, now) };
 }
 
 // The Codex SDK joins every text part into one prompt and passes images
