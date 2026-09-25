@@ -51,7 +51,7 @@ import {
 } from "./buddy-position";
 import { runHelper } from "./helper-result";
 import { performPointAction } from "./point-action";
-import { askApproval } from "./approval";
+import { askApproval, approvalHost } from "./approval";
 import { conceal } from "./window-occlusion";
 import type { Point } from "../src/buddy-drag";
 import { pointLabelSchema, screenshotIdSchema } from "../server/point-schema";
@@ -219,8 +219,21 @@ function openMuseWindows() {
 }
 async function approve(prompt: { message: string; detail?: string }) {
   return askApproval(prompt, {
-    activate: () => app.focus({ steal: true }),
-    showMessageBox: (options) => dialog.showMessageBox(options),
+    activate: () => {
+      app.focus({ steal: true });
+      // Does nothing when OpenMuse is already the active app.
+      app.dock?.bounce("critical");
+    },
+    showMessageBox: (options) => {
+      const { host, mustShow } = approvalHost(companionChat, workspace);
+      if (mustShow) openWorkspace();
+      // A hidden parent makes Electron fall back to the blocking,
+      // parentless path on macOS, so only attach a host that is actually
+      // on screen right now.
+      return host.isVisible()
+        ? dialog.showMessageBox(host, options)
+        : dialog.showMessageBox(options);
+    },
   });
 }
 async function approvedAction(input: unknown) {
@@ -240,7 +253,11 @@ async function approvedAction(input: unknown) {
     ])
     .parse(input);
   if (action.type === "open-app") {
-    if (!(await approve({ message: `Open application ${action.bundleId}` })))
+    if (
+      !(await approve({
+        message: `The agent wants to open ${action.bundleId}`,
+      }))
+    )
       throw new Error("User declined action");
     await runHelper(
       () => exec(helper, ["--open-app", action.bundleId], appLaunchTimeout),
