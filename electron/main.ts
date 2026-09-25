@@ -50,13 +50,9 @@ import {
   saveBuddyPosition,
 } from "./buddy-position";
 import { runHelper } from "./helper-result";
-import { coversPoint } from "./window-occlusion";
+import { performPointAction } from "./point-action";
 import type { Point } from "../src/buddy-drag";
-import {
-  pointLabelSchema,
-  pointPrompt,
-  screenshotIdSchema,
-} from "../server/point-schema";
+import { pointLabelSchema, screenshotIdSchema } from "../server/point-schema";
 import { startRuntime } from "../server/runtime";
 import {
   ScreenshotRegistry,
@@ -67,7 +63,6 @@ import {
 } from "../server/screenshots";
 import type {
   CompanionTrayMode,
-  DesktopAction,
   Permissions,
   ScreenshotAttachment,
   Settings,
@@ -216,10 +211,17 @@ function openMuseWindows() {
     (win) => win && !win.isDestroyed(),
   );
 }
-function pointApproval(action: Extract<DesktopAction, { type: "point" }>) {
-  // Resolve before asking so the user isn't asked to approve a point that already can't land.
-  const { shot } = resolvePoint(screenshots, screen.getAllDisplays(), action);
-  return pointPrompt(action.label, shot.label);
+async function approve(prompt: { message: string; detail?: string }) {
+  const result = await dialog.showMessageBox(workspace, {
+    type: "question",
+    title: "OpenMuse wants to take an action",
+    message: prompt.message,
+    detail: prompt.detail,
+    buttons: ["Cancel", "Allow once"],
+    defaultId: 0,
+    cancelId: 0,
+  });
+  return result.response === 1;
 }
 async function approvedAction(input: unknown) {
   const action = z
@@ -237,47 +239,31 @@ async function approvedAction(input: unknown) {
       }),
     ])
     .parse(input);
-  const prompt: { message: string; detail?: string } =
-    action.type === "open-app"
-      ? { message: `Open application ${action.bundleId}` }
-      : pointApproval(action);
-  const result = await dialog.showMessageBox(workspace, {
-    type: "question",
-    title: "OpenMuse wants to take an action",
-    message: prompt.message,
-    detail: prompt.detail,
-    buttons: ["Cancel", "Allow once"],
-    defaultId: 0,
-    cancelId: 0,
-  });
-  if (result.response !== 1) throw new Error("User declined action");
   if (action.type === "open-app") {
+    if (!(await approve({ message: `Open application ${action.bundleId}` })))
+      throw new Error("User declined action");
     await runHelper(
       () => exec(helper, ["--open-app", action.bundleId], helperTimeout),
       "Application opened",
     );
     return;
   }
-  // Resolve again: the display can change, or the screenshot expire, while the dialog is open.
-  const { point } = resolvePoint(screenshots, screen.getAllDisplays(), action);
-  // Our own windows would cover the ring and the target it points at.
-  const hidden = openMuseWindows().filter(
-    (win) => win.isVisible() && coversPoint(win.getBounds(), point),
-  );
-  hidden.forEach((win) => win.hide());
-  try {
-    await runHelper(
-      () =>
-        exec(
-          helper,
-          ["--point", String(point.x), String(point.y)],
-          helperTimeout,
-        ),
-      "Point displayed",
-    );
-  } finally {
-    hidden.forEach((win) => win.showInactive());
-  }
+  await performPointAction(action.label, {
+    resolve: () => resolvePoint(screenshots, screen.getAllDisplays(), action),
+    confirm: approve,
+    windows: openMuseWindows,
+    showPointer: async (point) => {
+      await runHelper(
+        () =>
+          exec(
+            helper,
+            ["--point", String(point.x), String(point.y)],
+            helperTimeout,
+          ),
+        "Point displayed",
+      );
+    },
+  });
 }
 
 async function permissions(): Promise<Permissions> {
