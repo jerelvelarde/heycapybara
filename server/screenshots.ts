@@ -2,6 +2,8 @@ import { randomBytes } from "node:crypto";
 
 export type Rect = { x: number; y: number; width: number; height: number };
 export type Size = { width: number; height: number };
+// `bounds` are display points at capture time; `width`/`height` are the PNG's
+// pixels.
 export type Screenshot = Readonly<{
   id: string;
   displayId: string;
@@ -16,16 +18,16 @@ export type Screenshot = Readonly<{
 // PromptImageMode::HIGH_DETAIL). A resized image no longer matches the pixel
 // size we give the model, so every capture must fit them. Checked against
 // codex 0.156.1; recheck on upgrade. Codex core's `image_preparation` picks
-// HIGH_DETAIL by default, but its unified-image-budget feature instead uses
+// HIGH_DETAIL by default, but its unified_image_budget feature instead uses
 // the larger ORIGINAL_DETAIL limits, which these captures also fit.
 const MAX_DIMENSION = 2048;
 const MAX_PATCHES = 2500;
 const PATCH_SIZE = 32;
 
-// Keeps headroom under the 2048 px limit above and stays legible.
+// Keeps headroom below the 2048 px limit above.
 const CAPTURE_MAX_DIMENSION = 1920;
 
-// Captures older than this are refused as stale; ask for a fresh one instead.
+// Captures older than this are refused as stale.
 const MAX_AGE_MS = 10 * 60 * 1000;
 
 export function fitsPromptBudget({ width, height }: Size) {
@@ -50,7 +52,8 @@ export function captureSize(display: Size): Size {
     CAPTURE_MAX_DIMENSION / Math.max(display.width, display.height),
   );
   // Shrinks 2% at a time until the image fits the prompt budget, landing
-  // slightly under the largest size Codex would accept.
+  // slightly under the largest size within the 1920 px cap that Codex passes
+  // through unchanged.
   for (;;) {
     const size = {
       width: Math.max(1, Math.floor(display.width * scale)),
@@ -89,8 +92,8 @@ export type Thumbnail = {
 };
 
 // Electron can return a thumbnail larger than requested, for example at 2x.
-// Resizing to the target keeps one image pixel per display point (or within
-// the 1920 px cap) and keeps the image inside Codex's budget.
+// Resizing to the target keeps the image at captureSize's target: one pixel
+// per point when that fits the budget, smaller otherwise.
 export function fitThumbnail(thumbnail: Thumbnail, target: Size) {
   let png = thumbnail.toPNG();
   if (exceeds(pngSize(png), target)) png = thumbnail.resize(target).toPNG();
@@ -112,7 +115,26 @@ export class ScreenshotRegistry {
       throw new Error("The screenshot registry must keep at least one capture");
   }
   add(input: Omit<Screenshot, "id" | "capturedAt">): Screenshot {
+    const { width, height, bounds } = input;
+    if (!(
+      Number.isInteger(width) &&
+      width > 0 &&
+      Number.isInteger(height) &&
+      height > 0 &&
+      fitsPromptBudget({ width, height }) &&
+      Number.isFinite(bounds.x) &&
+      Number.isFinite(bounds.y) &&
+      Number.isFinite(bounds.width) &&
+      Number.isFinite(bounds.height) &&
+      bounds.width > 0 &&
+      bounds.height > 0
+    ))
+      throw new Error(
+        "A screen capture needs whole-pixel positive dimensions within the model's image budget",
+      );
     let id: string;
+    // Must match server/point-schema.ts screenshotIdSchema (shot_ followed by
+    // 8 lowercase hex characters).
     do id = "shot_" + randomBytes(4).toString("hex");
     while (this.entries.has(id));
     const shot: Screenshot = Object.freeze({
@@ -147,10 +169,16 @@ export function screenPoint(
   current: Rect | undefined,
   now = Date.now(),
 ) {
-  if (!isFresh(shot, now))
+  if (!isFresh(shot, now)) {
+    const age = now - shot.capturedAt;
+    if (age < 0)
+      throw new Error(
+        "That screenshot's capture time is in the future, so the clock changed since it was taken. Ask the user to attach a new one.",
+      );
     throw new Error(
-      "That screenshot is more than 10 minutes old, or the clock changed since it was taken. Ask the user to attach a new one.",
+      `That screenshot is more than ${MAX_AGE_MS / 60000} minutes old. Ask the user to attach a new one.`,
     );
+  }
   if (!current)
     throw new Error(
       `${shot.label} is no longer connected. Ask the user to attach a new screenshot.`,
@@ -194,7 +222,7 @@ export function resolvePoint(
   const shot = lookup.get(request.screenshotId);
   if (!shot)
     throw new Error(
-      "That screenshot is no longer available. Ask the user to attach a new one.",
+      `No screenshot ${request.screenshotId} is available; it may have been replaced by newer captures or the app restarted. Check the id, or ask the user to attach a new screenshot.`,
     );
   const display = displays.find(
     (candidate) => String(candidate.id) === shot.displayId,

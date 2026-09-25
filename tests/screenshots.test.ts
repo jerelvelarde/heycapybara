@@ -1,5 +1,8 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import {
   ScreenshotRegistry,
   captureSize,
@@ -13,7 +16,9 @@ import {
   sameBounds,
   screenPoint,
   unreferencedImageNote,
+  type Rect,
   type Screenshot,
+  type ScreenshotLookup,
   type Size,
   type Thumbnail,
 } from "../server/screenshots";
@@ -47,7 +52,7 @@ function fakeThumbnail(initial: Size, resizeResult?: Size) {
   return { thumbnail, resizeCalls };
 }
 
-test("the prompt budget matches Codex's high-detail limits", () => {
+test("enforces the image limits copied from Codex 0.156.1", () => {
   assert.equal(fitsPromptBudget({ width: 1920, height: 1200 }), true);
   assert.equal(fitsPromptBudget({ width: 1600, height: 1600 }), true);
   assert.equal(fitsPromptBudget({ width: 1601, height: 1600 }), false);
@@ -56,7 +61,7 @@ test("the prompt budget matches Codex's high-detail limits", () => {
   assert.equal(fitsPromptBudget({ width: 100, height: 2049 }), false);
 });
 
-test("captures keep the display's shape and pass through Codex unchanged", () => {
+test("captures keep the display's shape within the copied Codex limits", () => {
   assert.deepEqual(captureSize({ width: 1512, height: 982 }), {
     width: 1512,
     height: 982,
@@ -71,7 +76,6 @@ test("captures keep the display's shape and pass through Codex unchanged", () =>
   });
   for (const source of [
     { width: 3440, height: 1440 },
-    { width: 2048, height: 1536 },
     { width: 6016, height: 3384 },
     { width: 800, height: 600 },
   ]) {
@@ -87,6 +91,17 @@ test("captures keep the display's shape and pass through Codex unchanged", () =>
     () => captureSize({ width: Number.POSITIVE_INFINITY, height: 900 }),
     /display size/,
   );
+});
+
+test("captureSize is pinned for a 2048×1536 display", () => {
+  // Locks the exact shrink-loop result so a change to the budget or the
+  // loop's step size is caught here instead of surfacing as a subtly
+  // mis-sized capture. Recompute this if either constant changes on
+  // purpose.
+  assert.deepEqual(captureSize({ width: 2048, height: 1536 }), {
+    width: 1807,
+    height: 1355,
+  });
 });
 
 test("captureSize's error names the invalid size", () => {
@@ -169,6 +184,17 @@ test("fitThumbnail throws when the resized image is still too large for the mode
   );
 });
 
+test("fitThumbnail reports the resized image's measured size, not the requested target", () => {
+  const { thumbnail, resizeCalls } = fakeThumbnail(
+    { width: 3024, height: 1964 },
+    { width: 1511, height: 982 },
+  );
+  const result = fitThumbnail(thumbnail, { width: 1512, height: 982 });
+  assert.equal(resizeCalls.length, 1);
+  assert.deepEqual(resizeCalls[0], { width: 1512, height: 982 });
+  assert.deepEqual(result.size, { width: 1511, height: 982 });
+});
+
 test("the registry issues random ids and keeps only recent captures", () => {
   const registry = new ScreenshotRegistry(2, () => 42);
   const bounds = { ...display };
@@ -194,7 +220,7 @@ test("the registry issues random ids and keeps only recent captures", () => {
   registry.add(input);
   assert.equal(registry.get(first.id), undefined);
   assert.ok(registry.get(second.id));
-  assert.equal(registry.get("shot_00000000"), undefined);
+  assert.equal(registry.get("shot_missing"), undefined);
 });
 
 test("the registry keeps the documented default of 16 captures", () => {
@@ -214,6 +240,31 @@ test("the registry keeps the documented default of 16 captures", () => {
 test("the registry requires a positive integer limit", () => {
   assert.throws(() => new ScreenshotRegistry(0), /at least one capture/);
   assert.throws(() => new ScreenshotRegistry(1.5), /at least one capture/);
+});
+
+test("the registry validates screenshot dimensions before storing them", () => {
+  const registry = new ScreenshotRegistry(16, () => 1_000_000);
+  const validInput = {
+    displayId: "1",
+    label: "Built-in Retina Display",
+    bounds: { ...display },
+    width: 1386,
+    height: 900,
+  };
+  // assert.throws tests a RegExp against String(error) ("Error: <message>"),
+  // so the pattern is anchored only at the end.
+  const invalidReason =
+    /A screen capture needs whole-pixel positive dimensions within the model's image budget$/;
+  for (const bad of [
+    { ...validInput, width: 1.5 },
+    { ...validInput, width: 0 },
+    { ...validInput, width: -5 },
+    { ...validInput, width: Number.NaN },
+    { ...validInput, width: 99999, height: 99999 },
+    { ...validInput, bounds: { ...validInput.bounds, width: 0 } },
+  ])
+    assert.throws(() => registry.add(bad), invalidReason, JSON.stringify(bad));
+  assert.ok(registry.add(validInput));
 });
 
 test("sameBounds compares all four fields", () => {
@@ -270,7 +321,7 @@ test("pointing refuses stale, moved, missing or out-of-range screenshots", () =>
   ])
     assert.throws(
       () => screenPoint(shot, { x: 1, y: 1 }, moved, now),
-      /changed/,
+      /changed position or resolution/,
     );
   for (const point of [
     { x: 1386, y: 1 },
@@ -317,10 +368,10 @@ test("resolvePoint looks up the screenshot and its live display before pointing"
       resolvePoint(
         registry,
         [{ id: 7, bounds }],
-        { ...request, screenshotId: "shot_ffffffff" },
+        { ...request, screenshotId: "shot_missing" },
         1_000_000,
       ),
-    /no longer available/,
+    /No screenshot shot_missing is available; it may have been replaced by newer captures or the app restarted\. Check the id, or ask the user to attach a new screenshot\.$/,
   );
   const resolved = resolvePoint(
     registry,
@@ -345,8 +396,103 @@ test("resolvePoint looks up the screenshot and its live display before pointing"
         request,
         1_000_000,
       ),
-    /changed/,
+    /changed position or resolution/,
   );
+});
+
+// One state table drives both resolvePoint and screenPoint so every cause of
+// refusal keeps a distinct, exact message: a regression here should fail on
+// the specific cause, not just on "some error was thrown". Each `expect`
+// regex is anchored only at `$`: assert.throws matches against
+// String(error), which Node prepends with "Error: ".
+test("resolvePoint and screenPoint name each refusal cause precisely", () => {
+  const now = shot.capturedAt;
+  const lookup: ScreenshotLookup = {
+    get: (id) => (id === shot.id ? shot : undefined),
+  };
+  const basePoint = { x: 692, y: 449 };
+
+  const states: {
+    name: string;
+    now?: number;
+    current?: Rect;
+    point?: { x: number; y: number };
+    screenshotId?: string;
+    resolvePointOnly?: boolean;
+    expect: RegExp | "success";
+  }[] = [
+    { name: "fresh", expect: "success" },
+    {
+      name: "stale by age",
+      now: now + 10 * 60 * 1000 + 1,
+      expect:
+        /That screenshot is more than 10 minutes old\. Ask the user to attach a new one\.$/,
+    },
+    {
+      name: "negative age",
+      now: now - 1,
+      expect:
+        /That screenshot's capture time is in the future, so the clock changed since it was taken\. Ask the user to attach a new one\.$/,
+    },
+    {
+      name: "unknown id",
+      screenshotId: "shot_missing",
+      resolvePointOnly: true,
+      expect:
+        /No screenshot shot_missing is available; it may have been replaced by newer captures or the app restarted\. Check the id, or ask the user to attach a new screenshot\.$/,
+    },
+    {
+      name: "display gone",
+      current: undefined,
+      expect:
+        /Built-in Retina Display is no longer connected\. Ask the user to attach a new screenshot\.$/,
+    },
+    {
+      name: "display moved on x",
+      current: { ...display, x: display.x + 100 },
+      expect: /changed position or resolution/,
+    },
+    {
+      name: "display moved on y",
+      current: { ...display, y: display.y - 50 },
+      expect: /changed position or resolution/,
+    },
+    {
+      name: "resized height",
+      current: { ...display, height: display.height + 1 },
+      expect: /changed position or resolution/,
+    },
+    {
+      name: "point outside",
+      point: { x: -1, y: 449 },
+      expect: /\(-1, 449\) is outside the 1386×900 screenshot\.$/,
+    },
+  ];
+
+  for (const state of states) {
+    const current = "current" in state ? state.current : display;
+    const point = state.point ?? basePoint;
+    const at = state.now ?? now;
+
+    if (!state.resolvePointOnly) {
+      const run = () => screenPoint(shot, point, current, at);
+      if (state.expect === "success")
+        assert.equal(typeof run().x, "number", state.name);
+      else assert.throws(run, state.expect, state.name);
+    }
+
+    const displays = current ? [{ id: 1, bounds: current }] : [];
+    const run = () =>
+      resolvePoint(
+        lookup,
+        displays,
+        { screenshotId: state.screenshotId ?? shot.id, ...point },
+        at,
+      );
+    if (state.expect === "success")
+      assert.equal(typeof run().point.x, "number", state.name);
+    else assert.throws(run, state.expect, state.name);
+  }
 });
 
 test("the model is told which image is which screenshot, and its pixel size", () => {
@@ -358,5 +504,22 @@ test("the model is told which image is which screenshot, and its pixel size", ()
   assert.match(
     unreferencedImageNote(3),
     /^Image 3 in this message has no screen reference/,
+  );
+});
+
+test("the pinned Codex SDK version matches what the image limits were checked against", async () => {
+  const packageJsonPath = join(
+    dirname(fileURLToPath(import.meta.url)),
+    "..",
+    "node_modules",
+    "@openai",
+    "codex-sdk",
+    "package.json",
+  );
+  const pkg = JSON.parse(await readFile(packageJsonPath, "utf8"));
+  assert.equal(
+    pkg.version,
+    "0.156.1",
+    "Codex SDK changed: recheck the image limits in server/screenshots.ts",
   );
 });
