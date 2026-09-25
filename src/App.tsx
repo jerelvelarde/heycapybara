@@ -30,12 +30,13 @@ import {
 import { Assistant, type AgentRequest } from "./Assistant";
 import { Buddy } from "./Buddy";
 import { CompanionChat } from "./CompanionChat";
-import { Notch } from "./Notch";
+import { Onboarding } from "./Onboarding";
 import { Sprite } from "./Sprite";
 import { manualDraft, skillPrompt } from "./skill";
 import type { Recording, Skill, Snapshot } from "./types";
 const isBuddy = new URLSearchParams(location.search).has("buddy");
-const isNotch = new URLSearchParams(location.search).get("notch") === "1";
+const isOnboarding =
+  new URLSearchParams(location.search).get("onboarding") === "1";
 const isCompanionChat =
   new URLSearchParams(location.search).get("companionChat") === "1";
 const time = (date: string) =>
@@ -72,7 +73,7 @@ export function App() {
     );
   if (!data)
     return (
-      <div className={isNotch ? "loading notch-loading" : "loading"}>
+      <div className="loading">
         <Sprite />
         <p>{error || "Waking up OpenMuse…"}</p>
         {error && <button onClick={() => void refresh()}>Try again</button>}
@@ -84,7 +85,7 @@ export function App() {
         <Sprite companion={data.settings.companion} small />
       </Buddy>
     );
-  if (isNotch) return <Notch data={data} refresh={refresh} />;
+  if (isOnboarding) return <Onboarding data={data} />;
   if (isCompanionChat)
     return (
       <CopilotKitProvider
@@ -168,6 +169,11 @@ function Workspace({
     setTab(value);
     setRecordingId("");
     setEditor(null);
+  }
+  function openNewRecording() {
+    // The dialog shows the workspace error, so drop one left over from an earlier action.
+    setError("");
+    setNewRecording(true);
   }
   function generate(r: Recording) {
     void perform(async () => {
@@ -446,7 +452,7 @@ function Workspace({
                 {tab !== "Overview" && (
                   <button
                     className="button primary"
-                    onClick={() => setNewRecording(true)}
+                    onClick={openNewRecording}
                     disabled={!!active}
                   >
                     <Plus size={16} /> New recording
@@ -490,7 +496,7 @@ function Workspace({
                                 const r = await window.kite!.stop();
                                 setRecordingId(r.id);
                               })
-                            : setNewRecording(true)
+                            : openNewRecording()
                         }
                       >
                         {active ? (
@@ -698,7 +704,7 @@ function Workspace({
                       icon={<BookOpen size={24} />}
                       title="Your know-how belongs here."
                       body="Record something you do often. Review it, give it a name, and teach OpenMuse your way."
-                      action={() => setNewRecording(true)}
+                      action={openNewRecording}
                     />
                   )}
                 </>
@@ -795,7 +801,7 @@ function Workspace({
                       icon={<Radio size={24} />}
                       title="Your first workflow is a good place to start."
                       body="Try a small routine: organize a file, prepare a report, or move something between apps."
-                      action={() => setNewRecording(true)}
+                      action={openNewRecording}
                     />
                   )}
                 </>
@@ -934,53 +940,7 @@ function Workspace({
               </div>
               <div className="settings-card">
                 <h2>Desktop companion</h2>
-                <p>Choose a little companion for your workspace and desktop.</p>
-                <div
-                  className="placement-options"
-                  aria-label="Companion placement"
-                >
-                  {(["notch", "floating"] as const).map((placement) => (
-                    <button
-                      key={placement}
-                      className="placement-option"
-                      aria-pressed={data.settings.placement === placement}
-                      disabled={working}
-                      onClick={() =>
-                        void perform(() => window.kite!.setPlacement(placement))
-                      }
-                    >
-                      {placement === "notch" ? (
-                        <Monitor size={17} />
-                      ) : (
-                        <MousePointer2 size={17} />
-                      )}
-                      <span>
-                        <strong>
-                          {placement === "notch"
-                            ? "By the notch"
-                            : "Floating companion"}
-                        </strong>
-                        <small>
-                          {placement === "notch"
-                            ? "Opens from the top of your screen"
-                            : "Drag your buddy anywhere on screen"}
-                        </small>
-                      </span>
-                      {data.settings.placement === placement && (
-                        <Check size={15} />
-                      )}
-                    </button>
-                  ))}
-                </div>
-                <button
-                  className="text-button placement-replay"
-                  disabled={working}
-                  onClick={() =>
-                    void perform(() => window.kite!.replayOnboarding())
-                  }
-                >
-                  Replay setup tour <ArrowRight size={14} />
-                </button>
+                <p>Choose a little companion for your desktop.</p>
                 <div
                   className="companion-options"
                   aria-label="Desktop companion"
@@ -1007,6 +967,20 @@ function Workspace({
                     </button>
                   ))}
                 </div>
+                <button
+                  className="text-button setup-replay"
+                  disabled={working || !!active}
+                  title={
+                    active
+                      ? "Stop the recording before replaying setup."
+                      : undefined
+                  }
+                  onClick={() =>
+                    void perform(() => window.kite!.replayOnboarding())
+                  }
+                >
+                  Replay setup <ArrowRight size={14} />
+                </button>
               </div>
               <div className="settings-card">
                 <h2>macOS permissions</h2>
@@ -1030,6 +1004,20 @@ function Workspace({
                           ? "Read app context and observe clicks and shortcuts during recordings."
                           : "Attach a primary-screen screenshot to a message when you choose."}
                       </p>
+                      {!data.permissions[kind] && (
+                        <button
+                          className="text-button"
+                          aria-label={`Open System Settings for ${kind === "accessibility" ? "Accessibility" : "Screen Recording"}`}
+                          disabled={working}
+                          onClick={() =>
+                            void perform(() =>
+                              window.kite!.openPermissionSettings(kind),
+                            )
+                          }
+                        >
+                          Open System Settings
+                        </button>
+                      )}
                     </div>
                     <button
                       className="button secondary"
@@ -1272,15 +1260,28 @@ function Workspace({
               <br />
               <ShieldCheck size={14} /> Ordinary typing is not captured
             </div>
+            {!data.settings.onboardingComplete && (
+              <p className="inline-error">
+                Finish setup before starting a recording.
+              </p>
+            )}
             {!data.permissions.accessibility && (
               <p className="inline-error">
                 Enable Accessibility in Settings before recording.
               </p>
             )}
+            {error && (
+              <p className="inline-error" role="alert">
+                {error}
+              </p>
+            )}
             <button
               className="button primary full"
               disabled={
-                working || !title.trim() || !data.permissions.accessibility
+                working ||
+                !title.trim() ||
+                !data.permissions.accessibility ||
+                !data.settings.onboardingComplete
               }
             >
               {working ? (

@@ -144,9 +144,9 @@ export async function startRuntime(
   mcpUrl = `http://127.0.0.1:${address.port}/mcp`;
   const settings = {
     backend: "Codex SDK",
+    // main.ts overwrites companion and onboardingComplete from preferences before any window reads them.
     companion: "capybara" as const,
-    placement: "floating" as "notch" | "floating",
-    onboardingComplete: true,
+    onboardingComplete: false,
     workspace,
     ...config,
     deliveryStatus: config.intelligenceConfigured
