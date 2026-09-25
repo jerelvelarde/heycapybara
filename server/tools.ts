@@ -123,7 +123,10 @@ export function createToolHandler(options: {
             .trim()
             .min(1)
             .max(60)
-            .regex(/^[^\p{C}]+$/u, "Use a short single-line label")
+            .refine(
+              (label) => !/(?![\u200C\u200D])[\p{C}\p{Zl}\p{Zp}]/u.test(label),
+              "Use a short single-line label",
+            )
             .describe('What you are pointing at, such as "Export button"'),
         },
       },

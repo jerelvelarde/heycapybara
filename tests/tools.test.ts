@@ -102,10 +102,32 @@ test("MCP exposes real skill tools and validates native action arguments", async
         screenshotId: "shot_1a2b3c4d",
         x: 10,
         y: 20,
-        label: "Save‮button",
+        label: "Save\u202Ebutton",
       },
     });
     assert.equal(bidiOverrideLabel.result.isError, true);
+    assert.equal(actions.length, 2);
+    const lineSeparatorLabel = await request("tools/call", {
+      name: "point_on_screen",
+      arguments: {
+        screenshotId: "shot_1a2b3c4d",
+        x: 10,
+        y: 20,
+        label: "Save\u2028Approved by OpenMuse",
+      },
+    });
+    assert.equal(lineSeparatorLabel.result.isError, true);
+    assert.equal(actions.length, 2);
+    const paragraphSeparatorLabel = await request("tools/call", {
+      name: "point_on_screen",
+      arguments: {
+        screenshotId: "shot_1a2b3c4d",
+        x: 10,
+        y: 20,
+        label: "Save\u2029Approved",
+      },
+    });
+    assert.equal(paragraphSeparatorLabel.result.isError, true);
     assert.equal(actions.length, 2);
     const unicodeLabel = await request("tools/call", {
       name: "point_on_screen",
@@ -124,6 +146,30 @@ test("MCP exposes real skill tools and validates native action arguments", async
       y: 20,
       label: "Exportér ✓ button",
     });
+    const zwjLabel = await request("tools/call", {
+      name: "point_on_screen",
+      arguments: {
+        screenshotId: "shot_1a2b3c4d",
+        x: 10,
+        y: 20,
+        label: "Save 👩‍💻 button",
+      },
+    });
+    assert.ok(!zwjLabel.result.isError);
+    assert.deepEqual(actions.at(-1), {
+      type: "point",
+      screenshotId: "shot_1a2b3c4d",
+      x: 10,
+      y: 20,
+      label: "Save 👩‍💻 button",
+    });
+    const pointOnScreenTool = list.result.tools.find(
+      (tool: { name: string }) => tool.name === "point_on_screen",
+    );
+    assert.ok(pointOnScreenTool);
+    assert.ok(
+      !JSON.stringify(pointOnScreenTool.inputSchema).includes('"pattern":"^[^'),
+    );
   } finally {
     await rm(root, { recursive: true, force: true });
   }
