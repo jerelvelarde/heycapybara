@@ -34,9 +34,10 @@ export async function performPointAction(
   // Resolve again: while the dialog is open, the display can change, or the
   // screenshot can expire or be evicted by newer captures.
   const { shot, point } = deps.resolve();
-  // The user approved a pointer on the capture they were shown. An id that
-  // now names another capture would measure the point against an image
-  // they never saw.
+  // The user approved a pointer on the capture they attached. Replacing it
+  // needs both an eviction of the old entry and a freshly issued random id
+  // for the new one, but if it ever happened an id that then named another
+  // capture would measure the point against an image they never attached.
   if (shot !== approved.shot)
     throw new Error(
       "That screenshot was replaced while the prompt was open. Ask the user to attach a new one.",
@@ -60,5 +61,15 @@ export async function performPointAction(
     }
     throw error;
   }
-  restore();
+  // The pointer already showed, so a restore failure here must not fail the
+  // action: the model would likely retry, prompting the user again for a
+  // pointer they already saw. window-occlusion.ts's undoFade keeps the fade
+  // record on a failed restore, so a later conceal()/restore() cycle still
+  // retries it.
+  try {
+    restore();
+  } catch {
+    // ignored: the user already saw the pointer, so this must not fail the
+    // action; see the comment above.
+  }
 }

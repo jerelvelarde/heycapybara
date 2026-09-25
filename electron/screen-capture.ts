@@ -68,14 +68,16 @@ export async function captureScreenshot(
   deps: CaptureDeps,
 ): Promise<ScreenshotAttachment> {
   if (!(await deps.screenCaptureAllowed()))
-    throw new Error("Enable Screen Recording permission in Settings.");
+    throw new Error(
+      "Allow Screen Recording for OpenMuse Desktop in System Settings > Privacy & Security > Screen & System Audio Recording, then quit and reopen OpenMuse Desktop.",
+    );
   const display = deps.primaryDisplay();
   const target = captureSize(display.size);
   const restore = deps.conceal();
-  // conceal()'s restore is idempotent (window-occlusion.ts's undoFade
-  // no-ops once it has already run), but this call is meant to run at most
-  // once: the explicit call below, right after the pixels are captured, or
-  // this fallback if something fails before that point.
+  // The CaptureDeps contract doesn't promise conceal()'s returned restore is
+  // safe to call twice, so this runs it at most once regardless of what the
+  // caller plugged in: the explicit call below, right after the pixels are
+  // captured, or this fallback if something fails before that point.
   let restored = false;
   const restoreOnce = () => {
     if (restored) return;
@@ -83,9 +85,10 @@ export async function captureScreenshot(
     restore();
   };
   try {
-    // 200ms gives the compositor several frames of margin to actually drop
-    // the concealed windows before we capture, not just the one frame a
-    // bare wait would guarantee. Do not shorten this to one frame.
+    // 200ms gives the compositor time to actually drop the concealed
+    // windows before we capture. A timer guarantees no frames at all, only
+    // elapsed time, so this is a heuristic margin, not a frame count. Do not
+    // shorten it.
     await deps.wait(200);
     const sources = await withTimeout(
       deps.sources(target),
@@ -111,7 +114,8 @@ export async function captureScreenshot(
         "Screen capture came back empty. If you just granted Screen Recording, quit and reopen OpenMuse Desktop.",
       );
     // A 2x capture needs rebuilding at the target's own pixel size, not a
-    // plain resize (see the `rebuild` call site in main.ts for why).
+    // plain resize; main.ts holds the concrete `rebuild` implementation,
+    // and fitThumbnail below is this file's call site for it.
     const rawPng = source.thumbnail.toPNG();
     const { png, size } = fitThumbnail(
       {
@@ -143,10 +147,14 @@ export async function captureScreenshot(
       dataUrl: "data:image/png;base64," + png.toString("base64"),
     };
   } catch (error) {
-    // Something failed before the explicit restore above ran (or that
-    // restore call is itself what failed). Either way, the original error
-    // is why the capture failed and is what the caller needs to see; a
-    // broken restore on top of that is swallowed rather than replacing it.
+    // Most failures land here after the explicit restore above already ran
+    // and succeeded (no source for the display, an empty thumbnail, a
+    // display change, or a failed register), so restoreOnce() below is then
+    // just a no-op guard. The rarer case is a failure before that restore
+    // ran, or the restore call itself failing; either way, the original
+    // error is why the capture failed and is what the caller needs to see,
+    // so a broken restore on top of that is swallowed rather than replacing
+    // it.
     try {
       restoreOnce();
     } catch {

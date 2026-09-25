@@ -124,7 +124,7 @@ test("a denied permission throws before anything is concealed or captured", asyn
   assert.ok(caught instanceof Error);
   assert.equal(
     caught.message,
-    "Enable Screen Recording permission in Settings.",
+    "Allow Screen Recording for OpenMuse Desktop in System Settings > Privacy & Security > Screen & System Audio Recording, then quit and reopen OpenMuse Desktop.",
   );
   assert.deepEqual(events, []);
 });
@@ -194,7 +194,7 @@ test("when sources rejects and the restore also throws, the capture rejects with
   assert.equal(events.filter((e) => e === "register").length, 0);
 });
 
-test("when a capture would otherwise succeed but the restore throws, the promise rejects with the restore error and register is never called, because restore now runs before register", async () => {
+test("when a capture would otherwise succeed but the restore throws, the promise rejects with the restore error and register is never called, because restore runs before register", async () => {
   const events: string[] = [];
   const deps = makeDeps(events, {
     conceal: () => {
@@ -352,9 +352,10 @@ test("a thumbnail larger than the target is rebuilt at the target size, and the 
     ],
     rebuild: (_png, size) => {
       rebuildCalls.push(size);
-      // Returns a size different from the one requested, so an assertion
-      // that trusted the requested size instead of measuring the rebuilt
-      // PNG would miss a bug that skips the real measurement.
+      // Different from the requested target, so the assertions below must
+      // read the measured size back from the result, not the target, or a
+      // regression that skips remeasuring the rebuilt PNG would go
+      // uncaught.
       return Buffer.from(pngHeader(1511, 982));
     },
     register: (input) => {
@@ -450,9 +451,10 @@ test("a display larger than the capture cap is requested at the scaled-down targ
     },
   });
   const result = await captureScreenshot(deps);
-  // 2560x1440 is small enough that a version which passed display.size
-  // straight to sources() instead of captureSize(display.size) would still
-  // produce a valid, if oversized, capture -- this pins the actual target.
+  // A regression that passed display.size straight to sources() instead of
+  // captureSize(display.size) would still produce a capture, just an
+  // oversized one, so only pinning the exact requested target -- not just
+  // that a capture came back -- catches it.
   assert.deepEqual(requestedTarget, { width: 1920, height: 1080 });
   assert.equal(result.width, 1920);
   assert.equal(result.height, 1080);
@@ -517,10 +519,6 @@ test("withTimeout resolves with the value and clears its timer when the promise 
   const timeoutSpy = mock.method(global, "setTimeout");
   const clearSpy = mock.method(global, "clearTimeout");
   try {
-    // A short timeout paired with an already-resolved promise: if the timer
-    // were not cleared, it would still be harmless here since the process
-    // exits once every test finishes, but a leaked handle would keep this
-    // test process alive past that point instead of exiting promptly.
     const result = await withTimeout(Promise.resolve("value"), 20, "timed out");
     assert.equal(result, "value");
     // Pins the actual clear, not just the absence of a crash: a version

@@ -48,15 +48,22 @@ export function markTransparent(win: ConcealableWindow) {
 // opacity. `ignoredMouse` records whether this fade actually called
 // setIgnoreMouseEvents(true), so undoFade can undo exactly that action
 // later instead of re-deciding from transparentWindows' membership at
-// restore time, which can change while the window is still faded.
+// restore time. That membership could in principle change while a window is
+// still faded -- main.ts would have to call markTransparent() on a window
+// after conceal() had already started fading it, rather than in the
+// factory that creates it, which is where every call site marks a window
+// today -- so this case is hypothetical, but the record makes it safe
+// either way.
 const fades = new WeakMap<
   ConcealableWindow,
   { count: number; opacity: number; ignoredMouse: boolean }
 >();
 
 // Fading a window out instead of hiding it keeps its focus, visibility,
-// stacking and Space. A sheet on the window is a separate window of its own,
-// so this never fades it either: an open folder-picker or export sheet can
+// stacking and Space, and keeps any sheet attached to it open: hiding a
+// window ends its sheet (NativeWindowMac::Hide), which an open approval
+// prompt on it must not do. A sheet is a separate window of its own either
+// way, so fading never touches it: an open folder-picker or export sheet can
 // still show up in a capture or sit over a pointer target.
 //
 // Every window not marked transparent gets setIgnoreMouseEvents toggled true
@@ -77,9 +84,9 @@ function fadeOut(win: ConcealableWindow): void {
     return;
   }
   // Either no record yet, or undoFade left one behind with count 0 after a
-  // failed restore: the window is still stuck at opacity 0 but no longer
-  // ignoring mouse events (see undoFade below), so this is a retry, not a
-  // no-op. Re-fade exactly as a fresh fade would, reusing the record's
+  // failed restore: the window is still stuck at opacity 0, possibly still
+  // ignoring mouse events too (see undoFade below), so this is a retry, not
+  // a no-op. Re-fade exactly as a fresh fade would, reusing the record's
   // opacity when there is one -- it is the window's TRUE original opacity
   // from before it was ever faded, not the stuck 0 that win.getOpacity()
   // would read back right now.
@@ -87,8 +94,8 @@ function fadeOut(win: ConcealableWindow): void {
   // Decided fresh, from transparentWindows' membership at the moment this
   // fade starts, whether this is a brand new fade or a retry. Recorded in
   // the fade entry so undoFade later undoes exactly this decision rather
-  // than re-reading membership that can change (via markTransparent) while
-  // the window is still faded.
+  // than re-reading membership at restore time (see the `fades` comment
+  // above for why that would be hypothetical today, but still safe).
   const ignoredMouse = !transparentWindows.has(win);
   fades.set(win, { count: 1, opacity, ignoredMouse });
   let opacityChanged = false;
@@ -97,19 +104,35 @@ function fadeOut(win: ConcealableWindow): void {
     opacityChanged = true;
     if (ignoredMouse) win.setIgnoreMouseEvents(true);
   } catch (error) {
-    // Either setOpacity(0) or the setIgnoreMouseEvents(true) after it can be
-    // the one that threw. If setOpacity(0) already landed before that
-    // happened, opacityChanged is true, so put the original opacity back
-    // rather than leave the window stuck invisible with the fade entry gone
-    // and nothing on record of the change. A second failure while undoing
-    // is swallowed so it doesn't mask the original error.
-    fades.delete(win);
-    if (opacityChanged) {
+    if (!opacityChanged) {
+      // setOpacity(0) itself is what threw, so nothing on the window
+      // actually changed this time. A retry (existing is set) must keep
+      // carrying its TRUE original opacity forward for the next attempt,
+      // so put that same record back rather than deleting it -- deleting it
+      // here would lose that value for good, leaving a later fadeOut()
+      // read back the window's current, stuck opacity and record that as
+      // "original" instead. A genuinely fresh fade has no such record to
+      // preserve.
+      if (existing) fades.set(win, existing);
+      else fades.delete(win);
+    } else {
+      // setOpacity(0) landed but setIgnoreMouseEvents(true) then threw.
+      // Try to put the opacity back rather than leave the window stuck
+      // invisible. A second failure while undoing is swallowed so it
+      // doesn't mask the original error, but then the window stays at
+      // opacity 0 with mouse events never actually ignored (that's the call
+      // that threw): keep a count-0 record with the TRUE original opacity
+      // so the next cycle retries instead of a fresh fadeOut() reading back
+      // the stuck 0 and recording that as "original".
+      let rolledBack = false;
       try {
         if (!win.isDestroyed()) win.setOpacity(opacity);
+        rolledBack = true;
       } catch {
         // ignored: the error above takes precedence
       }
+      if (rolledBack) fades.delete(win);
+      else fades.set(win, { count: 0, opacity, ignoredMouse: false });
     }
     throw error;
   }
@@ -128,27 +151,24 @@ function undoFade(win: ConcealableWindow) {
       fades.delete(win);
       return;
     }
-    try {
-      win.setOpacity(fade.opacity);
-      // Only delete once the opacity is actually back: if setOpacity threw,
-      // the entry stays with count 0 and this same true original opacity, so
-      // the next conceal()/restore() cycle on this window retries with the
-      // right value instead of a fresh fadeOut() reading back the stuck
-      // opacity and recording that as "original".
-      fades.delete(win);
-    } finally {
-      // Runs whether or not setOpacity above succeeded: a window that
-      // failed to un-fade must still stop ignoring mouse events, or it is
-      // stuck both invisible and click-through instead of just invisible.
-      if (fade.ignoredMouse) {
-        try {
-          win.setIgnoreMouseEvents(false);
-        } catch {
-          // ignored: a setOpacity failure above takes precedence, and this
-          // must not turn a bare setOpacity success into a thrown error.
-        }
-      }
-    }
+    // Restore opacity before touching mouse handling, as two separate steps
+    // rather than a try/finally that always un-ignores afterwards. Either
+    // call throwing leaves the record in place (count is already 0), with
+    // its TRUE original opacity, so the next fadeOut()/undoFade() cycle
+    // retries instead of a fresh fadeOut() reading back a stuck opacity and
+    // recording that as "original":
+    //  - if setOpacity fails, the window must stay exactly as fadeOut left
+    //    it -- invisible, and still ignoring the mouse if fadeOut set that
+    //    -- rather than un-ignore on top of a window stuck invisible, which
+    //    would make it invisible AND clickable, worse than invisible and
+    //    click-through;
+    //  - if opacity comes back but setIgnoreMouseEvents(false) then fails,
+    //    the window is visible again but stuck ignoring clicks; keeping the
+    //    record (ignoredMouse still true) means the next cycle retries the
+    //    un-ignore instead of there being no record left to catch it.
+    win.setOpacity(fade.opacity);
+    if (fade.ignoredMouse) win.setIgnoreMouseEvents(false);
+    fades.delete(win);
   };
 }
 

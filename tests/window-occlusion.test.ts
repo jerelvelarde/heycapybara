@@ -308,6 +308,93 @@ test("if setIgnoreMouseEvents throws after setOpacity(0) already landed, the win
   assert.equal(ignoringMouseEvents, false);
 });
 
+test("if the opacity rollback also fails after setIgnoreMouseEvents(true) throws, the window is left at 0 with a retry record instead of none, and a later clean cycle restores the TRUE original", () => {
+  let opacity = 0.9;
+  let ignoring = false;
+  let failSetIgnore = true;
+  let failRollback = true;
+  const win: ConcealableWindow = {
+    isDestroyed: () => false,
+    getOpacity: () => opacity,
+    setOpacity: (next: number) => {
+      // The initial fade to 0 always succeeds, so setIgnoreMouseEvents(true)
+      // is reached; only the rollback call (back to the original) can fail.
+      if (next !== 0 && failRollback) throw new Error("rollback boom");
+      opacity = next;
+    },
+    setIgnoreMouseEvents: (ignore: boolean) => {
+      if (ignore && failSetIgnore) throw new Error("setIgnoreMouseEvents boom");
+      ignoring = ignore;
+    },
+  };
+
+  // Both setOpacity(0) and the setIgnoreMouseEvents(true) after it run; the
+  // rollback fadeOut() then attempts also fails, so unlike the old bug, the
+  // record must survive rather than being deleted with the window stuck at
+  // opacity 0 and nothing on record of its true original.
+  assert.throws(() => conceal([win]), /setIgnoreMouseEvents boom/);
+  assert.equal(opacity, 0);
+  assert.equal(ignoring, false);
+
+  // A later, fully working cycle must still land on 0.9, not the stuck 0.
+  failSetIgnore = false;
+  failRollback = false;
+  const restore = conceal([win]);
+  assert.equal(opacity, 0);
+  assert.equal(ignoring, true);
+  restore();
+  assert.equal(opacity, 0.9);
+  assert.equal(ignoring, false);
+});
+
+test("a retry conceal whose own setOpacity(0) also fails puts the stale record back, preserving the TRUE original for a later clean cycle", () => {
+  let opacity = 0.7;
+  let ignoring = false;
+  let failRestoreOpacity = false;
+  let failFadeZero = false;
+  const win: ConcealableWindow = {
+    isDestroyed: () => false,
+    getOpacity: () => opacity,
+    setOpacity: (next: number) => {
+      if (next === 0 && failFadeZero) throw new Error("fade boom");
+      if (next !== 0 && failRestoreOpacity) throw new Error("restore boom");
+      opacity = next;
+    },
+    setIgnoreMouseEvents: (ignore: boolean) => {
+      ignoring = ignore;
+    },
+  };
+
+  // First cycle: the fade succeeds, but the restore's opacity write fails.
+  // Per undoFade, that leaves the window invisible and still click-through
+  // (never un-ignored), with a count-0 record kept for retry.
+  const restore = conceal([win]);
+  assert.equal(opacity, 0);
+  assert.equal(ignoring, true);
+  failRestoreOpacity = true;
+  assert.throws(() => restore(), /restore boom/);
+  assert.equal(opacity, 0);
+  assert.equal(ignoring, true);
+
+  // Retry, but make even this attempt's own setOpacity(0) fail too. The
+  // stale record (holding the TRUE original, 0.7) must be put back exactly
+  // as it was, not deleted, or a later cycle would lose it for good.
+  failFadeZero = true;
+  assert.throws(() => conceal([win]), /fade boom/);
+  assert.equal(opacity, 0);
+  assert.equal(ignoring, true);
+
+  // A fully clean cycle from here must still land on 0.7, not the stuck 0.
+  failFadeZero = false;
+  failRestoreOpacity = false;
+  const restoreAgain = conceal([win]);
+  assert.equal(opacity, 0);
+  assert.equal(ignoring, true);
+  restoreAgain();
+  assert.equal(opacity, 0.7);
+  assert.equal(ignoring, false);
+});
+
 test("if the second window's setIgnoreMouseEvents throws during conceal, both windows end restored and the error propagates", () => {
   const a = fakeConcealable(1);
   let bOpacity = 0.8;
@@ -329,7 +416,7 @@ test("if the second window's setIgnoreMouseEvents throws during conceal, both wi
   assert.equal(bOpacity, 0.8);
 });
 
-test("a failing restore still un-ignores mouse events, and a later successful cycle restores the TRUE original opacity, not the stuck 0", () => {
+test("a failing restore does not un-ignore the mouse -- invisible and click-through beats invisible and clickable -- and a later successful cycle restores the TRUE original opacity, not the stuck 0", () => {
   let opacity = 0.85;
   let ignoring = false;
   let failRestore = true;
@@ -349,22 +436,58 @@ test("a failing restore still un-ignores mouse events, and a later successful cy
   assert.equal(opacity, 0);
   assert.equal(ignoring, true);
 
-  // The opacity restore fails, but the window must not stay click-through
-  // forever because of it: setIgnoreMouseEvents(false) still runs even
-  // though setOpacity threw.
+  // The opacity restore fails, so setIgnoreMouseEvents(false) must never
+  // run: un-ignoring a window that's stuck invisible would leave it invisible
+  // AND clickable, worse than invisible and click-through.
   assert.throws(() => restore(), /restore boom/);
   assert.equal(opacity, 0);
-  assert.equal(ignoring, false);
+  assert.equal(ignoring, true);
 
   // A fresh cycle must still restore to 0.85, the window's true original
-  // opacity from before it was ever faded. The old bug deleted the fade
-  // entry before attempting the restore, so a failure here would have left
-  // fadeOut() reading back the stuck opacity (0) on the next cycle and
-  // recording that as "original" instead.
+  // opacity from before it was ever faded, not the stuck 0 a fadeOut() that
+  // read the window's current opacity back would have recorded instead.
   failRestore = false;
   const restoreAgain = conceal([win]);
   restoreAgain();
   assert.equal(opacity, 0.85);
+  assert.equal(ignoring, false);
+});
+
+test("if setIgnoreMouseEvents(false) fails after the opacity restore already succeeded, the window is visible but stuck ignoring clicks, and a later cycle retries the un-ignore", () => {
+  let opacity = 0.6;
+  let ignoring = false;
+  let failUnignore = false;
+  const win: ConcealableWindow = {
+    isDestroyed: () => false,
+    getOpacity: () => opacity,
+    setOpacity: (next: number) => {
+      opacity = next;
+    },
+    setIgnoreMouseEvents: (ignore: boolean) => {
+      if (!ignore && failUnignore) throw new Error("unignore boom");
+      ignoring = ignore;
+    },
+  };
+
+  const restore = conceal([win]);
+  assert.equal(opacity, 0);
+  assert.equal(ignoring, true);
+
+  failUnignore = true;
+  assert.throws(() => restore(), /unignore boom/);
+  // Opacity already landed -- the window is visible -- but the un-ignore
+  // failed, so it's stuck catching clicks instead of not. The record
+  // survives so a later cycle retries the un-ignore, rather than there being
+  // no record left to catch it.
+  assert.equal(opacity, 0.6);
+  assert.equal(ignoring, true);
+
+  failUnignore = false;
+  const restoreAgain = conceal([win]);
+  assert.equal(opacity, 0);
+  restoreAgain();
+  assert.equal(opacity, 0.6);
+  assert.equal(ignoring, false);
 });
 
 test("conceal() after a failed restore re-fades the window instead of just bumping the stale count", () => {
@@ -385,14 +508,15 @@ test("conceal() after a failed restore re-fades the window instead of just bumpi
 
   const restore = conceal([win]);
   assert.throws(() => restore(), /restore boom/);
-  // The retry state left behind by the failed restore: still invisible, but
-  // no longer ignoring mouse events, so it would catch clicks if left here.
+  // The retry state left behind by the failed restore: still invisible, and
+  // still ignoring the mouse -- click-through, not clickable, while stuck
+  // invisible.
   assert.equal(opacity, 0);
-  assert.equal(ignoring, false);
+  assert.equal(ignoring, true);
 
   // A fresh conceal() on this window must re-apply the fade -- not just
-  // increment a stale count -- so it goes back to ignoring mouse events
-  // (it's unmarked) instead of staying invisible and clickable.
+  // increment a stale count -- so a later successful restore can still bring
+  // it all the way back.
   const restoreAgain = conceal([win]);
   assert.equal(opacity, 0);
   assert.equal(ignoring, true);
@@ -411,11 +535,13 @@ test("marking a window transparent while it is still faded does not stop restore
   assert.equal(win.opacity(), 0);
   assert.equal(win.isIgnoringMouseEvents(), true);
 
-  // Marked only now, while still concealed -- for example, main.ts calling
-  // markTransparent() on a window it just created, after conceal() had
-  // already started fading it. Restore must undo what fadeOut actually did
-  // (it did call setIgnoreMouseEvents(true)), not re-check
-  // transparentWindows' membership as of restore time.
+  // Marked only now, while still concealed. This is hypothetical today --
+  // every call site marks a window in the factory that creates it, before
+  // conceal() ever sees it -- but if main.ts ever did call markTransparent()
+  // on a window after conceal() had already started fading it, restore must
+  // still undo what fadeOut actually did (it did call
+  // setIgnoreMouseEvents(true)), not re-check transparentWindows'
+  // membership as of restore time.
   markTransparent(win);
 
   restore();

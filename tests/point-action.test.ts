@@ -476,7 +476,12 @@ test("a restore that throws after a showPointer failure keeps the showPointer er
   assert.deepEqual(events, ["conceal:covering"]);
 });
 
-test("a restore that throws after the pointer showed propagates the restore error", async () => {
+// The user already saw the pointer once showPointer succeeds, so a restore
+// failure after that must not fail the action: retrying would show it again
+// for something already seen, and prompt the user again for nothing. The
+// window's fade record survives the failed restore (window-occlusion.ts's
+// undoFade), so a later conceal()/restore() cycle still retries it.
+test("a restore that throws after the pointer showed is swallowed, not propagated", async () => {
   const events: string[] = [];
   const restoreFailure = new Error("restore failed");
   const deps: PointActionDeps = {
@@ -496,10 +501,7 @@ test("a restore that throws after the pointer showed propagates the restore erro
       events.push("showPointer");
     },
   };
-  await assert.rejects(
-    performPointAction("Save button", deps),
-    (error: unknown) => error === restoreFailure,
-  );
+  await performPointAction("Save button", deps);
   assert.deepEqual(events, ["conceal:covering", "showPointer"]);
 });
 
