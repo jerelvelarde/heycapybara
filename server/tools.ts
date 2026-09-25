@@ -117,10 +117,10 @@ export function createToolHandler(options: {
           "Show a pointer on something visible in a screenshot the user attached, after native approval. Pass that screenshot's id and x, y in its pixels (origin at the top-left). Does not click.",
         inputSchema: {
           screenshotId: screenshotIdSchema,
-          x: z.number().finite(),
-          y: z.number().finite(),
+          x: z.number(),
+          y: z.number(),
           label: pointLabelSchema.describe(
-            'What you are pointing at, such as "Export button"',
+            'What you are pointing at, such as "Export button". The user sees it in the approval dialog: one line of visible text, up to 60 characters.',
           ),
         },
       },
