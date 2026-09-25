@@ -4,6 +4,7 @@ import {
   ScreenshotRegistry,
   captureSize,
   describeScreenshot,
+  exceeds,
   fitsPromptBudget,
   pngSize,
   screenPoint,
@@ -71,6 +72,29 @@ test("captures keep the display's shape and pass through Codex unchanged", () =>
   assert.throws(
     () => captureSize({ width: Number.POSITIVE_INFINITY, height: 900 }),
     /display size/,
+  );
+});
+
+test("a capture larger than its target is detected in either dimension", () => {
+  assert.equal(
+    exceeds({ width: 1512, height: 982 }, { width: 1512, height: 982 }),
+    false,
+  );
+  assert.equal(
+    exceeds({ width: 3024, height: 1964 }, { width: 1512, height: 982 }),
+    true,
+  );
+  assert.equal(
+    exceeds({ width: 1512, height: 983 }, { width: 1512, height: 982 }),
+    true,
+  );
+  assert.equal(
+    exceeds({ width: 1513, height: 900 }, { width: 1512, height: 982 }),
+    true,
+  );
+  assert.equal(
+    exceeds({ width: 1000, height: 600 }, { width: 1512, height: 982 }),
+    false,
   );
 });
 

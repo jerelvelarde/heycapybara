@@ -52,6 +52,10 @@ export function captureSize(display: Size): Size {
   }
 }
 
+export function exceeds(size: Size, limit: Size) {
+  return size.width > limit.width || size.height > limit.height;
+}
+
 const PNG_SIGNATURE = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a];
 const IHDR = [0x49, 0x48, 0x44, 0x52];
 

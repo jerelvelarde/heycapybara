@@ -55,6 +55,7 @@ import { startRuntime } from "../server/runtime";
 import {
   ScreenshotRegistry,
   captureSize,
+  exceeds,
   fitsPromptBudget,
   pngSize,
   screenPoint,
@@ -773,12 +774,13 @@ app
         if (!source || source.thumbnail.isEmpty())
           throw new Error("Screen capture unavailable");
         let png = source.thumbnail.toPNG();
-        if (!fitsPromptBudget(pngSize(png)))
+        // A 2x thumbnail would send more pixels than the display has points.
+        if (exceeds(pngSize(png), target))
           png = source.thumbnail.resize(target).toPNG();
         const size = pngSize(png);
         if (!fitsPromptBudget(size))
           throw new Error(
-            "Screen capture is too large to send without resizing",
+            "Screen capture is still too large for the model after resizing",
           );
         const shot = screenshots.add({
           displayId: String(display.id),
