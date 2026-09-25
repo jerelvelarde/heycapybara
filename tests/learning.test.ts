@@ -1,11 +1,15 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import type { RunAgentInput } from "@ag-ui/core";
 import {
   LEARNING_UNCHECKED,
+  createLearningReader,
   describeLearning,
   learningError,
+  settleAfter,
 } from "../server/learning";
 import {
+  inspectorSnapshot,
   learningRead,
   memory,
   type SnapshotOverrides,
@@ -259,4 +263,101 @@ test("an unexpected read failure keeps what was known and says what failed", () 
     learningError("not an Error", LEARNING_UNCHECKED, now).message,
     "Couldn't check Intelligence learning: not an Error",
   );
+});
+
+test("a learning read reports each failed source by name, redacted, and never rejects", async () => {
+  const read = await createLearningReader({
+    containerId: "desktop-workflows",
+    inspect: async () => {
+      throw new Error("Intelligence platform error 404");
+    },
+    skills: async () => {
+      throw new Error("Bearer sk-live0000000000000000000000 rejected");
+    },
+    memories: async () => [memory("m1", "Known")],
+  })();
+  assert.equal(read.snapshot, null);
+  assert.equal(
+    read.errors.snapshot,
+    "Couldn't read Intelligence learning status: Intelligence platform error 404",
+  );
+  assert.equal(read.skills, null);
+  assert.match(read.errors.skills ?? "", /^Couldn't read learned skills: /);
+  assert.doesNotMatch(read.errors.skills ?? "", /sk-live/);
+  assert.deepEqual(
+    read.memories?.map((m) => m.id),
+    ["m1"],
+  );
+  assert.equal(read.errors.memories, null);
+});
+
+test("a source that is not connected is named as such", async () => {
+  const read = await createLearningReader({
+    containerId: "desktop-workflows",
+    inspect: async () => inspectorSnapshot({ pendingThreadCount: 2 }),
+    skills: async () => [],
+  })();
+  assert.equal(read.snapshot?.pendingThreadCount, 2);
+  assert.equal(read.memories, null);
+  assert.equal(
+    read.errors.memories,
+    "Couldn't read Intelligence Memory: not connected.",
+  );
+});
+
+const runInput = (threadId: string): RunAgentInput => ({
+  threadId,
+  runId: "r",
+  messages: [],
+  tools: [],
+  context: [],
+  state: {},
+  forwardedProps: {},
+});
+
+test("settleAfter reports the thread once the run ends, however it ends", async () => {
+  const settled: string[] = [];
+  const ok = settleAfter(
+    async function* () {
+      yield { type: "turn.started" as const };
+    },
+    (threadId) => settled.push(threadId),
+  );
+  const events = [];
+  for await (const event of ok(runInput("t1"), new AbortController().signal))
+    events.push(event);
+  assert.equal(events.length, 1);
+  const failing = settleAfter(
+    // eslint-disable-next-line require-yield
+    async function* () {
+      throw new Error("quota");
+    },
+    (threadId) => settled.push(threadId),
+  );
+  await assert.rejects(async () => {
+    for await (const event of failing(
+      runInput("t2"),
+      new AbortController().signal,
+    ))
+      events.push(event);
+  }, /quota/);
+  assert.deepEqual(settled, ["t1", "t2"]);
+});
+
+test("a throwing settle callback never replaces the run's own outcome", async () => {
+  const stream = settleAfter(
+    async function* () {
+      yield { type: "turn.started" as const };
+    },
+    () => {
+      throw new Error("watcher broke");
+    },
+  );
+  const events = [];
+  for await (const event of stream(
+    runInput("t3"),
+    new AbortController().signal,
+  ))
+    events.push(event);
+  assert.equal(events.length, 1);
 });

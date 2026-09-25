@@ -1,5 +1,6 @@
 import type { CopilotKitIntelligence } from "@copilotkit/runtime/v2";
 import type { LearningStatus } from "../src/types";
+import { safeAgentError, type StreamRunner } from "./codex-agent";
 import type { DeliveredSkill } from "./learned-skills";
 import { memoryPreview, type MemoryNote } from "./memory";
 
@@ -207,5 +208,72 @@ export function learningError(
         : `Couldn't check Intelligence learning: ${String(error)}`,
     link: null,
     checkedAt: now.toISOString(),
+  };
+}
+
+/**
+ * One read of both learning paths, in parallel. It never rejects: a source
+ * that fails, or is not connected, comes back null with its reason (key-shaped
+ * text redacted), so one failing path never hides the other.
+ */
+export function createLearningReader(sources: {
+  containerId: string;
+  inspect?: () => Promise<InspectorLearning>;
+  skills?: () => Promise<readonly DeliveredSkill[]>;
+  memories?: () => Promise<readonly MemoryNote[]>;
+}): LearningReader {
+  async function settle<T>(label: string, work?: () => Promise<T>) {
+    if (!work) return { value: null, error: `${label}: not connected.` };
+    try {
+      return { value: await work(), error: null };
+    } catch (error) {
+      return {
+        value: null,
+        error: `${label}: ${safeAgentError(error instanceof Error ? error : new Error(String(error)))}`,
+      };
+    }
+  }
+  return async () => {
+    const [snapshot, skills, memories] = await Promise.all([
+      settle("Couldn't read Intelligence learning status", sources.inspect),
+      settle("Couldn't read learned skills", sources.skills),
+      settle("Couldn't read Intelligence Memory", sources.memories),
+    ]);
+    return {
+      containerId: sources.containerId,
+      snapshot: snapshot.value,
+      skills: skills.value,
+      memories: memories.value,
+      errors: {
+        snapshot: snapshot.error,
+        skills: skills.error,
+        memories: memories.error,
+      },
+    };
+  };
+}
+
+/**
+ * Wraps the agent's stream so `onSettled` hears about every run's end:
+ * success, failure or Stop. A failing callback is logged and never replaces
+ * the run's own outcome.
+ */
+export function settleAfter(
+  stream: StreamRunner,
+  onSettled: (threadId: string) => void,
+): StreamRunner {
+  return async function* (input, signal) {
+    try {
+      yield* stream(input, signal);
+    } finally {
+      try {
+        onSettled(input.threadId);
+      } catch (error) {
+        console.error(
+          "Learning status could not start watching after a run:",
+          error instanceof Error ? error.message : error,
+        );
+      }
+    }
   };
 }
