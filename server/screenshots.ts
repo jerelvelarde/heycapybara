@@ -25,10 +25,13 @@ const MAX_PATCHES = 2500;
 const PATCH_SIZE = 32;
 
 // Keeps headroom below the 2048 px limit above.
-const CAPTURE_MAX_DIMENSION = 1920;
+export const CAPTURE_MAX_DIMENSION = 1920;
 
 // Captures older than this are refused as stale.
-const MAX_AGE_MS = 10 * 60 * 1000;
+export const MAX_AGE_MS = 10 * 60 * 1000;
+
+// The registry keeps this many of the most recent captures by default.
+export const REGISTRY_LIMIT = 16;
 
 export function fitsPromptBudget({ width, height }: Size) {
   return (
@@ -108,7 +111,7 @@ export function fitThumbnail(thumbnail: Thumbnail, target: Size) {
 export class ScreenshotRegistry {
   private entries = new Map<string, Screenshot>();
   constructor(
-    private readonly limit = 16,
+    private readonly limit = REGISTRY_LIMIT,
     private readonly now = () => Date.now(),
   ) {
     if (!Number.isInteger(limit) || limit < 1)

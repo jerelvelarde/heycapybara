@@ -10,6 +10,8 @@
 
 **Spec:** `docs/superpowers/specs/2026-09-24-clicky-learnings-design.md` (section 1)
 
+**As shipped:** the task steps and code blocks below show the plan as written. The shipped code differs where [Changes after review](#changes-after-review) says so.
+
 ## Global Constraints
 
 - Run every command from the worktree root: `/Users/jerel-cpk/Documents/ChatGPT/Kite-Sprite/.worktrees/clicky-learnings`.
@@ -922,7 +924,8 @@ With a key connected in Settings:
 
 1. Attach a screenshot.
 2. Ask: "Point at the Apple menu."
-3. Confirm the approval text reads `Point at "…" on <display name>`, approve it, and confirm the red ring lands on the Apple menu.
+3. Confirm OpenMuse comes to the front with an approval alert titled "OpenMuse wants to take an action". Its message reads `Show a pointer on <display>`, its detail reads `The agent says it points at: <label>`, and Cancel is the default button.
+4. Choose "Allow once" and confirm the red ring lands on the Apple menu.
 
 Without a key or permission, write down exactly which step could not run.
 
@@ -937,22 +940,64 @@ git commit -m "docs: record pointer contract verification"
 
 ## Changes after review
 
-Review found gaps that the code blocks above don't cover. Fixes don't map one commit per fix: a single commit below often bundles several fixes, and a few early fixes are cited by more than one commit. Each bullet cites the commit(s) that made it:
+The shipped code differs from the tasks above in the ways listed here, and the shipped README text differs from Task 4's block. Section 1 of the spec describes the shipped contract in full.
 
-- `0aae2a0`: `screenPoint` maps `Math.floor(point.x) + 0.5` (and the same for y), so a fractional point in the last half-pixel stays inside the display. The same commit makes `captureSize` reject non-finite sizes instead of looping forever.
-- `7dc5b1c`, `0525dc8`, `5eb8d54`: `approvedAction` calls `runHelper(() => exec(helper, args))` from `electron/helper-result.ts`. It reports the helper's own JSON error, or a cause built from the exit code or signal. It never reports Node's `Command failed: <path>` message, and it skips unreadable output lines so they can't mask the exit reason.
-- `f494a92`, `c0288e2`: both `label` schemas refine the trimmed label to reject control, format, private-use and unassigned characters and line or paragraph separators (`/(?![\u200c\u200d])[\p{C}\p{Zl}\p{Zp}]/u`), while allowing ZWNJ and ZWJ. This means the approval prompt always shows one line. A refine is used instead of `.regex()` because the MCP tool schema would otherwise publish a pattern whose meaning changes without the `u` flag.
-- `8b4fdbf`: the screenshot handler resizes whenever the measured PNG `exceeds` the target, for example a 2x thumbnail, and not only when it is over the Codex budget.
-- The shipped README wording differs from the block Task 4 shows above, and the screen-capture-unavailable error was reworded from what that task's code block shows; both are expected, since this section reflects what actually shipped, not the numbered tasks above.
-- Test counts have also grown well past the numbers stated when each task above was written (for example Task 1's "PASS, 7 tests"); trust the suite's current output, not those figures.
+**Capture**
 
-### Code review round 1
+- The screenshot handler fades out every visible OpenMuse window with `conceal()` from `electron/window-occlusion.ts` instead of hiding the four windows: it sets each window's opacity to 0 and makes it click-through. The `restore()` it returns runs in `finally`; it puts back each window's opacity, turns click-through off, and skips a window destroyed in the meantime.
+- `fitThumbnail` measures the PNG and resizes it whenever it exceeds the target, for example a 2x thumbnail, not only when it is over the Codex budget. The handler rebuilds the image from its own PNG pixels before resizing, because a 2x `NativeImage` keeps its scale factor through `resize()`. An image still over the budget is an error.
+- A missing source and an empty thumbnail get separate errors instead of one "Screen capture unavailable". After the capture the display is read again, and a missing or changed display is an error.
+- Concurrent capture calls share one in-flight capture.
+- A display without a label is called "Main display".
+- `captureSize` rejects a non-finite or non-positive size with an error naming it; Task 1's check let an infinite size loop forever. `pngSize` rejects a zero width or height.
 
-- `f2e23c8`: `userContent` builds chat content, and New conversation clears the attachment.
-- `d4bc723`: frozen registry entries, limit validation, and PNG 0×0 rejection.
-- `37c800e`: one helper runner that confirms the status line, times out, and names any error code.
-- `efce5a7`: `resolvePoint` before and after approval, plus refusing clock-shifted captures.
-- `ce44f82`: notes only for fresh captures whose PNG matches, plus the stale note.
-- `2bc6b45`: shared `screenshotIdSchema`/`pointLabelSchema` with a visible-text rule, and `pointPrompt` puts the label in `detail`.
-- `667e1ee`: hide covering OpenMuse windows during the ring.
-- `c2450e2`: `fitThumbnail`, `sameBounds`, separate capture errors, and a re-check of the display after capture.
+**Registry**
+
+- `Screenshot` is `Readonly`, and `add` freezes each entry and its bounds.
+- The constructor rejects a limit that isn't a positive integer. `add` rejects dimensions that aren't whole, positive and within the Codex budget, and bounds whose origin isn't finite or whose size isn't finite and positive.
+- The runner and the runtime take a `ScreenshotLookup`, which is `Pick<ScreenshotRegistry, "get">`. `CodexRunnerOptions.screenshots` is required, though it may be `undefined`, so a call site that leaves out the wiring fails the typecheck.
+- The default limit is the exported `REGISTRY_LIMIT` (16). It, `MAX_AGE_MS` and `CAPTURE_MAX_DIMENSION` are exported so `tests/doc-contract.test.ts` can check the docs against them.
+
+**Notes**
+
+- The note is chosen in this order: no ID gives the unreferenced note; an ID that isn't registered, the unknown note; a PNG whose size differs from the registered size, the mismatched note; a capture that isn't fresh, the stale note; otherwise the describing note. Task 2 had only the describing and unreferenced notes.
+- Each image problem fails the run with its own error naming the image number: not a PNG, no data, over 12 MB, or an invalid PNG. Task 2 kept one existing error for the first three and didn't check the PNG itself.
+- The instructions also ask for a short label naming the target.
+- A prompt rebuilt from history keeps the text of earlier messages that had images, with `[image omitted]` in place of each image, instead of replacing the whole message.
+
+**Refusals**
+
+- `resolvePoint` looks up the screenshot and its display, then calls `screenPoint`. It runs when the model asks and again after approval, so a display change or an expiry while the prompt is open is caught.
+- An unknown ID's refusal names the ID and suggests checking it.
+- `isFresh` accepts an age from 0 to 10 minutes. A negative age, meaning a capture time in the future, gets its own refusal. That catches only a clock that moved back to before the capture time; other clock shifts go unnoticed and only change the capture's apparent age.
+- The point snaps to its pixel before taking the pixel's center (`Math.floor(point.x) + 0.5`, and the same for y), so a fractional point in the last pixel stays inside the display.
+- The age refusal takes its number of minutes from `MAX_AGE_MS`.
+
+**Label**
+
+- `server/tools.ts` and `approvedAction` share `screenshotIdSchema` and `pointLabelSchema` from `server/point-schema.ts` instead of each defining its own.
+- After trimming and the 1-to-60 length check, in which zod counts code points, the label must pass four refinements, in order, each with its own message: no `\p{C}`, `Zl` or `Zp` character except ZWNJ and ZWJ; no known blank character; no run of two or more ZWNJ/ZWJ and no run of three or more combining marks; at least one letter or number. They are refinements rather than `.regex()` because a published JSON Schema pattern has no `u` flag.
+- x and y are plain `z.number()`, which in zod 4 already rejects infinite numbers and NaN.
+- The label's tool description says the user sees it in the approval dialog.
+
+**Approval**
+
+- `askApproval` in `electron/approval.ts` activates OpenMuse with `app.focus({ steal: true })`, then shows a parentless alert instead of one attached to the workspace window. The title, the buttons, and Cancel as both the default and the cancel button are as in Task 3.
+- For a point, the message is `Show a pointer on <display>`, and the model's label goes in the detail, `The agent says it points at: <label>`, built by `pointPrompt`. Task 3 put the label in the message itself.
+
+**Pointer and windows**
+
+- `performPointAction` in `electron/point-action.ts` runs the steps in order: resolve, prompt, confirm (a decline fails with "User declined action"), and resolve again. It then fades out each visible OpenMuse window whose bounds, grown by `RING_MARGIN` (32 pt: the ring's 24 pt radius plus 8 pt of slack), contain the point, runs `--point`, and restores those windows in `finally`. The helper draws the ring at screen-saver level, above our windows, so only the target needs clearing. Task 3 left covering windows alone.
+
+**Helper**
+
+- Every `exec(helper` call in `electron/main.ts`, not only the two actions, goes through `runHelper` in `electron/helper-result.ts`, and `tests/helper-result.test.ts` scans `main.ts` to enforce it. `runHelper` reports the helper's own error line, skipping unreadable lines, or else names the cause of the failure, instead of Node's `Command failed` message, which holds the helper's path, arguments and stderr.
+- Only `--point` and `--open-app` must also confirm success with a status line: "Point displayed" and "Application opened".
+- Calls time out after 15 s, except `--open-app` at 60 s, because a first launch can wait on Gatekeeper.
+
+**Composer**
+
+- `userContent` in `src/message-content.ts` builds the message content and rejects an attachment that isn't a PNG data URL; the composer then shows the error and drops the attachment.
+- The ID survives because `KiteCodexAgent` reports AG-UI 0.0.59; the 0.0.47 compatibility middleware would drop it. `tests/message-content.test.ts` (`RunAgentInputSchema`) and `tests/codex.test.ts` (a real `KiteCodexAgent.runAgent` round trip) pin this.
+- A new conversation clears the attachment, and fresh requests don't send it.
+- The footer reads "Screenshots shared when sent".
