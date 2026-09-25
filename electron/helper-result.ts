@@ -1,7 +1,8 @@
 // The helper prints one JSON object per line. Failures are `error` events.
 // A `status` event confirms success for the one-shot `--point` and
 // `--open-app` commands; the long-running recorder mode also prints
-// `status` lines as it starts and stops, outside of `runHelper`. The query
+// `status` lines as it starts and stops, outside of `runHelper` (e.g.
+// "Ready; waiting for start command" and "Already recording"). The query
 // commands (`--permissions`, `--notch-inset`, `--request-accessibility`,
 // `--request-screen`) print one bare JSON object with no `status` line.
 // Of those, only `--permissions` and `--notch-inset`'s output is parsed by
@@ -61,9 +62,11 @@ function reportsStatus(stdout: string, detail: HelperStatus): boolean {
 // The exact status strings the native helper reports for the two one-shot
 // commands that confirm success this way. electron/main.ts imports these
 // constants instead of repeating the literal strings, and
-// tests/helper-result.test.ts asserts that native/Recorder.swift actually
-// emits each one as a status event -- between the two, a typo in either
-// place can't silently desync the Swift and TypeScript sides.
+// tests/helper-result.test.ts checks that native/Recorder.swift's source
+// contains each one as a status event -- a substring check on the Swift
+// source text, not a runtime assertion that the compiled helper actually
+// emits it -- between the two, a typo in either place can't silently
+// desync the Swift and TypeScript sides.
 export const helperStatus = {
   pointDisplayed: "Point displayed",
   appOpened: "Application opened",
@@ -84,7 +87,7 @@ type ExecFailure = Error & {
 // attached, for a non-zero exit, a signal, a timeout, or a spawn error
 // Node reports that way (EACCES, EAGAIN, EMFILE, ENFILE, ENOENT). A
 // handful of rarer spawn errors (EPERM, ENOEXEC, EBADARCH, ...) are
-// instead thrown synchronously, before any promise even exists:
+// instead thrown synchronously, before the call returns its promise:
 // `execFile`'s promisified form does not wrap the call in a `Promise`
 // executor the way a generic `promisify` would, so nothing here turns
 // that throw into a rejection on its own. `runHelper` below only catches
@@ -105,15 +108,15 @@ function isHelperFailure(error: unknown): error is ExecFailure {
 // user: a synchronous spawn failure's `message` is just `spawn <code>`
 // (e.g. "spawn EPERM"); an asynchronous spawn failure such as ENOENT or
 // EACCES names the helper's path too (`spawn <path> <code>`), but not its
-// arguments; and only an exit or timeout failure's `message` carries the
-// path, the arguments and stderr all together (`Command failed: <path>
-// <args>\n<stderr>`, see e.g. Node's child_process exithandler). Report
-// the helper's own reason instead, built only from `stdout`, `code`,
-// `signal` and `killed` -- `runHelper` never reads `message`. No `cause`
-// is kept on the thrown error either: Electron logs a rejected
-// `ipcMain.handle` handler together with its `cause` (console.error,
-// "Error occurred in handler for '...'"), which would print that same
-// path, arguments and stderr right back out.
+// arguments; and an exit, signal or timeout failure's `message` carries
+// the path, the arguments and stderr all together (`Command failed:
+// <path> <args>\n<stderr>`, see e.g. Node's child_process exithandler).
+// Report the helper's own reason instead, built only from `stdout`,
+// `code`, `signal`, `killed`, `errno` and `syscall` -- `runHelper` never
+// reads `message`. No `cause` is kept on the thrown error either:
+// Electron logs a rejected `ipcMain.handle` handler together with its
+// `cause` (console.error, "Error occurred in handler for '...'"), which
+// would print that same path, arguments and stderr right back out.
 export async function runHelper(
   run: () => Promise<{ stdout: string }>,
   expectedStatus?: HelperStatus,
@@ -148,6 +151,9 @@ const crashSignals = new Set([
   "SIGILL",
   "SIGABRT",
   "SIGFPE",
+  "SIGSYS",
+  "SIGXCPU",
+  "SIGEMT",
 ]);
 
 // Sync spawn failures (see `isHelperFailure` above) whose `code` isn't a
@@ -170,7 +176,7 @@ function failureCause(failure: ExecFailure) {
       ? `The desktop helper crashed (${failure.signal})`
       : `The desktop helper was stopped by ${failure.signal}`;
   if (failure.code === "ENOENT" || failure.code === "EACCES")
-    return `The desktop helper is missing or not executable (${failure.code})`;
+    return `The desktop helper is missing or not executable (${failure.code}). Rebuild it with npm run build:native, or reinstall OpenMuse Desktop.`;
   if (failure.code === "ERR_CHILD_PROCESS_STDIO_MAXBUFFER")
     return "The desktop helper produced more output than expected";
   if (
@@ -181,6 +187,6 @@ function failureCause(failure: ExecFailure) {
   if (typeof failure.code === "string" && failure.code)
     return `The desktop helper could not run (${failure.code})`;
   if (typeof failure.code === "number")
-    return `The desktop helper exited with code ${failure.code} without a reason`;
-  return "The desktop helper failed without a reason";
+    return `The desktop helper exited with code ${failure.code} and gave no reason. Try again; if it keeps failing, rebuild it with npm run build:native.`;
+  return "The desktop helper failed and gave no reason. Try again; if it keeps failing, rebuild it with npm run build:native.";
 }

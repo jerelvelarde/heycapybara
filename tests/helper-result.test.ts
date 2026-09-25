@@ -45,16 +45,16 @@ test("an error event with a whitespace-only detail returns a generic message", (
   );
 });
 
-// A hand-built stand-in for exec rejections below whose shape no real
-// process can be made to produce: either the stdout content -- a status
-// line, an error event, interleaved garbage -- is awkward or impossible
-// to script reliably, or the combination of fields (e.g. no `code`,
-// `signal` or `killed` at all) is one a real Node failure never actually
-// has. `runHelper` never reads `message`, so every row here shares this
-// one placeholder -- and it's deliberately path- and command-shaped
-// ("Command failed: /x/kite-recorder --point 1 2") so the `doesNotMatch`
-// leak checks below have real text to catch if `runHelper` ever started
-// reading it.
+// A hand-built stand-in for exec rejections below. Most of these shapes a
+// real process could produce too -- `sh -c 'exit 1'` for a plain exit,
+// `kill -SEGV $$` for a crash signal -- but scripting one for every row
+// would be slower and less deterministic than building the object
+// directly; a few rows also combine fields (e.g. no `code`, `signal` or
+// `killed` at all) that no real Node failure actually has. `runHelper`
+// never reads `message`, so every row here shares this one placeholder --
+// and it's deliberately path- and command-shaped ("Command failed:
+// /x/kite-recorder --point 1 2") so the `doesNotMatch` leak checks below
+// have real text to catch if `runHelper` ever started reading it.
 function execFailure(overrides: {
   stdout?: string;
   code?: string | number | null;
@@ -101,9 +101,25 @@ test("runHelper reports the right message for every failure shape", async () => 
     // electron/helper-result.ts) rests on this shape actually being what
     // Node throws for an unrecognizable executable format: a synchronous
     // throw (not a promise rejection), with `syscall` exactly "spawn" and
-    // no `stdout` property at all. Capture it directly, bypassing
-    // `runHelper`, so a change in Node's behavior fails loudly here
-    // rather than silently degrading the message the row below asserts.
+    // no `stdout` property at all. `assert.throws` below pins the
+    // synchronous part specifically: the `await` inside a `try` further
+    // down would catch a rejection just as readily, so it can't tell the
+    // two apart on its own. Capture the same error again afterward,
+    // bypassing `runHelper`, so a change in Node's behavior fails loudly
+    // here rather than silently degrading the message the row below
+    // asserts.
+    assert.throws(() => {
+      const result: unknown = exec(wrongFormatPath, []);
+      // If exec ever stopped throwing synchronously here, avoid leaving an
+      // unhandled rejection behind on top of this assertion's own failure.
+      if (
+        result &&
+        typeof result === "object" &&
+        "catch" in result &&
+        typeof result.catch === "function"
+      )
+        (result as Promise<unknown>).catch(() => {});
+    });
     let rawWrongFormatError: unknown;
     try {
       await exec(wrongFormatPath, []);
@@ -118,34 +134,40 @@ test("runHelper reports the right message for every failure shape", async () => 
     );
     assert.equal(Object.hasOwn(rawWrongFormatError as object, "stdout"), false);
 
-    // One row per shape `runHelper` must turn into a message. The first
-    // five run a real child process end to end, through the same
+    // One row per shape `runHelper` must turn into a message. Rows 1, 2, 3,
+    // 5 and 6 run a real child process end to end, through the same
     // `promisify(execFile)` main.ts uses, so they exercise Node's actual
     // failure shapes instead of a stand-in: a missing path and a
     // non-executable file both reject asynchronously (ENOENT/EACCES,
     // `stdout` present); a file with no recognizable executable format
-    // throws synchronously, the way the rarer spawn errors
-    // (EPERM/ENOEXEC/EBADARCH) do -- confirmed just above to be a throw,
-    // not a rejection, with no `stdout` at all; `runHelper` only sees it
-    // as a rejection because `run()` executes inside its own `try`. Which
-    // exact errno this machine's Node reports for it isn't assumed -- it
-    // varies -- but ENOEXEC and EBADARCH both map to the same friendly
-    // message asserted below. A timeout and a maxBuffer overflow are both
-    // real too. The rest are hand built: some are rejections built with
-    // `execFailure` above, for stdout content a real process can't
-    // conveniently be made to produce; others are `Promise.resolve` rows,
-    // standing in for a clean exit whose stdout content is itself the
-    // failure.
+    // (row 3) throws synchronously instead, the way the rarer spawn errors
+    // (EPERM/ENOEXEC/EBADARCH) do -- pinned just above to be a throw, not
+    // a rejection, with no `stdout` at all; `runHelper` only sees it as a
+    // rejection because `run()` executes inside its own `try`. This
+    // specific 10-byte file reliably reports ENOEXEC, not EBADARCH -- row
+    // 4, right after it, hand-builds EBADARCH instead, since no file this
+    // test can portably create actually triggers a wrong-CPU-architecture
+    // Mach-O error, but it maps to the same friendly message asserted
+    // below. A timeout (row 5) and a maxBuffer overflow (row 6) are both
+    // real too. The rest are hand built with `execFailure` below, mostly
+    // for speed and determinism rather than because a real process
+    // couldn't produce them -- a plain non-zero exit or a signal kill is
+    // one `sh -c` or `kill` call away -- plus the handful of shapes (e.g.
+    // no `code`, `signal` or `killed` at all) no real Node failure actually
+    // has. The last few are `Promise.resolve` rows, standing in for a
+    // clean exit whose stdout content is itself the failure.
     const helperFailures: FailureCase[] = [
       {
         name: "a missing helper path (real, asynchronous ENOENT)",
         run: () => exec(missingPath, []),
-        message: "The desktop helper is missing or not executable (ENOENT)",
+        message:
+          "The desktop helper is missing or not executable (ENOENT). Rebuild it with npm run build:native, or reinstall OpenMuse Desktop.",
       },
       {
         name: "a helper file without the executable bit (real, asynchronous EACCES)",
         run: () => exec(nonExecutablePath, []),
-        message: "The desktop helper is missing or not executable (EACCES)",
+        message:
+          "The desktop helper is missing or not executable (EACCES). Rebuild it with npm run build:native, or reinstall OpenMuse Desktop.",
       },
       {
         name: "a helper file with no recognizable executable format (real, synchronous spawn failure, no stdout)",
@@ -154,9 +176,14 @@ test("runHelper reports the right message for every failure shape", async () => 
       },
       {
         name: "a hand-built EBADARCH errno (-86) -- real hardware can't portably be made to produce this, but macOS reports it the same way as ENOEXEC",
+        // Built directly, like the EPERM row below, rather than through
+        // `execFailure()`: that helper always adds `stdout: ""`, which
+        // would give this row the asynchronous-failure shape instead of
+        // the synchronous, no-`stdout`-at-all shape a real EBADARCH throw
+        // actually has.
         run: () =>
           Promise.reject(
-            execFailure({
+            Object.assign(new Error("spawn Unknown system error -86"), {
               code: "Unknown system error -86",
               errno: -86,
               syscall: "spawn",
@@ -171,12 +198,13 @@ test("runHelper reports the right message for every failure shape", async () => 
       },
       {
         name: "a real process that overflows maxBuffer",
-        // `head` and `/dev/zero` are plain external commands, not shell
-        // syntax, so this overflows the same way whether `/bin/sh` is
-        // bash running in POSIX mode or dash. A brace expansion like
-        // `printf 'x%.0s' {1..5000}` depends on the shell: dash doesn't
-        // expand `{1..5000}`, so it prints one literal byte and this row
-        // fails with "expected a rejection" instead of overflowing.
+        // `head` is a plain external command and `/dev/zero` a device
+        // file, neither of them shell syntax, so this overflows the same
+        // way whether `/bin/sh` is bash running in POSIX mode or dash. A
+        // brace expansion like `printf 'x%.0s' {1..5000}` depends on the
+        // shell instead: dash doesn't expand `{1..5000}`, so it prints one
+        // literal byte and this row fails with "expected a rejection"
+        // instead of overflowing.
         run: () =>
           exec("/bin/sh", ["-c", "head -c 5000 /dev/zero"], {
             maxBuffer: 10,
@@ -186,7 +214,8 @@ test("runHelper reports the right message for every failure shape", async () => 
       {
         name: "a non-zero exit with no output",
         run: () => Promise.reject(execFailure({ code: 1 })),
-        message: "The desktop helper exited with code 1 without a reason",
+        message:
+          "The desktop helper exited with code 1 and gave no reason. Try again; if it keeps failing, rebuild it with npm run build:native.",
       },
       {
         name: "a non-zero exit whose output contains the expected status",
@@ -198,7 +227,8 @@ test("runHelper reports the right message for every failure shape", async () => 
             }),
           ),
         expectedStatus: helperStatus.pointDisplayed,
-        message: "The desktop helper exited with code 1 without a reason",
+        message:
+          "The desktop helper exited with code 1 and gave no reason. Try again; if it keeps failing, rebuild it with npm run build:native.",
       },
       {
         name: "a non-zero exit whose stdout carries the helper's own error detail",
@@ -237,6 +267,24 @@ test("runHelper reports the right message for every failure shape", async () => 
         message: "The desktop helper crashed (SIGSEGV)",
       },
       {
+        name: "a crash signal (SIGSYS)",
+        run: () =>
+          Promise.reject(execFailure({ code: null, signal: "SIGSYS" })),
+        message: "The desktop helper crashed (SIGSYS)",
+      },
+      {
+        name: "a crash signal (SIGXCPU)",
+        run: () =>
+          Promise.reject(execFailure({ code: null, signal: "SIGXCPU" })),
+        message: "The desktop helper crashed (SIGXCPU)",
+      },
+      {
+        name: "a crash signal (SIGEMT)",
+        run: () =>
+          Promise.reject(execFailure({ code: null, signal: "SIGEMT" })),
+        message: "The desktop helper crashed (SIGEMT)",
+      },
+      {
         name: "a signal kill with a status line truncated mid-write",
         run: () =>
           Promise.reject(
@@ -251,7 +299,8 @@ test("runHelper reports the right message for every failure shape", async () => 
       {
         name: "a rejection with no code, signal, or kill reason",
         run: () => Promise.reject(execFailure({})),
-        message: "The desktop helper failed without a reason",
+        message:
+          "The desktop helper failed and gave no reason. Try again; if it keeps failing, rebuild it with npm run build:native.",
       },
       {
         name: "an error line despite a clean exit",
