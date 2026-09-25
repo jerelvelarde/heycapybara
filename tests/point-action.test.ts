@@ -251,9 +251,10 @@ test("a failed prompt propagates its error, with no second resolve, no conceal a
   assert.deepEqual(events, []);
 });
 
-// Stop, or the MCP call timing out, can cancel the request while the
-// prompt is open; an "Allow once" that lands at the same moment must not
-// show the pointer for a request nobody is waiting on.
+// Stop (it kills Codex, dropping the connection) can cancel the request
+// while the prompt is open - whether a tool-call timeout alone does the
+// same is unverified; an "Allow once" that lands at the same moment must
+// not show the pointer for a request nobody is waiting on.
 test("a request cancelled while the prompt is open rejects, with no second resolve, no conceal and no showPointer", async () => {
   const events: string[] = [];
   const controller = new AbortController();

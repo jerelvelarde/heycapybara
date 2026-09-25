@@ -57,8 +57,10 @@ export type ApprovalDeps = {
 export const DECLINED_MESSAGE =
   "The user declined. Don't retry unless they ask.";
 
-// Stop, or the MCP call timing out, can cancel the request after the user
-// allowed it but before the action runs. The action must not run then.
+// Stop cancels the request (it kills Codex, dropping the connection) after
+// the user allowed it but before the action runs, so the action must not
+// run then. Whether Codex's own tool-call timeout does the same is
+// unverified.
 export function throwIfCancelled(signal?: AbortSignal) {
   if (signal?.aborted)
     throw new Error("The request was cancelled before the action ran.");

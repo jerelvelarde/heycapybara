@@ -283,8 +283,9 @@ async function approve(prompt: ApprovalPrompt, signal?: AbortSignal) {
     );
   } finally {
     // A critical bounce lasts until OpenMuse is activated, so a prompt that
-    // ends while it's in the background (Stop, a timeout) would leave the
-    // icon bouncing for nothing.
+    // ends while it's in the background - Stop does this; whether a bare
+    // tool-call timeout does too is unverified - would leave the icon
+    // bouncing for nothing.
     if (bounce !== -1) app.dock?.cancelBounce(bounce);
     const remaining = (approvalHosts.get(host) ?? 1) - 1;
     if (remaining > 0) approvalHosts.set(host, remaining);

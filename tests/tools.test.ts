@@ -126,10 +126,10 @@ test("open_application invokes the action for a valid bundle id", async () => {
 });
 
 // bundleIdSchema is tighter than the pattern this replaced: a hyphen may no
-// longer start or end the segment right after a dot, and a trailing dot
-// with nothing after it is still refused. Without this, the user could
-// approve an app launch that native/Recorder.swift's own, always-stricter
-// check then rejects anyway.
+// longer start the segment right after a dot (it may still end one, as in
+// "com.a-"), and a trailing dot with nothing after it is still refused.
+// Without this, the user could approve an app launch that
+// native/Recorder.swift's own, always-stricter check then rejects anyway.
 test("open_application rejects a hyphen-adjacent-to-dot or trailing-dot bundle id, but still accepts a real one", async () => {
   const actions: DesktopAction[] = [];
   await withHandler(
@@ -148,12 +148,14 @@ test("open_application rejects a hyphen-adjacent-to-dot or trailing-dot bundle i
       }
       assert.equal(actions.length, 0);
 
-      const accepted = await requestTo(handler, "tools/call", {
-        name: "open_application",
-        arguments: { bundleId: "com.apple.TextEdit" },
-      });
-      assert.ok(!accepted.result.isError);
-      assert.equal(actions.length, 1);
+      for (const bundleId of ["com.apple.TextEdit", "com.a-"]) {
+        const accepted = await requestTo(handler, "tools/call", {
+          name: "open_application",
+          arguments: { bundleId },
+        });
+        assert.ok(!accepted.result.isError, `"${bundleId}" must be accepted`);
+      }
+      assert.equal(actions.length, 2);
     },
   );
 });

@@ -184,9 +184,9 @@ function callMcp(mcpUrl: URL, token: string, payload: unknown) {
 // README.md promises: "If the agent's turn ends before you answer, the
 // prompt closes without acting." tests/tools.test.ts covers the shape of
 // that promise, but it builds its own `Request` and its own AbortController
-// (see "open_application and point_on_screen both forward the request's
-// own AbortSignal to the action" there), so it never touches production's
-// @hono/node-server abort wiring at all. Checked by hand against
+// (see "open_application and point_on_screen each forward the request's own,
+// still-live AbortSignal to the action" there), so it never touches
+// production's @hono/node-server abort wiring at all. Checked by hand against
 // @hono/node-server 2.1.1 (package.json's pinned version): the action's
 // signal aborts about 11 ms after the client socket drops, with reason
 // "Client connection prematurely closed." This test drives the real HTTP
