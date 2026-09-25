@@ -210,9 +210,14 @@ func showRing(at point: CGPoint) -> NSPanel {
 // accepts them, or nil.
 func connectedPoint(_ xText: String, _ yText: String) -> CGPoint? {
     guard let x = Double(xText), let y = Double(yText), x.isFinite, y.isFinite else { return nil }
-    let cocoaPoint = NSPoint(x: x, y: Double(primaryTop()) - y)
-    guard NSScreen.screens.contains(where: { $0.frame.contains(cocoaPoint) }) else { return nil }
-    return CGPoint(x: x, y: y)
+    // Tested in Quartz coordinates, where a display's bounds hold its top
+    // row, y = 0 on the primary display, and not the row below its bottom.
+    // Flipped to Cocoa's bottom-left origin, NSRect.contains gets both edges
+    // wrong.
+    let point = CGPoint(x: x, y: y)
+    var count: UInt32 = 0
+    guard CGGetDisplaysWithPoint(point, 0, nil, &count) == .success, count > 0 else { return nil }
+    return point
 }
 
 // How long the ring shows before a click or scroll is sent, and how long it
@@ -314,6 +319,18 @@ let keyCodes: [String: CGKeyCode] = [
     "down": 0x7D, "up": 0x7E,
 ]
 
+// The keyCodes names that type a character: letters, digits, punctuation
+// and space. --keys won't press one into a password field, where it would
+// type the password a character at a time. Return, tab, delete, escape, the
+// arrows and the other navigation and function keys stay allowed.
+let characterKeys: Set<String> = [
+    "a", "b", "c", "d", "e", "f", "g", "h", "i", "j", "k", "l", "m",
+    "n", "o", "p", "q", "r", "s", "t", "u", "v", "w", "x", "y", "z",
+    "0", "1", "2", "3", "4", "5", "6", "7", "8", "9",
+    "equal", "minus", "left_bracket", "right_bracket", "quote", "semicolon", "backslash",
+    "comma", "slash", "period", "grave", "space",
+]
+
 // Must list exactly server/computer-schema.ts's MODIFIERS.
 let modifierFlags: [String: CGEventFlags] = [
     "command": .maskCommand, "shift": .maskShift, "option": .maskAlternate, "control": .maskControl,
@@ -360,13 +377,12 @@ if args.count > 1 {
             recorder.event("error", detail: "Point requires finite Quartz screen coordinates")
             exit(EXIT_FAILURE)
         }
-        let cocoaPoint = NSPoint(x: x, y: Double(primaryTop()) - y)
-        guard NSScreen.screens.contains(where: { $0.frame.contains(cocoaPoint) }) else {
+        guard let point = connectedPoint(args[2], args[3]) else {
             recorder.event("error", detail: "Point lies outside connected displays")
             exit(EXIT_FAILURE)
         }
-        let panel = showRing(at: CGPoint(x: x, y: y))
-        recorder.event("status", detail: "Point displayed", point: CGPoint(x: x, y: y))
+        let panel = showRing(at: point)
+        recorder.event("status", detail: "Point displayed", point: point)
         DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) { panel.orderOut(nil); exit(EXIT_SUCCESS) }
         application.run()
     case "--open-url":
@@ -456,6 +472,15 @@ if args.count > 1 {
         guard eventAccessGranted() else { recorder.event("error", detail: eventAccessError); exit(EXIT_FAILURE) }
         guard !openMuseIsFrontmost() else {
             recorder.event("error", detail: "OpenMuse is the frontmost app, so the keys would go to OpenMuse itself. Click in the app you want, or open it with open_application or open_url, first.")
+            exit(EXIT_FAILURE)
+        }
+        // A character key types its character with no modifiers, Shift or
+        // Option (Option-S types ß); Command or Control makes it a shortcut.
+        // Command-V, with or without more modifiers, pastes.
+        let typesCharacter = characterKeys.contains(args[2]) && flags.isDisjoint(with: [.maskCommand, .maskControl])
+        let pastes = args[2] == "v" && flags.contains(.maskCommand)
+        guard !((typesCharacter || pastes) && focusedFieldIsSecure()) else {
+            recorder.event("error", detail: "The focused field is a password field. OpenMuse doesn't type into password fields; ask the user to type it themselves.")
             exit(EXIT_FAILURE)
         }
         postKeys(code, flags: flags)
