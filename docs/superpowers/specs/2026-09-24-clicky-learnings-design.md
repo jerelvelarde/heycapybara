@@ -78,15 +78,17 @@ A 1512×982 display is captured at 1512×982, and a 2560×1440 display at 1920×
 
    The point is checked when the model asks and again after "Allow once", because the display can change or the capture expire while the prompt is open. Only a clock that moved back to before the capture time is caught; other clock shifts go unnoticed and only change the capture's apparent age. Each refusal except the last tells the model to ask the user for a new screenshot.
 
-6. **Label.** The approval prompt shows the label verbatim, so it is trimmed, must be 1 to 60 characters long (zod counts code points), and must pass four rules, checked in this order, each with its own message (`server/point-schema.ts` has the exact rules and messages):
+6. **Label.** The approval prompt shows the label verbatim, so it is trimmed, must be 1 to 60 characters long (zod counts code points), and must pass six rules, checked in this order, each with its own message (`server/point-schema.ts` has the exact rules and messages):
    1. no `\p{C}`, `Zl` or `Zp` character, except ZWNJ and ZWJ;
    2. no known blank character, such as a Hangul filler or the Braille blank;
-   3. no run of two or more ZWNJ/ZWJ, and no run of three or more combining marks;
-   4. at least one letter or number.
+   3. no other invisible (default-ignorable) character, except ZWNJ, ZWJ and the text and emoji style selectors U+FE0E and U+FE0F;
+   4. no run of two or more ZWNJ/ZWJ, and no three marks from the combining accent blocks (U+0300 to U+036F and its relatives) on one letter, even with other marks or joiners between them; other scripts' marks, as in Hindi, Tibetan or pointed Hebrew, are not limited;
+   5. no two spaces (`Zs`) with only marks or joiners between them, because a run of spaces can make the rest of the label look like a line of its own;
+   6. at least one letter or number.
 
    The rules are refinements rather than `.regex()`, because a published JSON Schema pattern has no `u` flag.
 
-7. **Approval.** `askApproval` (`electron/approval.ts`) shows a parentless alert, and activates OpenMuse first (`app.focus({ steal: true })`) because that alert would not bring it forward on its own. Its title is "OpenMuse wants to take an action", and its buttons are Cancel and "Allow once". Cancel is both the default and the cancel button, so a Return pressed while typing declines. For a point, OpenMuse writes the message, `Show a pointer on <display>`, and the model's label goes on its own attributed line in the detail: `The agent says it points at: <label>`.
+7. **Approval.** `askApproval` (`electron/approval.ts`) shows a parentless alert, and activates OpenMuse first (`app.focus({ steal: true })`) because that alert would not bring it forward on its own. Its title is "OpenMuse wants to take an action", and its buttons are Cancel and "Allow once". Cancel is both the default and the cancel button, so a Return pressed while typing declines. macOS doesn't show an alert's title, so for a point OpenMuse writes a message that says who is asking, `The agent wants to show a pointer on <display>`, and the model's label goes on its own attributed line in the detail: `The agent says it points at: <label>`.
 
 8. **Ring.** `performPointAction` (`electron/point-action.ts`) resolves the point, builds the prompt, asks for confirmation (a decline fails with "User declined action"), and resolves again. It then fades out each visible OpenMuse window whose bounds, grown by `RING_MARGIN` (32 pt: the ring's 24 pt radius plus 8 pt of slack), contain the point (`coversPoint`), and runs the helper's `--point`. The helper draws the ring at screen-saver level, above our windows, so only the target needs clearing. The windows are restored in `finally`.
 
@@ -107,7 +109,7 @@ A 1512×982 display is captured at 1512×982, and a 2560×1440 display at 1920×
   - `Image <n> in this message doesn't match the screenshot it names, so point_on_screen can't target it. Ask the user to attach a new screenshot if you need to point.`
   - `Image <n> in this message is a screenshot that is too old to point at, or whose capture time is unknown. Ask the user to attach a new one if you need to point.`
   - `Image <n> in this message is screenshot <id> of <display>, <width>×<height> pixels. To point at something in it, call point_on_screen with screenshotId "<id>", a short label, and x, y in that image's pixels (origin at the top-left, x rightward, y downward).`
-- The approval alert: the title `OpenMuse wants to take an action`, the buttons `Cancel` and `Allow once`, and for a point the message `Show a pointer on <display>` with the detail `The agent says it points at: <label>`.
+- The approval alert: the title `OpenMuse wants to take an action`, the buttons `Cancel` and `Allow once`, and for a point the message `The agent wants to show a pointer on <display>` with the detail `The agent says it points at: <label>`.
 
 **Tests.**
 
@@ -180,7 +182,7 @@ Clicky's pointing comes only from the model reading pixels. Its more precise com
   - It keeps only visible, non-empty frames and draws a highlight around the best match.
   - It reports only the matched role, label and center, plus the number of matches.
 - MCP tool `point_at_control({app, label, role?})`.
-  - Approval text uses PR 1's attributed format: OpenMuse writes a fixed message, `Show a pointer in <app>`, and the model's label goes on its own line in the detail: `The agent says it points at: <label>`.
+  - Approval text uses PR 1's attributed format: OpenMuse writes a fixed message, `The agent wants to show a pointer in <app>`, and the model's label goes on its own line in the detail: `The agent says it points at: <label>`.
   - Guided-skill instructions prefer it over pixel pointing.
   - Arguments are validated: the app name is at most 100 characters, the label at most 120, and the role matches `^AX[A-Za-z]{2,40}$`.
 - Privacy: this reads the named app's Accessibility tree outside a recording, but only after approval, only for that app, and only to find one control. The README boundary text says so.

@@ -99,7 +99,7 @@ test("confirm receives exactly the point prompt for the label and shot", async (
   };
   await performPointAction("Save button", deps);
   assert.deepEqual(received, {
-    message: "Show a pointer on Display A",
+    message: "The agent wants to show a pointer on Display A",
     detail: "The agent says it points at: Save button",
   });
 });

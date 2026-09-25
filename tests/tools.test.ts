@@ -9,10 +9,10 @@ import type { DesktopAction } from "../src/types";
 
 type Handler = (request: Request) => Promise<Response>;
 
-// Builds a fresh store, temp dir and MCP handler for one test, and cleans up
-// the temp dir afterward regardless of how the test finishes. Each test gets
-// its own handler and its own `actions` array, so an early failure in one
-// test never hides or pollutes another.
+// Builds a fresh store, temp dir and MCP handler for one test, and removes
+// the temp dir afterward however the test finishes. Each test also creates
+// its own `actions` array, so an early failure in one test never hides or
+// pollutes another.
 async function withHandler(
   options: { action?: (action: DesktopAction) => Promise<void> },
   run: (handler: Handler) => Promise<void>,
@@ -155,9 +155,9 @@ test("point_on_screen succeeds and forwards the exact point to the action", asyn
 
 test("point_on_screen rejects labels with newlines, bidi overrides, or line or paragraph separators", async () => {
   const actions: DesktopAction[] = [];
-  // Built from code points rather than typed as \u escapes, so this file
-  // never has to hold a raw control, bidi or line/paragraph-separator
-  // character - see server/point-schema.ts for what each one denies.
+  // Spelled as code points so no raw control, bidi or separator character
+  // appears in this file - see server/point-schema.ts for what each rule
+  // denies.
   const bidiOverride = String.fromCodePoint(0x202e);
   const lineSeparator = String.fromCodePoint(0x2028);
   const paragraphSeparator = String.fromCodePoint(0x2029);
@@ -201,22 +201,28 @@ test("point_on_screen rejects labels with newlines, bidi overrides, or line or p
 
 test("point_on_screen accepts unicode text and emoji joined by a ZWJ", async () => {
   const actions: DesktopAction[] = [];
-  // The joiner between the two emoji is built from its code point rather
-  // than typed as a \u escape, so this file never has to hold a raw ZWJ.
-  const zwj = String.fromCodePoint(0x200d);
-  const emojiLabel = "Save 👩" + zwj + "💻 button";
+  // Spelled as code points so no raw joiner, emoji or other non-ASCII
+  // character appears in this file.
+  const accentedLabel =
+    "Export" +
+    String.fromCodePoint(0xe9) +
+    "r " +
+    String.fromCodePoint(0x2713) +
+    " button";
+  const emojiLabel =
+    "Save " + String.fromCodePoint(0x1f469, 0x200d, 0x1f4bb) + " button";
   await withHandler(
     { action: async (action) => void actions.push(action) },
     async (handler) => {
       const unicodeLabel = await requestTo(handler, "tools/call", {
         name: "point_on_screen",
-        arguments: { ...validPoint, label: "Exportér ✓ button" },
+        arguments: { ...validPoint, label: accentedLabel },
       });
       assert.ok(!unicodeLabel.result.isError);
       assert.deepEqual(actions.at(-1), {
         type: "point",
         ...validPoint,
-        label: "Exportér ✓ button",
+        label: accentedLabel,
       });
 
       const zwjLabel = await requestTo(handler, "tools/call", {
@@ -255,11 +261,18 @@ test("point_on_screen validates that x and y are numbers", async () => {
   await withHandler(
     { action: async (action) => void actions.push(action) },
     async (handler) => {
-      const stringCoordinate = await requestTo(handler, "tools/call", {
+      const stringX = await requestTo(handler, "tools/call", {
         name: "point_on_screen",
         arguments: { ...validPoint, x: "10", label: "Save button" },
       });
-      assert.equal(stringCoordinate.result.isError, true);
+      assert.equal(stringX.result.isError, true);
+
+      const stringY = await requestTo(handler, "tools/call", {
+        name: "point_on_screen",
+        arguments: { ...validPoint, y: "20", label: "Save button" },
+      });
+      assert.equal(stringY.result.isError, true);
+
       assert.equal(actions.length, 0);
     },
   );

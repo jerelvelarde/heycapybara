@@ -34,7 +34,7 @@ test("passes the exact dialog options for a prompt with a detail", async () => {
   };
   await askApproval(
     {
-      message: "Show a pointer on Display A",
+      message: "The agent wants to show a pointer on Display A",
       detail: "The agent says it points at: Save button",
     },
     deps,
@@ -42,7 +42,7 @@ test("passes the exact dialog options for a prompt with a detail", async () => {
   assert.deepEqual(received, {
     type: "question",
     title: "OpenMuse wants to take an action",
-    message: "Show a pointer on Display A",
+    message: "The agent wants to show a pointer on Display A",
     detail: "The agent says it points at: Save button",
     buttons: ["Cancel", "Allow once"],
     defaultId: 0,

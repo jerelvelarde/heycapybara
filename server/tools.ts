@@ -120,7 +120,7 @@ export function createToolHandler(options: {
           x: z.number(),
           y: z.number(),
           label: pointLabelSchema.describe(
-            'What you are pointing at, such as "Export button". The user sees it in the approval dialog: one line of visible text, up to 60 characters.',
+            'What you are pointing at, such as "Export button". The user sees it in the approval dialog: one line of visible text, up to 60 characters, with at least one letter or number.',
           ),
         },
       },
