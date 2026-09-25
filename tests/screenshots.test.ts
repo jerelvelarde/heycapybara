@@ -225,7 +225,7 @@ test("sameBounds compares all four fields", () => {
   assert.equal(sameBounds(bounds, { ...bounds, height: 1000 }), false);
 });
 
-test("image pixels map to the centre of the matching screen point", () => {
+test("image pixels map to the centre of the screen area they cover, and fractional points snap to their pixel", () => {
   const point = screenPoint(shot, { x: 692, y: 449 }, display, 1_000_000);
   assert.ok(Math.abs(point.x - 692.5 * (1512 / 1386)) < 1e-9);
   assert.ok(Math.abs(point.y - 449.5 * (982 / 900)) < 1e-9);

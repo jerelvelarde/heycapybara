@@ -45,7 +45,7 @@
   - `describeScreenshot(shot: Screenshot, imageNumber: number): string`
   - `unreferencedImageNote(imageNumber: number): string`
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 Create `tests/screenshots.test.ts`:
 
@@ -213,12 +213,12 @@ test("the model is told which image is which screenshot, and its pixel size", ()
 });
 ```
 
-- [ ] **Step 2: Run the tests to verify they fail**
+- [x] **Step 2: Run the tests to verify they fail**
 
 Run: `npx tsx --test tests/screenshots.test.ts`
 Expected: FAIL with `Cannot find module '../server/screenshots'`.
 
-- [ ] **Step 3: Write the implementation**
+- [x] **Step 3: Write the implementation**
 
 Create `server/screenshots.ts`:
 
@@ -363,12 +363,12 @@ export function unreferencedImageNote(imageNumber: number) {
 }
 ```
 
-- [ ] **Step 4: Run the tests to verify they pass**
+- [x] **Step 4: Run the tests to verify they pass**
 
 Run: `npx tsx --test tests/screenshots.test.ts`
 Expected: PASS, 7 tests.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add server/screenshots.ts tests/screenshots.test.ts
@@ -381,7 +381,7 @@ git commit -m "feat: size and register screenshots for pointing"
 
 **Files:**
 
-- Modify: `server/codex-agent.ts` (imports, `instructions`, `CodexRunnerOptions`, the binary branch of prompt building near lines 214-227)
+- Modify: `server/codex-agent.ts` (imports, `instructions`, `CodexRunnerOptions`, the `part.type === "binary"` branch of `CodexRunner.run`)
 - Modify: `server/runtime.ts` (the `startRuntime` options and the `CodexRunner` construction)
 - Test: `tests/codex.test.ts` (append one test)
 
@@ -392,7 +392,7 @@ git commit -m "feat: size and register screenshots for pointing"
   - `CodexRunnerOptions.screenshots?: { get(id: string): Screenshot | undefined }`
   - `startRuntime(store, { ..., screenshots?: { get(id: string): Screenshot | undefined } })`
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Append to `tests/codex.test.ts`:
 
@@ -489,12 +489,12 @@ test("attached screenshots are introduced with their id, display and pixel size"
 });
 ```
 
-- [ ] **Step 2: Run the test to verify it fails**
+- [x] **Step 2: Run the test to verify it fails**
 
 Run: `npx tsx --test tests/codex.test.ts`
 Expected: FAIL. The prompt part types are `["text", "local_image", "local_image"]`, and TypeScript reports the unknown `screenshots` option only under `npm run typecheck`.
 
-- [ ] **Step 3: Implement the prompt notes and instructions**
+- [x] **Step 3: Implement the prompt notes and instructions**
 
 In `server/codex-agent.ts`, add the import under the existing `./codex-events` import:
 
@@ -543,12 +543,12 @@ In `server/runtime.ts`:
 - extend the `options` parameter type with `screenshots?: { get(id: string): Screenshot | undefined };`
 - pass `screenshots: options.screenshots,` in the `new CodexRunner({ ... })` object, after `binaryPath: options.binaryPath,`.
 
-- [ ] **Step 4: Run the tests to verify they pass**
+- [x] **Step 4: Run the tests to verify they pass**
 
 Run: `npx tsx --test tests/codex.test.ts && npm run typecheck`
 Expected: PASS, and tsc exits 0.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add server/codex-agent.ts server/runtime.ts tests/codex.test.ts
@@ -575,7 +575,7 @@ git commit -m "feat: tell the model each screenshot's id and pixel size"
   - `DesktopAction` point variant `{ type: "point"; screenshotId: string; x: number; y: number; label: string }`
   - `KiteAPI.screenshot(): Promise<ScreenshotAttachment>`
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 In `tests/tools.test.ts`:
 
@@ -627,12 +627,12 @@ assert.deepEqual(actions.at(-1), {
 });
 ```
 
-- [ ] **Step 2: Run the test to verify it fails**
+- [x] **Step 2: Run the test to verify it fails**
 
 Run: `npx tsx --test tests/tools.test.ts`
 Expected: FAIL. The call without a screenshot reference succeeds, because today's schema needs only `x` and `y`.
 
-- [ ] **Step 3: Update the types and the tool**
+- [x] **Step 3: Update the types and the tool**
 
 In `src/types.ts`, replace `DesktopAction` and add the attachment type:
 
@@ -685,7 +685,7 @@ server.registerTool(
 );
 ```
 
-- [ ] **Step 4: Update the main process**
+- [x] **Step 4: Update the main process**
 
 In `electron/main.ts`:
 
@@ -834,7 +834,7 @@ handle("screenshot", async (): Promise<ScreenshotAttachment> => {
 });
 ```
 
-- [ ] **Step 5: Send the reference from the composer**
+- [x] **Step 5: Send the reference from the composer**
 
 In `src/Assistant.tsx`:
 
@@ -854,12 +854,12 @@ In `src/Assistant.tsx`:
 
 - change the attachment preview to `<img src={image.dataUrl} alt={"Screen capture of " + image.label + " to send"} />`.
 
-- [ ] **Step 6: Run the tests and typecheck**
+- [x] **Step 6: Run the tests and typecheck**
 
 Run: `npx tsx --test tests/tools.test.ts && npm run typecheck`
 Expected: the tools test PASSES and `tsc` exits 0.
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add src/types.ts server/tools.ts electron/main.ts src/Assistant.tsx tests/tools.test.ts
@@ -878,7 +878,7 @@ git commit -m "feat: point at a spot in an attached screenshot"
 
 - Consumes: the finished behavior from Tasks 1-3.
 
-- [ ] **Step 1: Document the contract**
+- [x] **Step 1: Document the contract**
 
 In `README.md`, under "Desktop boundaries", replace:
 
@@ -892,12 +892,12 @@ with:
 - Agent tools can open installed applications and display a pointer after a native approval dialog. The pointer targets a spot in a screenshot you attached: the model gives pixel coordinates in that image, and OpenMuse converts them to screen points. Screenshots are sized so Codex does not resize them, and a point is refused if the screenshot is more than 10 minutes old or its display has moved or changed resolution. Codex executes shell and file tasks in the selected workspace. Cross-app execution remains guided; desktop clicking and typing are not implemented.
 ```
 
-- [ ] **Step 2: Run every gate**
+- [x] **Step 2: Run every gate**
 
 Run: `npm test && npm run typecheck && npm run lint && npm run format:check && npm run build:native && npm run build`
 Expected: all pass. If `format:check` fails, run `npx prettier --write` only on the files this plan touched, then rerun.
 
-- [ ] **Step 3: Commit**
+- [x] **Step 3: Commit**
 
 ```bash
 git add README.md
@@ -937,9 +937,22 @@ git commit -m "docs: record pointer contract verification"
 
 ## Changes after review
 
-Review found gaps that the code blocks above don't cover. Each fix below cites the commit that made it:
+Review found gaps that the code blocks above don't cover. Fixes don't map one commit per fix: a single commit below often bundles several fixes, and a few early fixes are cited by more than one commit. Each bullet cites the commit(s) that made it:
 
 - `0aae2a0`: `screenPoint` maps `Math.floor(point.x) + 0.5` (and the same for y), so a fractional point in the last half-pixel stays inside the display. The same commit makes `captureSize` reject non-finite sizes instead of looping forever.
 - `7dc5b1c`, `0525dc8`, `5eb8d54`: `approvedAction` calls `runHelper(() => exec(helper, args))` from `electron/helper-result.ts`. It reports the helper's own JSON error, or a cause built from the exit code or signal. It never reports Node's `Command failed: <path>` message, and it skips unreadable output lines so they can't mask the exit reason.
 - `f494a92`, `c0288e2`: both `label` schemas refine the trimmed label to reject control, format, private-use and unassigned characters and line or paragraph separators (`/(?![\u200c\u200d])[\p{C}\p{Zl}\p{Zp}]/u`), while allowing ZWNJ and ZWJ. This means the approval prompt always shows one line. A refine is used instead of `.regex()` because the MCP tool schema would otherwise publish a pattern whose meaning changes without the `u` flag.
 - `8b4fdbf`: the screenshot handler resizes whenever the measured PNG `exceeds` the target, for example a 2x thumbnail, and not only when it is over the Codex budget.
+- The shipped README wording differs from the block Task 4 shows above, and the screen-capture-unavailable error was reworded from what that task's code block shows; both are expected, since this section reflects what actually shipped, not the numbered tasks above.
+- Test counts have also grown well past the numbers stated when each task above was written (for example Task 1's "PASS, 7 tests"); trust the suite's current output, not those figures.
+
+### Code review round 1
+
+- `f2e23c8`: `userContent` builds chat content, and New conversation clears the attachment.
+- `d4bc723`: frozen registry entries, limit validation, and PNG 0×0 rejection.
+- `37c800e`: one helper runner that confirms the status line, times out, and names any error code.
+- `efce5a7`: `resolvePoint` before and after approval, plus refusing clock-shifted captures.
+- `ce44f82`: notes only for fresh captures whose PNG matches, plus the stale note.
+- `2bc6b45`: shared `screenshotIdSchema`/`pointLabelSchema` with a visible-text rule, and `pointPrompt` puts the label in `detail`.
+- `667e1ee`: hide covering OpenMuse windows during the ring.
+- `c2450e2`: `fitThumbnail`, `sameBounds`, separate capture errors, and a re-check of the display after capture.

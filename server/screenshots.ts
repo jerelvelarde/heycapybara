@@ -14,11 +14,18 @@ export type Screenshot = Readonly<{
 
 // Codex re-encodes prompt images outside these limits (codex-rs utils/image,
 // PromptImageMode::HIGH_DETAIL). A resized image no longer matches the pixel
-// size we give the model, so every capture must fit them.
+// size we give the model, so every capture must fit them. Checked against
+// codex 0.156.1; recheck on upgrade. Codex core's `image_preparation` picks
+// HIGH_DETAIL by default, but its unified-image-budget feature instead uses
+// the larger ORIGINAL_DETAIL limits, which these captures also fit.
 const MAX_DIMENSION = 2048;
 const MAX_PATCHES = 2500;
 const PATCH_SIZE = 32;
+
+// Keeps headroom under the 2048 px limit above and stays legible.
 const CAPTURE_MAX_DIMENSION = 1920;
+
+// Captures older than this are refused as stale; ask for a fresh one instead.
 const MAX_AGE_MS = 10 * 60 * 1000;
 
 export function fitsPromptBudget({ width, height }: Size) {
@@ -42,6 +49,8 @@ export function captureSize(display: Size): Size {
     1,
     CAPTURE_MAX_DIMENSION / Math.max(display.width, display.height),
   );
+  // Shrinks 2% at a time until the image fits the prompt budget, landing
+  // slightly under the largest size Codex would accept.
   for (;;) {
     const size = {
       width: Math.max(1, Math.floor(display.width * scale)),
@@ -158,7 +167,11 @@ export function screenPoint(
     throw new Error(
       `(${point.x}, ${point.y}) is outside the ${shot.width}×${shot.height} screenshot.`,
     );
-  // Target the centre of the pixel so edge pixels stay inside the display.
+  // Snaps to the pixel the point falls in, then targets its centre: the
+  // helper's hit test treats a display's top edge as outside (Cocoa maxY is
+  // exclusive after its y-flip), so an uncentred row 0 would miss. Flooring
+  // first keeps a fractional point in the last pixel from spilling past the
+  // far edge.
   return {
     x: bounds.x + ((Math.floor(point.x) + 0.5) * bounds.width) / shot.width,
     y: bounds.y + ((Math.floor(point.y) + 0.5) * bounds.height) / shot.height,
@@ -190,7 +203,9 @@ export function resolvePoint(
 }
 
 // The Codex SDK joins every text part into one prompt and passes images
-// separately, in order, so each note names its image by position.
+// separately, in order, so each note names its image by position. Codex
+// itself labels each one `[Image #N]` in that same order, so the numbers
+// line up with what the model sees.
 export function describeScreenshot(shot: Screenshot, imageNumber: number) {
   return `Image ${imageNumber} in this message is screenshot ${shot.id} of ${shot.label}, ${shot.width}×${shot.height} pixels. To point at something in it, call point_on_screen with screenshotId "${shot.id}", a short label, and x, y in that image's pixels (origin at the top-left, x rightward, y downward).`;
 }

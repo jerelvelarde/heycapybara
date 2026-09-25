@@ -24,7 +24,7 @@ Deferred: the capybara flying to its target (a click-through overlay at screen-s
 - Every desktop action still needs the native "Allow once" approval. Pointing does not click or type.
 - Model and Intelligence keys stay in the Node runtime. Nothing new reaches a renderer or a Codex shell.
 - A failure names its real cause. Never mock success or say "out of credits" (Clicky plays that for every error).
-- Nothing is sent to analytics. Clicky sends full transcripts and replies to PostHog.
+- No PR in this stack adds analytics or sends transcripts anywhere new; Clicky sends full transcripts and replies to PostHog. The CopilotKit runtime's built-in usage telemetry predates this stack and is out of its scope.
 - Permissions are read live, never cached as a boolean (Clicky caches Screen Recording after one capture).
 - The Swift helper stays the only native process, and each new capability is a separate command in its JSONL protocol.
 - `com.kite.sprite`, `Application Support/Kite`, the `kite:` IPC namespace and `KITE_*` variables stay as they are.
@@ -45,16 +45,16 @@ If a capture comes back larger than its target, for example a 2x thumbnail, it i
 **Contract.**
 
 1. The main process captures a display and measures the PNG it produced by reading the header, instead of trusting the requested size.
-2. It registers `{id, displayId, label, bounds, width, height, capturedAt}` in an in-memory registry that keeps the 16 most recent captures. IDs look like `shot_1a2b3c4d`, so an ID from an earlier session is vanishingly unlikely to match a new capture.
-3. The screenshot IPC call returns `{id, label, width, height, dataUrl}`. The renderer puts the ID on the image part (AG-UI binary content allows `id`).
-4. The Codex adapter adds a note for each image and names the image by position, for example `Image 1 in this message is screenshot shot_1a2b3c4d of Built-in Retina Display, 1512×982 pixels`. Position is used because the Codex SDK joins every text part into one prompt and passes images separately, in order. The wording is written on the server, so neither the renderer nor the stored thread message carries prompt text. Images without a known ID get a note saying they can't be pointed into.
+2. It registers `{id, displayId, label, bounds, width, height, capturedAt}` in an in-memory registry that keeps the 16 most recent captures, freezing each entry so it can't change after the fact. IDs are `shot_` plus 32 random bits (for example `shot_1a2b3c4d`), so an ID from an earlier session is vanishingly unlikely to match a new capture.
+3. The screenshot IPC call returns `{id, label, width, height, dataUrl}`. The renderer puts the ID on the image part's `id` field, AG-UI's content-reference field. It survives only because `KiteCodexAgent` reports AG-UI 0.0.59; `@ag-ui/client`'s 0.0.47 compatibility middleware would rebuild binary parts without it. A test in `tests/message-content.test.ts` pins this.
+4. The Codex adapter adds a note for each image and names the image by position, for example `Image 1 in this message is screenshot shot_1a2b3c4d of Built-in Retina Display, 1512×982 pixels`. Position is used because the Codex SDK joins every text part into one prompt and passes images separately, in order. The wording is written on the server, so neither the renderer nor the AG-UI and Intelligence thread message carries prompt text, though the Codex session transcript does keep the notes. An image is described as pointable only when its capture is still registered, fresh, and the same size as the attached PNG; otherwise it gets a note saying it can't be pointed into, or, if the capture is merely stale, a note saying it is too old to point at.
 5. `point_on_screen` takes `{screenshotId, x, y, label}`, with x and y in the image's pixels. The main process converts the center of that pixel to global screen points. It refuses when:
    - the ID is unknown;
    - the capture is more than 10 minutes old;
    - the display is gone, or its bounds have changed since the capture;
    - the point is outside the image.
 
-   Each refusal names its cause. When the screenshot can no longer be used (unknown ID, too old, display gone or changed), it tells the model to ask for a new one; a point outside the image gives the image's size so the model can retry. The label is one line of 1 to 60 characters with no control, private-use or unassigned characters, no format characters other than ZWNJ and ZWJ, and no line or paragraph separators, because it is shown verbatim in the approval prompt. The approval prompt now reads `Point at "<label>" on <display>` instead of raw coordinates.
+   Refusals are checked when the model asks and again after "Allow once" (via `resolvePoint`), because the display can change or the capture expire while the prompt is open. A capture whose clock went backwards also counts as stale. Each refusal names its cause. When the screenshot can no longer be used (unknown ID, too old, display gone or changed), it tells the model to ask for a new one; a point outside the image gives the image's size so the model can retry. The label is one line of 1 to 60 characters with no control, private-use or unassigned characters, no format characters other than ZWNJ and ZWJ, no line or paragraph separators, and at least one visible character, because it is shown verbatim in the approval prompt. The approval prompt reads `Show a pointer on <display>`, with the model's label on its own attributed line: `The agent says it points at: <label>`. It no longer says `Point at "<label>" on <display>`. While the ring shows, OpenMuse windows that would cover it are hidden, and they come back without taking focus. Every helper call goes through `runHelper`. It names the failure cause without the helper's path, requires the helper's success status line, and times out after 15 s.
 
 **Capture target.** This PR still captures only the primary display; PR 3 handles every display. It also removes the silent fallback to the first capture source: an image of the wrong display would put the pointer in the wrong place.
 
@@ -68,6 +68,10 @@ If a capture comes back larger than its target, for example a 2x thumbnail, it i
 - Every refusal case.
 - The tool schema.
 - The Codex prompt: a note before a known image, the fallback note for an unknown one, and the updated instructions.
+- `resolvePoint`, `isFresh`, `fitThumbnail`, `sameBounds`, and `coversPoint` directly.
+- `userContent`, including the AG-UI version pin that keeps the screenshot ID on its image part.
+- The helper runner.
+- The shared label schema, together with `pointPrompt`.
 
 **Verification.** A live check with Screen Recording and a model key: attach a screenshot, ask to point at the Apple menu, and approve. The ring should land on it.
 
