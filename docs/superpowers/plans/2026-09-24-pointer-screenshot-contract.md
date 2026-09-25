@@ -4,7 +4,7 @@
 
 **Goal:** When the agent points at something it saw in an attached screenshot, the pointer lands on that thing.
 
-**Architecture:** The main process sizes every capture so Codex passes it through unchanged. It measures the PNG it actually produced and registers the capture's display geometry under a random ID. The Codex adapter puts one line of text before each image, giving the ID and pixel size. `point_on_screen` takes that ID plus x, y in image pixels. The main process converts the point to global screen points and hands it to the existing Swift `--point` command.
+**Architecture:** The main process sizes every capture so Codex passes it through unchanged. It measures the PNG it actually produced and registers the capture's display geometry under a random ID. The Codex adapter adds a note for each image, naming it by position (the Codex SDK joins text parts into one prompt and passes images separately, in order) and giving its screenshot ID and pixel size. `point_on_screen` takes that ID plus x, y in image pixels. The main process converts the point to global screen points and hands it to the existing Swift `--point` command.
 
 **Tech Stack:** Electron 44, TypeScript 6, zod 4, `@openai/codex-sdk` 0.156.1, MCP SDK, Node test runner via `tsx --test`.
 
@@ -42,8 +42,8 @@
   - `pngSize(png: Uint8Array): Size`
   - `class ScreenshotRegistry { constructor(limit = 16, now = () => Date.now()); add(input: Omit<Screenshot, "id" | "capturedAt">): Screenshot; get(id: string): Screenshot | undefined }`
   - `screenPoint(shot: Screenshot, point: { x: number; y: number }, current: Rect | undefined, now = Date.now()): { x: number; y: number }`
-  - `describeScreenshot(shot: Screenshot): string`
-  - `const UNREFERENCED_IMAGE_NOTE: string`
+  - `describeScreenshot(shot: Screenshot, imageNumber: number): string`
+  - `unreferencedImageNote(imageNumber: number): string`
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -59,6 +59,7 @@ import {
   fitsPromptBudget,
   pngSize,
   screenPoint,
+  unreferencedImageNote,
   type Screenshot,
 } from "../server/screenshots";
 
@@ -199,12 +200,16 @@ test("pointing refuses stale, moved, missing or out-of-range screenshots", () =>
     assert.throws(() => screenPoint(shot, point, display, now), /outside/);
 });
 
-test("the model is told the screenshot id, display and pixel size", () => {
-  const text = describeScreenshot(shot);
-  assert.match(text, /shot_0000000a/);
+test("the model is told which image is which screenshot, and its pixel size", () => {
+  const text = describeScreenshot(shot, 2);
+  assert.match(text, /^Image 2 in this message is screenshot shot_0000000a/);
   assert.match(text, /Built-in Retina Display/);
   assert.match(text, /1386×900 pixels/);
   assert.match(text, /point_on_screen/);
+  assert.match(
+    unreferencedImageNote(3),
+    /^Image 3 in this message has no screen reference/,
+  );
 });
 ```
 
@@ -347,12 +352,15 @@ export function screenPoint(
   };
 }
 
-export function describeScreenshot(shot: Screenshot) {
-  return `Screenshot ${shot.id} shows ${shot.label} at ${shot.width}×${shot.height} pixels. To point at something in it, call point_on_screen with screenshotId "${shot.id}", a short label, and x, y in this image's pixels (origin at the top-left, x rightward, y downward).`;
+// The Codex SDK joins every text part into one prompt and passes images
+// separately, in order, so each note names its image by position.
+export function describeScreenshot(shot: Screenshot, imageNumber: number) {
+  return `Image ${imageNumber} in this message is screenshot ${shot.id} of ${shot.label}, ${shot.width}×${shot.height} pixels. To point at something in it, call point_on_screen with screenshotId "${shot.id}", a short label, and x, y in that image's pixels (origin at the top-left, x rightward, y downward).`;
 }
 
-export const UNREFERENCED_IMAGE_NOTE =
-  "The next image has no screen reference, so point_on_screen cannot target it.";
+export function unreferencedImageNote(imageNumber: number) {
+  return `Image ${imageNumber} in this message has no screen reference, so point_on_screen cannot target it.`;
+}
 ```
 
 - [ ] **Step 4: Run the tests to verify they pass**
@@ -379,7 +387,7 @@ git commit -m "feat: size and register screenshots for pointing"
 
 **Interfaces:**
 
-- Consumes: `describeScreenshot`, `UNREFERENCED_IMAGE_NOTE`, `type Screenshot` from Task 1.
+- Consumes: `describeScreenshot`, `unreferencedImageNote`, `type Screenshot` from Task 1.
 - Produces:
   - `CodexRunnerOptions.screenshots?: { get(id: string): Screenshot | undefined }`
   - `startRuntime(store, { ..., screenshots?: { get(id: string): Screenshot | undefined } })`
@@ -467,9 +475,13 @@ test("attached screenshots are introduced with their id, display and pixel size"
       parts.map((part) => part.type),
       ["text", "text", "local_image", "text", "local_image"],
     );
+    assert.match(parts[1].text ?? "", /^Image 1 in this message is screenshot/);
     assert.match(parts[1].text ?? "", new RegExp(shot.id));
     assert.match(parts[1].text ?? "", /1512×982 pixels/);
-    assert.match(parts[3].text ?? "", /cannot target it/);
+    assert.match(
+      parts[3].text ?? "",
+      /^Image 2 in this message has no screen reference/,
+    );
     assert.match(instructions, /never guess screen coordinates/i);
   } finally {
     await rm(root, { recursive: true, force: true });
@@ -489,7 +501,7 @@ In `server/codex-agent.ts`, add the import under the existing `./codex-events` i
 ```ts
 import {
   describeScreenshot,
-  UNREFERENCED_IMAGE_NOTE,
+  unreferencedImageNote,
   type Screenshot,
 } from "./screenshots";
 ```
@@ -503,7 +515,7 @@ Desktop tools can open installed apps or show a pointer after native approval. T
 with:
 
 ```
-Desktop tools can open installed apps or show a pointer after native approval. They cannot click or type. To point, pass the screenshot id and x, y in that screenshot's pixels from the note before each attached screenshot; never guess screen coordinates or point without a screenshot. Never use shell,
+Desktop tools can open installed apps or show a pointer after native approval. They cannot click or type. To point, pass the screenshot id and x, y in that screenshot's pixels, as given in the note that describes each attached image; never guess screen coordinates or point without a screenshot. Never use shell,
 ```
 
 Add the option to `CodexRunnerOptions`, directly after `binaryPath?: string;`:
@@ -512,13 +524,16 @@ Add the option to `CodexRunnerOptions`, directly after `binaryPath?: string;`:
   screenshots?: { get(id: string): Screenshot | undefined };
 ```
 
-In the `part.type === "binary"` branch, insert the note immediately after the size/MIME validation `throw` and before `temp ??= ...`:
+Declare `let imageNumber = 0;` on its own line directly before `if (typeof latest.content === "string")`. Then, in the `part.type === "binary"` branch, insert the note immediately after the size/MIME validation `throw` and before `temp ??= ...`:
 
 ```ts
+imageNumber += 1;
 const shot = part.id ? this.options.screenshots?.get(part.id) : undefined;
 prompt.push({
   type: "text",
-  text: shot ? describeScreenshot(shot) : UNREFERENCED_IMAGE_NOTE,
+  text: shot
+    ? describeScreenshot(shot, imageNumber)
+    : unreferencedImageNote(imageNumber),
 });
 ```
 

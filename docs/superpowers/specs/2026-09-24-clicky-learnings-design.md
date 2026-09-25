@@ -47,7 +47,7 @@ A 1512×982 display is captured at 1512×982, and a 2560×1440 display at 1920×
 1. The main process captures a display and measures the PNG it produced by reading the header, instead of trusting the requested size.
 2. It registers `{id, displayId, label, bounds, width, height, capturedAt}` in an in-memory registry that keeps the 16 most recent captures. IDs look like `shot_1a2b3c4d`, so an ID from an earlier session can never match a new capture.
 3. The screenshot IPC call returns `{id, label, width, height, dataUrl}`. The renderer puts the ID on the image part (AG-UI binary content allows `id`).
-4. The Codex adapter looks up each image's ID and puts one line of text before the image. The line gives the screenshot ID, the display name, its size in pixels, and how to call `point_on_screen`. The wording is written on the server, so neither the renderer nor the stored thread message carries prompt text. Images without a known ID get a note saying they can't be pointed into.
+4. The Codex adapter adds a note for each image and names the image by position, for example `Image 1 in this message is screenshot shot_1a2b3c4d of Built-in Retina Display, 1512×982 pixels`. Position is used because the Codex SDK joins every text part into one prompt and passes images separately, in order. The wording is written on the server, so neither the renderer nor the stored thread message carries prompt text. Images without a known ID get a note saying they can't be pointed into.
 5. `point_on_screen` takes `{screenshotId, x, y, label}`, with x and y in the image's pixels. The main process converts the center of that pixel to global screen points. It refuses when:
    - the ID is unknown;
    - the capture is more than 10 minutes old;
