@@ -51,7 +51,12 @@ import {
 } from "./buddy-position";
 import { runHelper, helperStatus } from "./helper-result";
 import { performPointAction } from "./point-action";
-import { askApproval, approvalHost } from "./approval";
+import {
+  askApproval,
+  approvalHost,
+  throwIfCancelled,
+  type ApprovalPrompt,
+} from "./approval";
 import { conceal, markTransparent } from "./window-occlusion";
 import type { Point } from "../src/buddy-drag";
 import { pointLabelSchema, screenshotIdSchema } from "../server/point-schema";
@@ -213,31 +218,73 @@ function openMuseWindows() {
     (win) => win && !win.isDestroyed(),
   );
 }
-async function approve(prompt: { message: string; detail?: string }) {
-  return askApproval(prompt, {
-    activate: () => {
-      app.focus({ steal: true });
-      // Does nothing when OpenMuse is already the active app.
-      app.dock?.bounce("critical");
-    },
-    showMessageBox: (options) => {
-      const { host, mustShow } = approvalHost(companionChat, workspace);
-      if (mustShow) openWorkspace();
-      // A hidden parent makes Electron fall back to the blocking,
-      // parentless path on macOS, so only attach a host that is actually
-      // on screen right now.
-      return host.isVisible()
-        ? dialog.showMessageBox(host, options)
-        : dialog.showMessageBox(options);
-    },
-  });
+// How many approval sheets each window is hosting right now. Hiding a window
+// ends the sheet on it as a Cancel (NativeWindowMac::Hide), so openWorkspace
+// leaves a companion chat that is hosting one on screen.
+const approvalHosts = new Map<BrowserWindow, number>();
+async function approve(prompt: ApprovalPrompt, signal?: AbortSignal) {
+  const { host, mustShow } = approvalHost({ companionChat, workspace });
+  // -1, as bounce() itself returns when OpenMuse is already active, means
+  // there is no bounce to cancel.
+  let bounce = -1;
+  approvalHosts.set(host, (approvalHosts.get(host) ?? 0) + 1);
+  try {
+    return await askApproval(
+      prompt,
+      {
+        activate: () => {
+          app.focus({ steal: true });
+          // The companion chat floats above every app on every Space, so a
+          // sheet on it is in view without activation; only the workspace
+          // can sit behind another app.
+          if (host === workspace) bounce = app.dock?.bounce("critical") ?? -1;
+        },
+        showMessageBox: (options) => {
+          if (mustShow) {
+            // openWorkspace never calls restore(), and focus() does nothing
+            // on a window that isn't visible, which a minimized one isn't.
+            if (workspace.isMinimized()) workspace.restore();
+            openWorkspace();
+          }
+          // Always the parented form. The async message box attaches a sheet
+          // to its parent even while that window is hidden; the parentless
+          // form runs a blocking modal loop on macOS.
+          return dialog.showMessageBox(host, { ...options });
+        },
+        // Hiding a window ends its sheet and orders it out in the same call,
+        // and the box resolves on a later task, so a host that is off screen
+        // by then was dismissed, not answered. Electron's "hide" event can't
+        // tell us this: on macOS it comes from occlusion changes
+        // (windowDidChangeOcclusionState), so it also fires when another
+        // app's window fully covers the host, and it can arrive after the
+        // box has resolved.
+        hostHidden: () => host.isDestroyed() || !host.isVisible(),
+      },
+      signal,
+    );
+  } finally {
+    // A critical bounce lasts until OpenMuse is activated, so a prompt that
+    // ends while it's in the background (Stop, a timeout) would leave the
+    // icon bouncing for nothing.
+    if (bounce !== -1) app.dock?.cancelBounce(bounce);
+    const remaining = (approvalHosts.get(host) ?? 1) - 1;
+    if (remaining > 0) approvalHosts.set(host, remaining);
+    else approvalHosts.delete(host);
+  }
 }
-async function approvedAction(input: unknown) {
+// The runtime passes each tool call's AbortSignal. The IPC handler passes
+// only the renderer's action, and hands its arguments over unchecked, so the
+// signal is validated like the action.
+async function approvedAction(input: unknown, signalInput?: unknown) {
+  const signal = z.instanceof(AbortSignal).optional().parse(signalInput);
   const action = z
     .discriminatedUnion("type", [
       z.object({
         type: z.literal("open-app"),
-        bundleId: z.string().regex(/^[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+$/),
+        bundleId: z
+          .string()
+          .max(255)
+          .regex(/^[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+$/),
       }),
       z.object({
         type: z.literal("point"),
@@ -249,34 +296,46 @@ async function approvedAction(input: unknown) {
     ])
     .parse(input);
   if (action.type === "open-app") {
+    // The bundle id comes from the model, so like a pointer label it goes on
+    // its own attributed line in the detail, where it can't rewrite the
+    // message.
     if (
-      !(await approve({
-        message: `The agent wants to open ${action.bundleId}`,
-      }))
+      !(await approve(
+        {
+          message: "The agent wants to open an app",
+          detail: `The agent says the app is: ${action.bundleId}`,
+        },
+        signal,
+      ))
     )
       throw new Error("User declined action");
+    throwIfCancelled(signal);
     await runHelper(
       () => exec(helper, ["--open-app", action.bundleId], appLaunchTimeout),
       helperStatus.appOpened,
     );
     return;
   }
-  await performPointAction(action.label, {
-    resolve: () => resolvePoint(screenshots, screen.getAllDisplays(), action),
-    confirm: approve,
-    windows: openMuseWindows,
-    showPointer: async (point) => {
-      await runHelper(
-        () =>
-          exec(
-            helper,
-            ["--point", String(point.x), String(point.y)],
-            helperTimeout,
-          ),
-        helperStatus.pointDisplayed,
-      );
+  await performPointAction(
+    action.label,
+    {
+      resolve: () => resolvePoint(screenshots, screen.getAllDisplays(), action),
+      confirm: approve,
+      windows: openMuseWindows,
+      showPointer: async (point) => {
+        await runHelper(
+          () =>
+            exec(
+              helper,
+              ["--point", String(point.x), String(point.y)],
+              helperTimeout,
+            ),
+          helperStatus.pointDisplayed,
+        );
+      },
     },
-  });
+    signal,
+  );
 }
 
 async function permissions(): Promise<Permissions> {
@@ -418,7 +477,15 @@ async function startRecording(title: string) {
 }
 function openWorkspace() {
   if (!workspace || workspace.isDestroyed()) return;
-  if (companionChat && !companionChat.isDestroyed()) companionChat.hide();
+  // Hiding the chat would end an approval sheet on it as a Cancel the user
+  // never gave, so while it hosts one it stays on screen beside the
+  // workspace.
+  if (
+    companionChat &&
+    !companionChat.isDestroyed() &&
+    !approvalHosts.has(companionChat)
+  )
+    companionChat.hide();
   workspace.show();
   workspace.focus();
 }
@@ -433,6 +500,9 @@ function makeWindow(isBuddy: boolean) {
         buddyAreas(),
       )
     : undefined;
+  // The buddy is transparent; the workspace is opaque and keeps ordinary
+  // click handling, so it stays unmarked.
+  const transparent = isBuddy;
   const win = new BrowserWindow({
     width: isBuddy ? BUDDY_SIZE.width : 1240,
     height: isBuddy ? BUDDY_SIZE.height : 820,
@@ -443,7 +513,7 @@ function makeWindow(isBuddy: boolean) {
     show: false,
     title: "OpenMuse Desktop",
     backgroundColor: isBuddy ? "#00000000" : "#fcfcfc",
-    transparent: isBuddy,
+    transparent,
     frame: !isBuddy,
     ...(!isBuddy ? { titleBarStyle: "hiddenInset" as const } : {}),
     resizable: !isBuddy,
@@ -457,6 +527,9 @@ function makeWindow(isBuddy: boolean) {
       sandbox: true,
     },
   });
+  // Marked where it's made, so conceal() never costs a transparent window
+  // its click-through (see markTransparent).
+  if (transparent) markTransparent(win);
   win.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
   win.webContents.on("will-navigate", (event) => event.preventDefault());
   if (isBuddy)
@@ -498,6 +571,8 @@ function makeCompanionChatWindow() {
       sandbox: true,
     },
   });
+  // transparent: true above, so marked where it's made (see markTransparent).
+  markTransparent(win);
   win.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
   win.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
   win.webContents.on("will-navigate", (event) => event.preventDefault());
@@ -539,6 +614,8 @@ function makeNotchWindow() {
       sandbox: true,
     },
   });
+  // transparent: true above, so marked where it's made (see markTransparent).
+  markTransparent(win);
   win.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
   win.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
   win.webContents.on("will-navigate", (event) => event.preventDefault());
@@ -880,11 +957,6 @@ app
     buddy = makeWindow(true);
     notch = makeNotchWindow();
     companionChat = makeCompanionChatWindow();
-    // buddy, notch and companionChat are transparent: true; workspace is
-    // opaque and keeps ordinary click handling, so it stays unmarked.
-    markTransparent(buddy);
-    markTransparent(notch);
-    markTransparent(companionChat);
     const restoreVisibleBuddy = () => {
       buddyGesture = undefined;
       const [x, y] = buddy.getPosition();

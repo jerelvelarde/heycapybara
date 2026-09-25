@@ -1,5 +1,6 @@
 import type { Rect } from "../server/screenshots";
 import { pointPrompt } from "../server/point-schema";
+import { throwIfCancelled, type ApprovalPrompt } from "./approval";
 import {
   coversPoint,
   conceal,
@@ -12,20 +13,34 @@ export type PointWindow = ConcealableWindow & {
 };
 
 export type PointActionDeps = {
+  // Returns the registry's own screenshot object, so the same capture is the
+  // same object on every call (resolvePoint does).
   resolve(): { shot: { label: string }; point: { x: number; y: number } };
-  confirm(prompt: { message: string; detail?: string }): Promise<boolean>;
+  confirm(prompt: ApprovalPrompt, signal?: AbortSignal): Promise<boolean>;
   windows(): PointWindow[];
   showPointer(point: { x: number; y: number }): Promise<void>;
 };
 
-export async function performPointAction(label: string, deps: PointActionDeps) {
+export async function performPointAction(
+  label: string,
+  deps: PointActionDeps,
+  signal?: AbortSignal,
+) {
   // Resolve before asking so the user isn't asked to approve a point that already can't land.
-  const { shot } = deps.resolve();
-  if (!(await deps.confirm(pointPrompt(label, shot.label))))
+  const approved = deps.resolve();
+  if (!(await deps.confirm(pointPrompt(label, approved.shot.label), signal)))
     throw new Error("User declined action");
+  throwIfCancelled(signal);
   // Resolve again: while the dialog is open, the display can change, or the
   // screenshot can expire or be evicted by newer captures.
-  const { point } = deps.resolve();
+  const { shot, point } = deps.resolve();
+  // The user approved a pointer on the capture they were shown. An id that
+  // now names another capture would measure the point against an image
+  // they never saw.
+  if (shot !== approved.shot)
+    throw new Error(
+      "That screenshot was replaced while the prompt was open. Ask the user to attach a new one.",
+    );
   // The capture concealed our windows, so the model may be pointing at
   // something one of them now covers. The ring draws above them, so only
   // the target needs clearing.
@@ -35,7 +50,15 @@ export async function performPointAction(label: string, deps: PointActionDeps) {
   const restore = conceal(covering);
   try {
     await deps.showPointer(point);
-  } finally {
-    restore();
+  } catch (error) {
+    // The pointer's own failure is what the caller needs to see, so a
+    // restore that also fails doesn't replace it.
+    try {
+      restore();
+    } catch {
+      // ignored: the showPointer error above takes precedence
+    }
+    throw error;
   }
+  restore();
 }
