@@ -56,6 +56,7 @@ import {
   captureSize,
   fitsPromptBudget,
   pngSize,
+  screenPoint,
 } from "../server/screenshots";
 import type {
   CompanionTrayMode,
@@ -207,15 +208,32 @@ async function approvedAction(input: unknown) {
       }),
       z.object({
         type: z.literal("point"),
+        screenshotId: z.string().regex(/^shot_[0-9a-f]{8}$/),
         x: z.number().finite(),
         y: z.number().finite(),
+        label: z.string().trim().min(1).max(60),
       }),
     ])
     .parse(input);
-  const detail =
-    action.type === "open-app"
-      ? `Open application ${action.bundleId}`
-      : `Show a pointer at (${action.x}, ${action.y})`;
+  let detail: string;
+  let args: string[];
+  if (action.type === "open-app") {
+    detail = `Open application ${action.bundleId}`;
+    args = ["--open-app", action.bundleId];
+  } else {
+    const shot = screenshots.get(action.screenshotId);
+    if (!shot)
+      throw new Error(
+        "That screenshot is no longer available. Ask the user to attach a new one.",
+      );
+    const display = screen
+      .getAllDisplays()
+      .find((candidate) => String(candidate.id) === shot.displayId);
+    // Check the geometry before asking, so the user never approves a point that cannot land.
+    const point = screenPoint(shot, action, display?.bounds);
+    detail = `Point at “${action.label}” on ${shot.label}`;
+    args = ["--point", String(point.x), String(point.y)];
+  }
   const result = await dialog.showMessageBox(workspace, {
     type: "question",
     title: "OpenMuse wants to take an action",
@@ -225,12 +243,7 @@ async function approvedAction(input: unknown) {
     cancelId: 0,
   });
   if (result.response !== 1) throw new Error("User declined action");
-  const { stdout } = await exec(
-    helper,
-    action.type === "open-app"
-      ? ["--open-app", action.bundleId]
-      : ["--point", String(action.x), String(action.y)],
-  );
+  const { stdout } = await exec(helper, args);
   const events = stdout
     .trim()
     .split("\n")
