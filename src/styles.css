@@ -927,6 +927,48 @@ button {
   padding: 2px 5px;
   border-radius: 3px;
 }
+.learning-strip {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin: 10px 16px 0;
+  padding: 8px 10px;
+  border-radius: 8px;
+  font-size: 11px;
+  line-height: 1.4;
+  background: var(--sky);
+}
+.learning-strip span {
+  flex: 1;
+}
+.learning-strip button {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11px;
+  color: var(--blue-dark);
+}
+.learning-strip.quiet {
+  background: var(--lavender);
+  color: var(--muted);
+}
+.learning-strip.success {
+  background: var(--green);
+}
+.learning-strip.error {
+  background: var(--orange);
+  color: #965446;
+}
+.learned-skill-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 10px;
+  background: var(--green);
+  padding: 3px 7px;
+  border-radius: 4px;
+  margin: 4px 0;
+}
 .thinking {
   display: flex;
   align-items: center;
