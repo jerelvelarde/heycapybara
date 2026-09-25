@@ -26,8 +26,12 @@ export type Skill = {
 };
 export type Permissions = { accessibility: boolean; screenCapture: boolean };
 export type Companion = "capybara" | "kite";
+export type Placement = "notch" | "floating";
+export type CompanionTrayMode = "chat" | "record";
 export type Settings = {
   companion: Companion;
+  placement: Placement;
+  onboardingComplete: boolean;
   backend: string;
   workspace: string;
   containerId: string;
@@ -45,6 +49,7 @@ export type Snapshot = {
   active: Recording | null;
   permissions: Permissions;
   settings: Settings;
+  trayMode: CompanionTrayMode;
 };
 export type DesktopAction =
   | { type: "open-app"; bundleId: string }
@@ -52,6 +57,14 @@ export type DesktopAction =
 export interface KiteAPI {
   state(): Promise<Snapshot>;
   setCompanion(companion: Companion): Promise<void>;
+  setPlacement(placement: Placement): Promise<void>;
+  completeOnboarding(): Promise<void>;
+  replayOnboarding(): Promise<void>;
+  startAppDrag(): void;
+  openAccessibilitySettings(): Promise<void>;
+  closeAccessibilityGuide(): Promise<void>;
+  revealAppInFinder(): Promise<void>;
+  setNotchExpanded(expanded: boolean): Promise<void>;
   setModelKey(key: string): Promise<void>;
   chooseWorkspace(): Promise<void>;
   verifyIntelligence(): Promise<void>;
@@ -77,6 +90,9 @@ export interface KiteAPI {
     action: "begin" | "move" | "end",
     point: { x: number; y: number },
   ): Promise<void>;
+  toggleCompanionChat(): Promise<void>;
+  openCompanionTray(mode: CompanionTrayMode): Promise<void>;
+  closeCompanionChat(): Promise<void>;
   openWorkspace(): Promise<void>;
   openIntelligence(): Promise<void>;
   onUpdate(callback: () => void): () => void;

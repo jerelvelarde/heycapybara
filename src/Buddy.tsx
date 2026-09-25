@@ -1,5 +1,5 @@
 import { useRef, useState, type ReactNode } from "react";
-import { Square } from "lucide-react";
+import { Circle, MessageCircle, Square } from "lucide-react";
 import { crossedDragThreshold, type Point } from "./buddy-drag";
 export function Buddy({
   active,
@@ -36,26 +36,30 @@ export function Buddy({
     gesture.current = null;
     setDragging(false);
   }
+  function toggleChat() {
+    void window
+      .kite!.toggleCompanionChat()
+      .catch((error: unknown) =>
+        setError(
+          error instanceof Error ? error.message : "Could not open chat",
+        ),
+      );
+  }
+  function openMode(mode: "chat" | "record") {
+    void window
+      .kite!.openCompanionTray(mode)
+      .catch((error: unknown) =>
+        setError(
+          error instanceof Error ? error.message : "Could not open controls",
+        ),
+      );
+  }
   return (
-    <div className="buddy">
-      <button
-        className="buddy-bubble"
-        onClick={() => void window.kite!.openWorkspace()}
-      >
-        {active ? (
-          <>
-            <span className="record-dot" /> Learning your moves…
-          </>
-        ) : (
-          <>
-            A little help? <span>⌘ ⇧ K</span>
-          </>
-        )}
-      </button>
+    <div className={"buddy" + (active ? " recording" : "")}>
       <button
         className={"buddy-sprite" + (dragging ? " dragging" : "")}
-        title="Click to open OpenMuse · drag to move"
-        aria-label="Open OpenMuse or drag to move companion"
+        title="Click to chat · drag to move"
+        aria-label="Chat with OpenMuse or drag to move companion"
         onPointerDown={(event) => {
           if (event.button !== 0 || !event.isPrimary) return;
           // Recover if macOS interrupted the previous gesture before release.
@@ -113,23 +117,47 @@ export function Buddy({
             suppressClick.current = false;
             return;
           }
-          void window.kite!.openWorkspace();
+          toggleChat();
         }}
       >
         {children}
       </button>
-      {active && (
+      <div className="buddy-actions" aria-label="Companion actions">
         <button
-          className="buddy-stop"
-          title="Stop recording"
-          onClick={() =>
-            void window
-              .kite!.stop()
-              .catch((error: Error) => setError(error.message))
-          }
+          title="Chat with OpenMuse"
+          aria-label="Chat with OpenMuse"
+          onClick={() => openMode("chat")}
         >
-          <Square size={12} />
+          <MessageCircle size={18} />
         </button>
+        <span className="buddy-actions-divider" />
+        {active ? (
+          <button
+            title="Stop recording"
+            aria-label="Stop recording"
+            onClick={() =>
+              void window
+                .kite!.stop()
+                .catch((error: Error) => setError(error.message))
+            }
+          >
+            <Square size={16} />
+          </button>
+        ) : (
+          <button
+            title="Record a workflow"
+            aria-label="Record a workflow"
+            onClick={() => openMode("record")}
+          >
+            <Circle size={17} />
+          </button>
+        )}
+      </div>
+      {active && (
+        <span
+          className="buddy-recording-indicator"
+          title="Recording in progress"
+        />
       )}
       {error && <span className="buddy-error">{error}</span>}
     </div>

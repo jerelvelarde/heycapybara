@@ -21,12 +21,23 @@ import {
 import { promisify } from "node:util";
 import { createInterface } from "node:readline";
 import { fileURLToPath } from "node:url";
-import { join, dirname } from "node:path";
+import { join, dirname, resolve } from "node:path";
 import { randomUUID } from "node:crypto";
 import { writeFile } from "node:fs/promises";
 import { z } from "zod";
 import { Store } from "./store";
-import { loadCompanion, saveCompanion, companionSchema } from "./preferences";
+import {
+  loadPreferences,
+  savePreferences,
+  companionSchema,
+  placementSchema,
+} from "./preferences";
+import { notchPosition } from "./notch-geometry";
+import {
+  CHAT_SIZE,
+  RECORD_SIZE,
+  companionTrayPosition,
+} from "./companion-chat-position";
 import { loadLinkedEnvironment } from "./environment";
 import { trayIcon } from "./tray-icon";
 import {
@@ -40,7 +51,7 @@ import {
 } from "./buddy-position";
 import type { Point } from "../src/buddy-drag";
 import { startRuntime } from "../server/runtime";
-import type { Permissions, Settings } from "../src/types";
+import type { CompanionTrayMode, Permissions, Settings } from "../src/types";
 
 // Preserve the installed app's data across the display-name rebrand.
 app.setPath("userData", join(app.getPath("appData"), "Kite"));
@@ -54,14 +65,100 @@ const helper = app.isPackaged
 const exec = promisify(execFile);
 let workspace: BrowserWindow;
 let buddy: BrowserWindow;
+let notch: BrowserWindow;
+let companionChat: BrowserWindow;
+let trayMode: CompanionTrayMode = "chat";
+let notchExpanded = false;
+let accessibilityGuideActive = false;
+let notchTopInset = 0;
+let appDragIcon: Electron.NativeImage;
 let tray: Tray;
 let buddyPosition: Point | undefined;
 let buddyGesture: BuddyGesture | undefined;
 let buddySaveQueue = Promise.resolve();
 const buddyPositionPath = () =>
   join(app.getPath("userData"), "buddy-position.json");
+const appBundlePath = () => resolve(app.getPath("exe"), "../../..");
 const buddyAreas = () =>
   screen.getAllDisplays().map((display) => display.workArea);
+function notchSize() {
+  return !settings?.onboardingComplete
+    ? accessibilityGuideActive
+      ? { width: 460, height: 190 }
+      : { width: 460, height: 640 }
+    : notchExpanded
+      ? { width: 360, height: 260 }
+      : { width: 250, height: 62 };
+}
+function fittedNotchBounds() {
+  const display = screen.getPrimaryDisplay();
+  const requested = notchSize();
+  const location = notchPosition(display, notchTopInset, requested);
+  const bounds = {
+    ...location,
+    width: requested.width,
+    height: Math.max(
+      1,
+      Math.min(
+        requested.height,
+        display.workArea.y + display.workArea.height - location.y - 8,
+      ),
+    ),
+  };
+  if (accessibilityGuideActive && !settings?.onboardingComplete)
+    bounds.y = Math.max(
+      display.workArea.y,
+      display.workArea.y + display.workArea.height - bounds.height - 20,
+    );
+  return bounds;
+}
+function positionNotch() {
+  if (!notch || notch.isDestroyed()) return;
+  notch.setBounds(fittedNotchBounds());
+}
+async function refreshNotchInset() {
+  const { stdout } = await exec(helper, ["--notch-inset"]);
+  notchTopInset = z
+    .object({ topInset: z.number().nonnegative() })
+    .parse(JSON.parse(stdout)).topInset;
+  positionNotch();
+}
+function syncCompanionWindows() {
+  if (!buddy || !notch || !settings) return;
+  positionNotch();
+  if (!settings.onboardingComplete || settings.placement === "notch") {
+    buddy.hide();
+    companionChat?.hide();
+    notch.showInactive();
+  } else {
+    notch.hide();
+    buddy.showInactive();
+  }
+}
+function positionCompanionChat() {
+  if (!companionChat || companionChat.isDestroyed() || !buddy) return;
+  const point = companionTrayPosition(
+    buddy.getBounds(),
+    buddyAreas(),
+    trayMode === "chat" ? CHAT_SIZE : RECORD_SIZE,
+  );
+  companionChat.setPosition(point.x, point.y);
+}
+function openCompanionTray(mode: CompanionTrayMode, toggle = false) {
+  if (settings.placement !== "floating" || !settings.onboardingComplete)
+    throw new Error("Select the floating companion to open its controls");
+  if (toggle && companionChat.isVisible() && trayMode === mode) {
+    companionChat.hide();
+  } else {
+    trayMode = mode;
+    const size = mode === "chat" ? CHAT_SIZE : RECORD_SIZE;
+    companionChat.setSize(size.width, size.height);
+    positionCompanionChat();
+    companionChat.show();
+    companionChat.focus();
+    broadcast();
+  }
+}
 function persistBuddyPosition() {
   const [x, y] = buddy.getPosition();
   const save = buddySaveQueue.then(() =>
@@ -74,7 +171,10 @@ function persistBuddyPosition() {
 function moveBuddy(cursor: Point) {
   if (!buddyGesture) return;
   const point = advanceBuddyGesture(buddyGesture, cursor, buddyAreas());
-  if (point) buddy.setPosition(point.x, point.y);
+  if (point) {
+    buddy.setPosition(point.x, point.y);
+    if (companionChat?.isVisible()) positionCompanionChat();
+  }
 }
 let recorder: ChildProcessWithoutNullStreams | null = null;
 let store: Store;
@@ -264,6 +364,8 @@ async function startRecording(title: string) {
   }
 }
 function openWorkspace() {
+  if (!workspace || workspace.isDestroyed()) return;
+  if (companionChat && !companionChat.isDestroyed()) companionChat.hide();
   workspace.show();
   workspace.focus();
 }
@@ -312,7 +414,89 @@ function makeWindow(isBuddy: boolean) {
     void win.loadFile(join(root, "dist/renderer/index.html"), {
       query: isBuddy ? { buddy: "1" } : {},
     });
-  win.once("ready-to-show", () => win.show());
+  win.once("ready-to-show", () => {
+    if (isBuddy) syncCompanionWindows();
+    else if (settings.placement !== "floating" || !settings.onboardingComplete)
+      win.show();
+  });
+  win.on("close", (event) => {
+    if (!(app as typeof app & { quitting?: boolean }).quitting) {
+      event.preventDefault();
+      win.hide();
+    }
+  });
+  return win;
+}
+function makeCompanionChatWindow() {
+  const win = new BrowserWindow({
+    ...CHAT_SIZE,
+    show: false,
+    frame: false,
+    transparent: true,
+    resizable: false,
+    alwaysOnTop: true,
+    acceptFirstMouse: true,
+    skipTaskbar: true,
+    backgroundColor: "#00000000",
+    webPreferences: {
+      preload: join(dirname(fileURLToPath(import.meta.url)), "preload.cjs"),
+      contextIsolation: true,
+      nodeIntegration: false,
+      sandbox: true,
+    },
+  });
+  win.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
+  win.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
+  win.webContents.on("will-navigate", (event) => event.preventDefault());
+  const loaded = process.env.KITE_DEV_URL
+    ? win.loadURL(process.env.KITE_DEV_URL + "?companionChat=1")
+    : win.loadFile(join(root, "dist/renderer/index.html"), {
+        query: { companionChat: "1" },
+      });
+  void loaded.catch((error: unknown) =>
+    dialog.showErrorBox(
+      "OpenMuse chat could not load",
+      error instanceof Error ? error.message : "Unknown loading error",
+    ),
+  );
+  win.on("close", (event) => {
+    if (!(app as typeof app & { quitting?: boolean }).quitting) {
+      event.preventDefault();
+      win.hide();
+    }
+  });
+  return win;
+}
+function makeNotchWindow() {
+  const bounds = fittedNotchBounds();
+  const win = new BrowserWindow({
+    ...bounds,
+    show: false,
+    frame: false,
+    transparent: true,
+    resizable: false,
+    alwaysOnTop: true,
+    acceptFirstMouse: true,
+    skipTaskbar: true,
+    backgroundColor: "#00000000",
+    webPreferences: {
+      preload: join(dirname(fileURLToPath(import.meta.url)), "preload.cjs"),
+      contextIsolation: true,
+      nodeIntegration: false,
+      sandbox: true,
+    },
+  });
+  win.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
+  win.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
+  win.webContents.on("will-navigate", (event) => event.preventDefault());
+  if (process.env.KITE_DEV_URL)
+    void win.loadURL(process.env.KITE_DEV_URL + "?notch=1");
+  else
+    void win.loadFile(join(root, "dist/renderer/index.html"), {
+      query: { notch: "1" },
+    });
+  win.once("ready-to-show", syncCompanionWindows);
+  win.webContents.once("did-finish-load", syncCompanionWindows);
   win.on("close", (event) => {
     if (!(app as typeof app & { quitting?: boolean }).quitting) {
       event.preventDefault();
@@ -325,7 +509,12 @@ const text = z.string().max(12000);
 function handle(name: string, fn: (...args: unknown[]) => unknown) {
   ipcMain.handle("kite:" + name, (event, ...args) => {
     if (
-      ![workspace?.webContents, buddy?.webContents].includes(event.sender) ||
+      ![
+        workspace?.webContents,
+        buddy?.webContents,
+        notch?.webContents,
+        companionChat?.webContents,
+      ].includes(event.sender) ||
       event.senderFrame !== event.sender.mainFrame
     )
       throw new Error("Untrusted IPC sender");
@@ -347,18 +536,87 @@ app
     });
     settings = runtime.settings;
     const preferencesPath = join(app.getPath("userData"), "preferences.json");
-    settings.companion = await loadCompanion(preferencesPath);
+    const savedPreferences = await loadPreferences(preferencesPath);
+    settings.companion = savedPreferences.companion;
+    settings.placement = savedPreferences.placement;
+    settings.onboardingComplete = savedPreferences.onboardingComplete;
     let preferenceQueue = Promise.resolve();
-    handle("setCompanion", (input) => {
-      const companion = companionSchema.parse(input);
+    function updatePreferences(change: Partial<typeof savedPreferences>) {
       const update = preferenceQueue.then(async () => {
-        await saveCompanion(preferencesPath, companion);
-        settings.companion = companion;
+        const next = await savePreferences(preferencesPath, {
+          companion: settings.companion,
+          placement: settings.placement,
+          onboardingComplete: settings.onboardingComplete,
+          ...change,
+        });
+        settings.companion = next.companion;
+        settings.placement = next.placement;
+        settings.onboardingComplete = next.onboardingComplete;
+        if ("onboardingComplete" in change) {
+          notchExpanded = false;
+          accessibilityGuideActive = false;
+        }
+        syncCompanionWindows();
         broadcast();
       });
-      // Return errors to this caller, but allow a later save to retry.
+      // Return the failed write to this caller while keeping later saves retryable.
       preferenceQueue = update.catch(() => {});
       return update;
+    }
+    handle("setCompanion", (input) =>
+      updatePreferences({ companion: companionSchema.parse(input) }),
+    );
+    handle("setPlacement", (input) =>
+      updatePreferences({ placement: placementSchema.parse(input) }),
+    );
+    handle("completeOnboarding", () =>
+      updatePreferences({ onboardingComplete: true }),
+    );
+    handle("replayOnboarding", () =>
+      updatePreferences({ onboardingComplete: false }),
+    );
+    handle("revealAppInFinder", () => {
+      shell.showItemInFolder(app.isPackaged ? appBundlePath() : root);
+    });
+    ipcMain.handle("kite:openAccessibilitySettings", async (event) => {
+      if (
+        event.sender !== notch?.webContents ||
+        event.senderFrame !== event.sender.mainFrame
+      )
+        throw new Error("Untrusted setup sender");
+      accessibilityGuideActive = true;
+      positionNotch();
+      try {
+        await shell.openExternal(
+          "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility",
+        );
+      } catch (error) {
+        accessibilityGuideActive = false;
+        positionNotch();
+        throw error;
+      }
+    });
+    ipcMain.handle("kite:closeAccessibilityGuide", (event) => {
+      if (
+        event.sender !== notch?.webContents ||
+        event.senderFrame !== event.sender.mainFrame
+      )
+        throw new Error("Untrusted setup sender");
+      accessibilityGuideActive = false;
+      positionNotch();
+    });
+    handle("setNotchExpanded", (input) => {
+      notchExpanded = z.boolean().parse(input);
+      if (settings.onboardingComplete) positionNotch();
+    });
+    ipcMain.on("kite:startAppDrag", (event) => {
+      if (
+        event.sender !== notch?.webContents ||
+        event.senderFrame !== event.sender.mainFrame ||
+        !app.isPackaged
+      )
+        return;
+      event.sender.startDrag({ file: appBundlePath(), icon: appDragIcon });
     });
     session.defaultSession.setPermissionRequestHandler(
       (_wc, _permission, callback) => callback(false),
@@ -388,6 +646,7 @@ app
       active: store.active,
       permissions: await permissions(),
       settings,
+      trayMode,
     }));
     handle("reviewedRecording", async (id) => {
       await store.flush();
@@ -468,8 +727,12 @@ app
         throw new Error("Enable Screen Recording permission in Settings.");
       const restoreWorkspace = workspace.isVisible();
       const restoreBuddy = buddy.isVisible();
+      const restoreNotch = notch.isVisible();
+      const restoreChat = companionChat.isVisible();
       workspace.hide();
       buddy.hide();
+      notch.hide();
+      companionChat.hide();
       try {
         await new Promise((resolve) => setTimeout(resolve, 200));
         const sources = await desktopCapturer.getSources({
@@ -486,10 +749,36 @@ app
       } finally {
         if (restoreWorkspace) workspace.show();
         if (restoreBuddy) buddy.showInactive();
+        if (restoreNotch) notch.showInactive();
+        if (restoreChat) companionChat.showInactive();
       }
     });
     handle("action", approvedAction);
     handle("openWorkspace", openWorkspace);
+    ipcMain.handle("kite:toggleCompanionChat", (event) => {
+      if (
+        event.sender !== buddy?.webContents ||
+        event.senderFrame !== event.sender.mainFrame
+      )
+        throw new Error("Untrusted companion chat sender");
+      openCompanionTray("chat", true);
+    });
+    ipcMain.handle("kite:openCompanionTray", (event, input) => {
+      if (
+        event.sender !== buddy?.webContents ||
+        event.senderFrame !== event.sender.mainFrame
+      )
+        throw new Error("Untrusted companion tray sender");
+      openCompanionTray(z.enum(["chat", "record"]).parse(input));
+    });
+    ipcMain.handle("kite:closeCompanionChat", (event) => {
+      if (
+        event.sender !== companionChat?.webContents ||
+        event.senderFrame !== event.sender.mainFrame
+      )
+        throw new Error("Untrusted companion chat sender");
+      companionChat.hide();
+    });
     handle("openIntelligence", () =>
       shell.openExternal("https://dashboard.operations.copilotkit.ai"),
     );
@@ -521,13 +810,23 @@ app
         }
       },
     );
+    await refreshNotchInset();
+    const bundledIcon = nativeImage.createFromPath(
+      join(root, "dist/renderer/capybara.png"),
+    );
+    appDragIcon = bundledIcon.isEmpty()
+      ? nativeImage.createFromDataURL(trayIcon)
+      : bundledIcon.resize({ width: 64, height: 64 });
     workspace = makeWindow(false);
     buddy = makeWindow(true);
+    notch = makeNotchWindow();
+    companionChat = makeCompanionChatWindow();
     const restoreVisibleBuddy = () => {
       buddyGesture = undefined;
       const [x, y] = buddy.getPosition();
       const position = clampBuddyPosition({ x, y }, buddyAreas());
       buddy.setPosition(position.x, position.y);
+      positionCompanionChat();
       void persistBuddyPosition().catch((error: unknown) =>
         dialog.showMessageBox({
           type: "error",
@@ -536,8 +835,19 @@ app
         }),
       );
     };
-    screen.on("display-removed", restoreVisibleBuddy);
-    screen.on("display-metrics-changed", restoreVisibleBuddy);
+    function reflowDisplays() {
+      restoreVisibleBuddy();
+      void refreshNotchInset().catch((error: unknown) =>
+        dialog.showMessageBox({
+          type: "error",
+          message: "Could not reposition the notch companion",
+          detail: error instanceof Error ? error.message : "Unknown error",
+        }),
+      );
+    }
+    screen.on("display-removed", reflowDisplays);
+    screen.on("display-added", reflowDisplays);
+    screen.on("display-metrics-changed", reflowDisplays);
     if (
       !globalShortcut.register("CommandOrControl+Shift+K", () => {
         if (workspace.isVisible() && workspace.isFocused()) workspace.hide();
@@ -558,7 +868,19 @@ app
     tray.setContextMenu(
       Menu.buildFromTemplate([
         { label: "Open OpenMuse", click: openWorkspace },
-        { label: "Show companion", click: () => buddy.show() },
+        { label: "Show companion", click: syncCompanionWindows },
+        {
+          label: "Replay setup",
+          click: () => {
+            void updatePreferences({ onboardingComplete: false }).catch(
+              (error: unknown) =>
+                dialog.showErrorBox(
+                  "Could not replay setup",
+                  error instanceof Error ? error.message : "Unknown error",
+                ),
+            );
+          },
+        },
         {
           label: "Stop recording",
           click: () => {

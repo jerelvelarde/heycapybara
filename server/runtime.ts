@@ -140,6 +140,8 @@ export async function startRuntime(
   const settings = {
     backend: "Codex SDK",
     companion: "capybara" as const,
+    placement: "floating" as "notch" | "floating",
+    onboardingComplete: true,
     workspace,
     ...config,
     deliveryStatus: config.intelligenceConfigured

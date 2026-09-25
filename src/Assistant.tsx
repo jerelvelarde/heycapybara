@@ -22,12 +22,14 @@ export function Assistant({
   onDraft,
   onDone,
   onBusy,
+  newConversationSignal = 0,
 }: {
   settings: Settings;
   request: AgentRequest | null;
   onDraft: (markdown: string) => void;
   onDone: () => void;
   onBusy: (busy: boolean) => void;
+  newConversationSignal?: number;
 }) {
   const { agent, isReady } = useAgent();
   const { copilotkit } = useCopilotKit();
@@ -43,6 +45,16 @@ export function Assistant({
   const handled = useRef("");
   const bottom = useRef<HTMLDivElement>(null);
   const busyRef = useRef(false);
+  useEffect(() => {
+    if (!newConversationSignal) return;
+    agent.threadId = crypto.randomUUID();
+    agent.setMessages([]);
+    setInput("");
+    setImage("");
+    setError("");
+    setActivities([]);
+    setPhase("");
+  }, [newConversationSignal]);
   useEffect(() => {
     const subscription = agent.subscribe({
       onCustomEvent: ({ event }) => {
@@ -201,7 +213,13 @@ export function Assistant({
     <aside className="assistant">
       <header>
         <div className="assistant-heading">
-          <span className="mini-sprite">✦</span>
+          <span className="mini-sprite">
+            {settings.companion === "capybara" ? (
+              <img src="./capybara.png" alt="" />
+            ) : (
+              "✦"
+            )}
+          </span>
           <div>
             <strong>Your copilot</strong>
             <small>Codex · {settings.model}</small>
@@ -224,11 +242,15 @@ export function Assistant({
       <div className="conversation">
         {agent.messages.length === 0 ? (
           <div className="chat-welcome">
-            <div className="kite-face">
-              <i />
-              <i />
-              <span />
-            </div>
+            {settings.companion === "capybara" ? (
+              <img className="chat-capybara" src="./capybara.png" alt="" />
+            ) : (
+              <div className="kite-face">
+                <i />
+                <i />
+                <span />
+              </div>
+            )}
             <h3>
               A little help.
               <br />A little more you.
@@ -252,7 +274,7 @@ export function Assistant({
             .filter((m) => m.role === "user" || m.role === "assistant")
             .map((m) => (
               <div key={m.id} className={"message " + m.role}>
-                <small>{m.role === "user" ? "YOU" : "KITE"}</small>
+                <small>{m.role === "user" ? "YOU" : "OPENMUSE"}</small>
                 <p>
                   {typeof m.content === "string"
                     ? m.content.length > 2400 && m.role === "user"
