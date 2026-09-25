@@ -7,6 +7,7 @@ import {
   REPLACED_MESSAGE,
   SETTLE_MS,
   STOPPED_MESSAGE,
+  WINDOW_RESTORE_NOTE,
   clearAround,
   clickOnScreen,
   openUrl,
@@ -300,7 +301,7 @@ test("a capture becomes a tool screenshot with the PNG as bare base64", () => {
   assert.throws(
     () =>
       toActionScreenshot({ ...after, dataUrl: "data:image/jpeg;base64,AAAA" }),
-    /not a PNG image/,
+    { message: "Screen capture is not a PNG image." },
   );
 });
 
@@ -615,4 +616,80 @@ test("clearAround leaves hidden and faraway windows alone", () => {
   );
   clearAround({ x: 10, y: 10 }, [hidden.win, far.win])();
   assert.deepEqual(events, []);
+});
+
+test("a window that fails to come back is retried on the next clearAround, even far from where it failed", () => {
+  const events: string[] = [];
+  const chat = fakeWindow(
+    "chat",
+    { x: 150, y: 350, width: 380, height: 520 },
+    events,
+  );
+  markTransparent(chat.win);
+  let showAttempts = 0;
+  chat.win.showInactive = () => {
+    showAttempts += 1;
+    if (showAttempts === 1) throw new Error("boom");
+    chat.state.visible = true;
+    events.push("show:chat");
+  };
+  assert.throws(clearAround({ x: 150, y: 350 }, [chat.win]));
+  assert.equal(chat.state.visible, false);
+  // Nowhere near the window, and it's still reporting isVisible() === false,
+  // so only the earlier failure being remembered gets it retried here.
+  clearAround({ x: 9000, y: 9000 }, [chat.win])();
+  assert.equal(chat.state.visible, true);
+  assert.equal(showAttempts, 2);
+});
+
+test("a destroyed window is skipped, not tracked for retry", () => {
+  const events: string[] = [];
+  const chat = fakeWindow(
+    "chat",
+    { x: 150, y: 350, width: 380, height: 520 },
+    events,
+  );
+  markTransparent(chat.win);
+  chat.win.showInactive = () => {
+    throw new Error("boom");
+  };
+  assert.throws(clearAround({ x: 150, y: 350 }, [chat.win]));
+  chat.state.destroyed = true;
+  // A destroyed window can't come back and isn't retried; a later
+  // clearAround call must not touch it at all (isVisible()/getBounds()
+  // would throw on a real destroyed BrowserWindow).
+  chat.win.isVisible = () => {
+    throw new Error("Object has been destroyed");
+  };
+  chat.win.getBounds = () => {
+    throw new Error("Object has been destroyed");
+  };
+  clearAround({ x: 150, y: 350 }, [chat.win])();
+});
+
+test("a click whose window fails to come back still succeeds, and tells the model it may be hidden", async () => {
+  const events: string[] = [];
+  const chat = fakeWindow(
+    "chat",
+    { x: 150, y: 350, width: 380, height: 520 },
+    events,
+  );
+  markTransparent(chat.win);
+  chat.win.showInactive = () => {
+    throw new Error("window-specific detail that must not leak to the model");
+  };
+  const { deps } = harness({ windows: [chat.win] });
+  const originalConsoleError = console.error;
+  const logged: unknown[] = [];
+  console.error = (...args: unknown[]) => {
+    logged.push(args);
+  };
+  try {
+    const result = await clickOnScreen(click, fakeRun().run, live(), deps);
+    assert.ok(result.text.includes(WINDOW_RESTORE_NOTE));
+    assert.ok(!result.text.includes("must not leak"));
+    assert.equal(logged.length, 1);
+  } finally {
+    console.error = originalConsoleError;
+  }
 });

@@ -198,6 +198,19 @@ test("runHelper reports the right message for every failure shape", async () => 
         message: "The desktop helper timed out",
       },
       {
+        name: "a timeout on an input command (click) warns that input may already have gone",
+        run: () => Promise.reject(execFailure({ code: null, killed: true })),
+        expectedStatus: helperStatus.clickSent,
+        message:
+          "The desktop helper timed out; some input may already have been sent. Take a screenshot before retrying.",
+      },
+      {
+        name: "a timeout on a command that only shows something (--point) carries no input warning",
+        run: () => Promise.reject(execFailure({ code: null, killed: true })),
+        expectedStatus: helperStatus.pointDisplayed,
+        message: "The desktop helper timed out",
+      },
+      {
         name: "a real process that overflows maxBuffer",
         // `head` is a plain external command and `/dev/zero` a device
         // file, neither of them shell syntax, so this overflows the same

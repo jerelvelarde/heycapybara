@@ -81,6 +81,20 @@ export const helperStatus = {
 
 export type HelperStatus = (typeof helperStatus)[keyof typeof helperStatus];
 
+// The subset of helperStatus confirming a command that posts real input
+// (click, scroll, type, keys) or opens a real page (open-url), as opposed to
+// one that only shows something (--point, --open-app). runHelper reads a
+// call's expectedStatus to tell which kind it is, rather than taking a
+// separate flag: every input-command caller already passes one of these, so
+// no existing call site needs to change.
+const inputCommandStatus = new Set<HelperStatus>([
+  helperStatus.clickSent,
+  helperStatus.scrollSent,
+  helperStatus.textTyped,
+  helperStatus.keysPressed,
+  helperStatus.webPageOpened,
+]);
+
 type ExecFailure = Error & {
   stdout?: unknown;
   code?: unknown;
@@ -135,7 +149,11 @@ export async function runHelper(
   } catch (error) {
     if (!isHelperFailure(error)) throw error;
     failureMessage =
-      reportedError(String(error.stdout ?? "")) ?? failureCause(error);
+      reportedError(String(error.stdout ?? "")) ??
+      failureCause(
+        error,
+        expectedStatus !== undefined && inputCommandStatus.has(expectedStatus),
+      );
   }
   if (failureMessage !== undefined) throw new Error(failureMessage);
   const reported = reportedError(stdout);
@@ -176,8 +194,11 @@ const unrunnableHelperErrnos = new Set<number>([
   -86, // EBADARCH; macOS-only, and not in os.constants.errno
 ]);
 
-function failureCause(failure: ExecFailure) {
-  if (failure.killed === true) return "The desktop helper timed out";
+function failureCause(failure: ExecFailure, isInputCommand: boolean) {
+  if (failure.killed === true)
+    return isInputCommand
+      ? "The desktop helper timed out; some input may already have been sent. Take a screenshot before retrying."
+      : "The desktop helper timed out";
   if (typeof failure.signal === "string" && failure.signal)
     return crashSignals.has(failure.signal)
       ? `The desktop helper crashed (${failure.signal})`

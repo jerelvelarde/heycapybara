@@ -86,6 +86,8 @@ export const STOPPED_MESSAGE =
   "The task stopped while the action was running, so it may not have finished.";
 export const AFTER_INPUT_NOTE =
   "The screen may have changed, so call take_screenshot before your next click or scroll.";
+export const WINDOW_RESTORE_NOTE =
+  "OpenMuse couldn't bring back one of its own windows after the click; tell the user it may be hidden.";
 
 const PNG_DATA_URL = "data:image/png;base64,";
 
@@ -94,7 +96,7 @@ export function toActionScreenshot(
   attachment: ScreenshotAttachment,
 ): ActionScreenshot {
   if (!attachment.dataUrl.startsWith(PNG_DATA_URL))
-    throw new Error("Screen capture is not a PNG image");
+    throw new Error("Screen capture is not a PNG image.");
   return {
     id: attachment.id,
     label: attachment.label,
@@ -217,6 +219,14 @@ export async function openUrl(
   };
 }
 
+// Windows that clearAround hid but couldn't show again last time (their
+// showInactive() threw). Kept module-level, like window-occlusion.ts's
+// fades record, so the failure is retried instead of forgotten: a window
+// stuck hidden reports isVisible() === false, so without this it would
+// never again match the isVisible()-and-coversPoint check below and would
+// stay hidden for good.
+const stuckHidden = new WeakSet<ActionWindow>();
+
 // Keeps OpenMuse's own windows from taking input meant for the app under
 // them. conceal() makes an opaque window invisible and click-through. A
 // window marked transparent only turns invisible (markTransparent in
@@ -226,7 +236,10 @@ export async function openUrl(
 // sheet is open: input waits until none is (PROMPT_OPEN_MESSAGE).
 export function clearAround(point: Point, windows: ActionWindow[]) {
   const covering = windows.filter(
-    (win) => win.isVisible() && coversPoint(win.getBounds(), point),
+    (win) =>
+      !win.isDestroyed() &&
+      (stuckHidden.has(win) ||
+        (win.isVisible() && coversPoint(win.getBounds(), point))),
   );
   const restoreFaded = conceal(
     covering.filter((win) => !isMarkedTransparent(win)),
@@ -236,10 +249,18 @@ export function clearAround(point: Point, windows: ActionWindow[]) {
     let failed = false;
     let firstError: unknown;
     for (const win of hidden) {
+      // Quitting can destroy a window while input is under way; it can't
+      // come back, and it can't be retried either, so it's not worth
+      // tracking any further.
+      if (win.isDestroyed()) {
+        stuckHidden.delete(win);
+        continue;
+      }
       try {
-        // Quitting can destroy a window while input is under way.
-        if (!win.isDestroyed()) win.showInactive();
+        win.showInactive();
+        stuckHidden.delete(win);
       } catch (error) {
+        stuckHidden.add(win);
         if (!failed) {
           failed = true;
           firstError = error;
@@ -304,13 +325,18 @@ async function preparePointer(
 // Clears OpenMuse's windows from the spot, sends the input and brings them
 // back. Once the input has gone, failing to bring a window back doesn't fail
 // the action: the model would send it again. undoFade keeps a failed fade's
-// record, so a later conceal() and restore() retries it.
+// record, and clearAround's own stuckHidden set does the same for a hidden
+// window, so a later clearAround retries either kind of failure. The caller
+// still needs to know a window didn't come back, so it can tell the model;
+// the error itself isn't reported that way, since it can carry a window's
+// title or other detail no result text should leak, so only console.error
+// sees it.
 async function sendAt(
   point: Point,
   signal: AbortSignal,
   deps: ComputerDeps,
   input: () => Promise<void>,
-) {
+): Promise<{ restoreFailed: boolean }> {
   const restore = clearAround(point, deps.windows());
   try {
     await send(signal, input);
@@ -324,9 +350,14 @@ async function sendAt(
   }
   try {
     restore();
-  } catch {
-    // ignored: the input was sent; see the comment above
+  } catch (error) {
+    console.error(
+      "clearAround: a window failed to reappear after input",
+      error,
+    );
+    return { restoreFailed: true };
   }
+  return { restoreFailed: false };
 }
 
 async function thenScreenshot(
@@ -367,12 +398,13 @@ export async function clickOnScreen(
   deps: ComputerDeps,
 ): Promise<DesktopActionResult> {
   const point = await preparePointer(action, run, signal, deps);
-  await sendAt(point, signal, deps, () =>
+  const { restoreFailed } = await sendAt(point, signal, deps, () =>
     deps.click(point, action.button, action.clicks, signal),
   );
   const kind = CLICK_KIND[action.clicks] ?? "";
+  const restoreNote = restoreFailed ? ` ${WINDOW_RESTORE_NOTE}` : "";
   return thenScreenshot(
-    `OpenMuse sent a ${kind}${action.button} click to "${action.label}" at (${action.x}, ${action.y}) in ${action.screenshotId}.`,
+    `OpenMuse sent a ${kind}${action.button} click to "${action.label}" at (${action.x}, ${action.y}) in ${action.screenshotId}.${restoreNote}`,
     "click",
     run,
     signal,
@@ -387,12 +419,13 @@ export async function scrollOnScreen(
   deps: ComputerDeps,
 ): Promise<DesktopActionResult> {
   const point = await preparePointer(action, run, signal, deps);
-  await sendAt(point, signal, deps, () =>
+  const { restoreFailed } = await sendAt(point, signal, deps, () =>
     deps.scroll(point, action.direction, action.amount, signal),
   );
   const notches = plural(action.amount, "notch", "notches");
+  const restoreNote = restoreFailed ? ` ${WINDOW_RESTORE_NOTE}` : "";
   return thenScreenshot(
-    `OpenMuse scrolled ${action.direction} ${notches} over "${action.label}" at (${action.x}, ${action.y}) in ${action.screenshotId}.`,
+    `OpenMuse scrolled ${action.direction} ${notches} over "${action.label}" at (${action.x}, ${action.y}) in ${action.screenshotId}.${restoreNote}`,
     "scroll",
     run,
     signal,
