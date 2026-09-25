@@ -100,7 +100,9 @@ export async function startRuntime(
     screenshots: options.screenshots,
     runs,
     learnedSkills: deliveredSkills,
-    recallMemories: memory ? (query) => memory.recall(query) : undefined,
+    recallMemories: memory
+      ? (query, signal) => memory.recall(query, signal)
+      : undefined,
     getConfig: () => ({
       apiKey: sessionKey,
       model: config.model,
