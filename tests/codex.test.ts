@@ -1861,3 +1861,103 @@ test("Stop ends a run's MCP token at once, before Codex has exited", async () =>
     await rm(root, { recursive: true, force: true });
   }
 });
+
+// A kite tool Codex doesn't pre-approve is refused under
+// `approvalPolicy: "never"`, so a new tool that isn't on the list is dead.
+test("Codex pre-approves exactly the tools the kite MCP server publishes", async () => {
+  const { CodexRunner } = await import("../server/codex-agent");
+  const { createToolHandler } = await import("../server/tools");
+  const { ScreenshotRegistry } = await import("../server/screenshots");
+  const { Store } = await import("../electron/store");
+  const { mkdtemp, rm } = await import("node:fs/promises");
+  const { tmpdir } = await import("node:os");
+  const { join } = await import("node:path");
+  const root = await mkdtemp(join(tmpdir(), "kite-allowlist-test-"));
+  try {
+    const store = new Store(join(root, "store"));
+    await store.load();
+    const handler = createToolHandler({
+      store,
+      containerId: "desktop-workflows",
+    });
+    const listed = await handler(
+      new Request("http://127.0.0.1/mcp", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Accept: "application/json, text/event-stream",
+        },
+        body: JSON.stringify({
+          jsonrpc: "2.0",
+          id: 1,
+          method: "tools/list",
+          params: {},
+        }),
+      }),
+      Object.freeze({ id: "run-list", signal: new AbortController().signal }),
+    );
+    const published = (
+      (await listed.json()) as { result: { tools: { name: string }[] } }
+    ).result.tools
+      .map((tool) => tool.name)
+      .sort();
+    let approved: string[] = [];
+    const runner = new CodexRunner({
+      runs: new RunRegistry(),
+      statePath: join(root, "agent"),
+      screenshots: new ScreenshotRegistry(),
+      getConfig: () => ({
+        apiKey: "fixture-key",
+        model: "gpt-5.4",
+        workspace: "/test/one",
+        mcpUrl: "http://localhost/mcp",
+      }),
+      createClient: (options) => {
+        const servers = options.config?.mcp_servers as unknown as {
+          kite: { tools: Record<string, { approval_mode: string }> };
+        };
+        approved = Object.entries(servers.kite.tools)
+          .filter(([, tool]) => tool.approval_mode === "approve")
+          .map(([name]) => name)
+          .sort();
+        return {
+          startThread: () => ({
+            runStreamed: async () => ({
+              events: (async function* () {
+                yield {
+                  type: "thread.started" as const,
+                  thread_id: "native-1",
+                };
+              })(),
+            }),
+          }),
+          resumeThread: () => {
+            throw new Error("Unexpected resume");
+          },
+        };
+      },
+    });
+    for await (const event of runner.run(
+      runInput("allowlist"),
+      new AbortController().signal,
+    ))
+      assert.equal(event.type, "thread.started");
+    assert.deepEqual(approved, published);
+    assert.ok(published.includes("click_on_screen"));
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("the instructions describe computer use, and no longer say the agent can't click", async () => {
+  const { instructions } = await import("../server/codex-agent");
+  assert.match(instructions, /take_screenshot/);
+  assert.match(instructions, /control the Mac until the task ends/);
+  assert.match(instructions, /before the next click or scroll/);
+  assert.match(instructions, /web pages/);
+  assert.doesNotMatch(instructions, /cannot click or type/i);
+  assert.doesNotMatch(
+    instructions,
+    /Screenshots come only from user attachments/,
+  );
+});
