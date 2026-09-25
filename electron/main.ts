@@ -51,6 +51,7 @@ import {
 } from "./buddy-position";
 import { runHelper } from "./helper-result";
 import { performPointAction } from "./point-action";
+import { askApproval } from "./approval";
 import { conceal } from "./window-occlusion";
 import type { Point } from "../src/buddy-drag";
 import { pointLabelSchema, screenshotIdSchema } from "../server/point-schema";
@@ -217,19 +218,10 @@ function openMuseWindows() {
   );
 }
 async function approve(prompt: { message: string; detail?: string }) {
-  // No parent window: a sheet on a window sitting behind others could go
-  // unseen. A standalone alert always comes to the front, whichever window
-  // asked.
-  const result = await dialog.showMessageBox({
-    type: "question",
-    title: "OpenMuse wants to take an action",
-    message: prompt.message,
-    detail: prompt.detail,
-    buttons: ["Cancel", "Allow once"],
-    defaultId: 0,
-    cancelId: 0,
+  return askApproval(prompt, {
+    activate: () => app.focus({ steal: true }),
+    showMessageBox: (options) => dialog.showMessageBox(options),
   });
-  return result.response === 1;
 }
 async function approvedAction(input: unknown) {
   const action = z
