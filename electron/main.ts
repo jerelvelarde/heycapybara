@@ -49,7 +49,7 @@ import {
   loadBuddyPosition,
   saveBuddyPosition,
 } from "./buddy-position";
-import { helperResult } from "./helper-result";
+import { runHelper } from "./helper-result";
 import type { Point } from "../src/buddy-drag";
 import { startRuntime } from "../server/runtime";
 import {
@@ -244,15 +244,7 @@ async function approvedAction(input: unknown) {
     cancelId: 0,
   });
   if (result.response !== 1) throw new Error("User declined action");
-  try {
-    const { stdout } = await exec(helper, args);
-    helperResult(stdout, false);
-  } catch (error) {
-    // The helper prints its JSON error and exits non-zero; report its reason, not the command line.
-    if (error instanceof Error && "stdout" in error)
-      helperResult(String(error.stdout ?? ""), true);
-    throw error;
-  }
+  await runHelper(() => exec(helper, args));
 }
 
 async function permissions(): Promise<Permissions> {
