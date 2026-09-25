@@ -26,7 +26,8 @@ import { pngHeader } from "./png-fixture";
 const FAKE_CODEX = fileURLToPath(
   new URL("./fixtures/fake-codex.mjs", import.meta.url),
 );
-// What the fake CLI answers every prompt with.
+// What the fake CLI replies with, for every prompt except the hang trigger
+// below.
 const FAKE_REPLY = "Fake Codex finished the turn.";
 // Kept identical to tests/fixtures/fake-codex.mjs's own copy of this
 // constant: that file is spawned as a separate process by the Codex SDK, so
@@ -47,7 +48,7 @@ type CodexCall = {
   stdin: string;
   images: { size: number; header: string }[];
 };
-type RunEvent = { type: string; delta?: string };
+type RunEvent = { type: string; delta?: string; message?: string };
 type Runtime = {
   server: NodeJS.EventEmitter;
   close(): void;
@@ -152,10 +153,14 @@ async function postRun(
 }
 
 // Sends `agent/stop` the way the renderer does: the single-route envelope
-// @copilotkit/core's ProxiedCopilotRuntimeAgent.abortRun posts when it has no
-// known `runId` for the thread (node_modules/@copilotkit/core/dist/index.mjs)
-// -- a thread-scoped stop, with no `body` key.
-async function postStop(runtime: Runtime, threadId: string) {
+// @copilotkit/core's ProxiedCopilotRuntimeAgent.abortRun posts
+// (node_modules/@copilotkit/core/dist/index.mjs). It adds a run-scoped
+// `body: { runId }` whenever it has an active run recorded for this thread --
+// which is every real Stop press, since the button only appears while a run
+// is showing as active. `runId` stays an optional parameter here only to
+// keep the thread-scoped shape (no `body` key) available too, for the one
+// case the renderer itself falls back to it: no known runId for the thread.
+async function postStop(runtime: Runtime, threadId: string, runId?: string) {
   const response = await fetch(runtime.settings.runtimeUrl, {
     method: "POST",
     headers: {
@@ -165,6 +170,7 @@ async function postStop(runtime: Runtime, threadId: string) {
     body: JSON.stringify({
       method: "agent/stop",
       params: { agentId: "default", threadId },
+      ...(runId === undefined ? {} : { body: { runId } }),
     }),
     signal: AbortSignal.timeout(10_000),
   });
@@ -212,7 +218,11 @@ async function runThroughRuntime(
     await store.load();
     // The SDK spawns the CLI itself rather than through node, so the copy it
     // runs must be executable.
-    const binaryPath = join(root, "codex");
+    // `.mjs` makes Node treat this copy as ESM unambiguously: an
+    // extensionless copy relies on Node's module-syntax detection, which
+    // isn't available before Node 22.7 / 20.19 and would otherwise fail to
+    // parse this fixture's `import` statements as CommonJS.
+    const binaryPath = join(root, "codex.mjs");
     await copyFile(FAKE_CODEX, binaryPath);
     await chmod(binaryPath, 0o755);
     const statePath = join(root, "agent");
@@ -341,9 +351,10 @@ test("two attached images keep their order, so each note names the --image it de
 // sends `agent/stop`, and the runtime's in-memory runner handles that by
 // calling `agent.abortRun()` on the same (per-request) KiteCodexAgent
 // instance that is running (@copilotkit/runtime's InMemoryAgentRunner.stop).
-// Before this fixture's fake CLI had a hang mode, and before
-// KiteCodexAgent.abortRun existed, `agent/stop` would report `stopped: true`
-// while the Codex process kept running forever.
+// The fake CLI's hang mode gives this test a Codex process that would run
+// forever left alone, so it can prove `agent/stop` actually kills that
+// process and ends the run as stopped, not just reports `stopped: true`
+// while the process keeps going.
 test("agent/stop ends a run and kills its Codex process, with Intelligence off", async () => {
   const root = await mkdtemp(join(tmpdir(), "kite-runtime-e2e-stop-"));
   const restoreEnvironment = applyEnvironment();
@@ -352,7 +363,11 @@ test("agent/stop ends a run and kills its Codex process, with Intelligence off",
     const { startRuntime } = await import("../server/runtime");
     const store = new Store(join(root, "store"));
     await store.load();
-    const binaryPath = join(root, "codex");
+    // `.mjs` makes Node treat this copy as ESM unambiguously: an
+    // extensionless copy relies on Node's module-syntax detection, which
+    // isn't available before Node 22.7 / 20.19 and would otherwise fail to
+    // parse this fixture's `import` statements as CommonJS.
+    const binaryPath = join(root, "codex.mjs");
     await copyFile(FAKE_CODEX, binaryPath);
     await chmod(binaryPath, 0o755);
     const statePath = join(root, "agent");
@@ -365,8 +380,13 @@ test("agent/stop ends a run and kills its Codex process, with Intelligence off",
       assert.equal(runtime.settings.intelligenceConfigured, false);
       const threadId = "e2e-stop";
       // Not awaited yet: the fake CLI hangs, so this run doesn't finish
-      // until Stop ends it, below.
+      // until Stop ends it, below. Observed right away regardless: if an
+      // assertion between here and the real `await runPromise` further down
+      // throws first, this promise must still settle somewhere, or its
+      // eventual rejection (once the runtime closes under it) becomes an
+      // unhandled rejection instead.
       const runPromise = postRun(runtime, threadId, HANG_TRIGGER);
+      void runPromise.catch(() => {});
 
       const recordPath = join(statePath, "codex", "fake-codex-calls.json");
       let pid: number | undefined;
@@ -394,12 +414,16 @@ test("agent/stop ends a run and kills its Codex process, with Intelligence off",
         "expected the fake Codex process to still be running before Stop",
       );
 
-      const stop = await postStop(runtime, threadId);
+      // Matches what the renderer actually sends: a run is active for this
+      // thread, so ProxiedCopilotRuntimeAgent.abortRun posts this run's own
+      // runId in `body`, not the bodyless thread-scoped form.
+      const stop = await postStop(runtime, threadId, `${threadId}-run`);
       assert.equal(stop.status, 200, JSON.stringify(stop.body));
       assert.equal(stop.body.stopped, true);
 
-      // The load-bearing assertion: before KiteCodexAgent implemented
-      // abortRun, this timed out because the process never exited.
+      // The load-bearing assertion: proves `agent/stop` actually kills the
+      // Codex process instead of only marking the run as stopped while it
+      // keeps running.
       await waitUntil(() => !isAlive(activePid), { timeoutMs: 2_000 });
 
       // Stop must also end the run itself, not just the process: the
@@ -411,10 +435,12 @@ test("agent/stop ends a run and kills its Codex process, with Intelligence off",
         .filter((line) => line.startsWith("data: "))
         .map((line) => JSON.parse(line.slice("data: ".length)) as RunEvent);
       assert.equal(events[0]?.type, "RUN_STARTED");
+      const runError = events.find((event) => event.type === "RUN_ERROR");
       assert.ok(
-        events.some((event) => event.type === "RUN_ERROR"),
+        runError,
         `expected a RUN_ERROR event once Stop ended the run, got ${JSON.stringify(events)}`,
       );
+      assert.equal(runError?.message, "Run stopped");
     } finally {
       await closeRuntime(runtime);
     }

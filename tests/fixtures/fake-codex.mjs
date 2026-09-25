@@ -1,9 +1,10 @@
 #!/usr/bin/env node
 // Stands in for the `codex` CLI in tests/runtime-e2e.test.ts. The Codex SDK
 // spawns it as `codex exec --experimental-json ... --image <path>` and writes
-// the prompt to its stdin. It records that call, then prints the shortest
-// JSONL event stream the SDK accepts as one finished turn with one assistant
-// message.
+// the prompt to its stdin. It records that call, then prints a JSONL event
+// stream shaped like a real Codex turn -- though all a run actually needs to
+// finish successfully is one `agent_message` item and a `turn.completed`
+// event (see codexEvents and KiteCodexAgent.run in server/codex-agent.ts).
 //
 // A prompt containing HANG_TRIGGER switches it into hang mode instead: it
 // records its own pid, then blocks forever, printing nothing, until an
@@ -34,8 +35,9 @@ for await (const chunk of process.stdin) chunks.push(chunk);
 const stdin = Buffer.concat(chunks).toString("utf8");
 
 // CodexRunner deletes its copies of the images once the run ends, so what
-// identifies each one is read now: its size and its first 24 bytes, the PNG
-// signature and IHDR chunk that hold its width and height.
+// identifies each one is read now: its size and its first 24 bytes -- the
+// 8-byte PNG signature plus the start of the IHDR chunk (length, tag, width
+// and height; see pngSize in server/screenshots.ts), not the whole chunk.
 const images = [];
 argv.forEach((arg, index) => {
   if (arg !== "--image") return;
@@ -57,9 +59,10 @@ if (stdin.includes(HANG_TRIGGER)) {
   // when this process is up and running, then to confirm it later exits.
   calls.push({ argv, stdin, images, pid: process.pid });
   writeFileSync(record, JSON.stringify(calls, null, 2));
-  // Never resolves on its own; keeps the event loop alive (a bare pending
-  // Promise would not) so the process waits for an external kill instead of
-  // exiting once there is nothing left to do.
+  // Fires forever instead of resolving -- there is no promise here to
+  // resolve -- which keeps the event loop alive (a bare pending Promise
+  // would not do that on its own) so the process waits for an external kill
+  // instead of exiting once there is nothing left to do.
   setInterval(() => {}, 1 << 30);
 } else {
   calls.push({ argv, stdin, images });

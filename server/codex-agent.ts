@@ -43,9 +43,8 @@ export type CodexRunnerOptions = {
   statePath: string;
   binaryPath?: string;
   // Required, and never `undefined`: a caller must always wire up a real
-  // ScreenshotRegistry (server/screenshots.ts). Passing `undefined` used to
-  // typecheck and pass every test while silently turning off
-  // point_on_screen's screenshot notes; see the lookup used below in
+  // ScreenshotLookup (server/screenshots.ts), or point_on_screen's
+  // screenshot notes silently turn off; see the lookup used below in
   // `run()`. startRuntime's own options (server/runtime.ts) mirror this
   // same required shape.
   screenshots: ScreenshotLookup;
@@ -296,6 +295,20 @@ export class CodexRunner {
             );
           }
         }
+      // A Stop can land while everything above (mkdir, the thread mapping,
+      // writing images) is still running, before the Codex SDK has spawned
+      // anything. Without this check, `runStreamed` below would still spawn
+      // Codex with an already-aborted signal, and the SDK's own
+      // `child.stdin.write(args.input)` has no `error` listener
+      // (@openai/codex-sdk/dist/index.js): writing a large prompt --
+      // record-to-skill prompts reach 100,000 characters, see src/skill.ts
+      // -- to an already-dead child's stdin raises EPIPE, which crashes the
+      // whole process instead of just failing this run. This closes that
+      // window from our side; the SDK can still lose the same race
+      // internally if a kill lands within milliseconds of its own spawn call
+      // with a large prompt. That residual race is upstream, in
+      // @openai/codex-sdk, not something this check can close.
+      if (controller.signal.aborted) throw new Error("Run stopped");
       const { events } = await thread.runStreamed(prompt, {
         signal: controller.signal,
       });
@@ -318,19 +331,35 @@ export class CodexRunner {
     } finally {
       outerSignal.removeEventListener("abort", abort);
       this.active.delete(input.threadId);
-      if (temp) await rm(temp, { recursive: true, force: true });
+      // A failed cleanup (for example EACCES) must never replace this run's
+      // real outcome -- a per-image error from this same run, or an
+      // already-streamed successful reply -- with a cleanup error. The
+      // images live in a private per-run temp directory under statePath,
+      // and there is no logging infrastructure here to report a leaked one
+      // instead, so a failure is simply dropped.
+      if (temp)
+        await rm(temp, { recursive: true, force: true }).catch(() => {});
     }
   }
 }
 
 export class KiteCodexAgent extends AbstractAgent {
-  // Set for the duration of the active run (see `run()`), so `abortRun()` --
-  // called on this same instance by the runtime's agent runner when the user
-  // presses Stop -- has a controller to abort. `AbstractAgent.abortRun()`
-  // itself is an empty no-op; agents that can actually cancel a run override
-  // it (see @ag-ui/client's HttpAgent.abortRun, which aborts its own stored
-  // AbortController the same way).
+  // Set for the duration of the active run (see `run()`), so `abortRun()` has
+  // a controller to abort. Stop calls it on this same instance, but so does
+  // @copilotkit/runtime's own Intelligence runner: from `failThread`, a stop
+  // timeout, a permanent rejoin rejection, and repeated pre-join socket
+  // errors. All of those now end the local Codex turn the same way Stop
+  // does. `AbstractAgent.abortRun()` itself is an empty no-op; agents that
+  // can actually cancel a run override it (see @ag-ui/client's
+  // HttpAgent.abortRun, which aborts its own stored AbortController the same
+  // way).
   private controller?: AbortController;
+  // Latches an `abortRun()` that arrives before `run()` has subscribed and
+  // created a controller for it to abort -- otherwise that abort would just
+  // be dropped. `run()`'s subscribe callback consumes this immediately after
+  // creating its own controller, so the run it is about to start still ends
+  // as stopped.
+  private pendingAbort = false;
   constructor(private readonly stream: StreamRunner) {
     super({
       agentId: "default",
@@ -345,13 +374,18 @@ export class KiteCodexAgent extends AbstractAgent {
   // passed to the Codex SDK's `runStreamed`, which kills the spawned Codex
   // process the same way `CodexRunner.stop()` does.
   abortRun() {
-    this.controller?.abort();
+    if (this.controller) this.controller.abort();
+    else this.pendingAbort = true;
     super.abortRun();
   }
   run(input: RunAgentInput): Observable<BaseEvent> {
     return new Observable((subscriber) => {
       const controller = new AbortController();
       this.controller = controller;
+      if (this.pendingAbort) {
+        this.pendingAbort = false;
+        controller.abort();
+      }
       const emit = (event: BaseEvent) => subscriber.next(event);
       emit({
         type: EventType.RUN_STARTED,
@@ -374,7 +408,16 @@ export class KiteCodexAgent extends AbstractAgent {
             runId: input.runId,
           });
         } catch (error) {
-          emit({ type: EventType.RUN_ERROR, message: safeAgentError(error) });
+          // The SDK rethrows Node's own AbortError on a real Stop, not our
+          // "Run stopped" Error above, so checking the signal directly here
+          // -- rather than the caught error's message -- is what makes both
+          // paths report the same, user-facing "Run stopped".
+          emit({
+            type: EventType.RUN_ERROR,
+            message: controller.signal.aborted
+              ? "Run stopped"
+              : safeAgentError(error),
+          });
         } finally {
           // Only clear our own run's controller: if a new run has already
           // started (and so already replaced it), leave that one alone.

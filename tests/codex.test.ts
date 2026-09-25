@@ -116,9 +116,9 @@ test('abortRun() stops the active run: it aborts the run\'s signal and ends with
   const agent = new KiteCodexAgent(async function* (_input, signal) {
     runSignal = signal;
     yield { type: "turn.started" };
-    // Mirrors CodexRunner.run's own defensive check just below (`if
-    // (outerSignal.aborted) controller.abort();`): a signal can already be
-    // aborted by the time we get here, since `abortRun()` below runs
+    // Mirrors CodexRunner.run's own defensive check in server/codex-agent.ts
+    // (`if (outerSignal.aborted) controller.abort();`): a signal can already
+    // be aborted by the time we get here, since `abortRun()` below runs
     // synchronously right after `subscribe()`, before this generator is
     // resumed past its first `yield`. Without this check, an
     // already-fired "abort" event would have no listener left to catch it.
@@ -126,6 +126,16 @@ test('abortRun() stops the active run: it aborts the run\'s signal and ends with
       await new Promise<void>((resolve) =>
         signal.addEventListener("abort", () => resolve(), { once: true }),
       );
+    // The real Codex SDK rethrows Node's own AbortError once `spawn`'s
+    // `signal` kills the child process, rather than letting the stream end
+    // quietly (verified against Node: `name` "AbortError", `instanceof
+    // Error` true). Throwing that same shape here is what actually
+    // exercises KiteCodexAgent.run's `catch` branch the way a real Stop
+    // does, instead of this test passing only because of the `for await`
+    // loop's own post-loop `if (controller.signal.aborted)` check.
+    const abortError = new Error("The operation was aborted");
+    abortError.name = "AbortError";
+    throw abortError;
   });
   const events: { type: string; message?: string }[] = [];
   const done = new Promise<void>((resolve) =>
@@ -146,6 +156,40 @@ test('abortRun() stops the active run: it aborts the run\'s signal and ends with
   // InMemoryAgentRunner.stop in @copilotkit/runtime), without unsubscribing.
   agent.abortRun();
   await done;
+  assert.equal(runSignal?.aborted, true);
+  assert.deepEqual(
+    events.map((e) => e.type),
+    ["RUN_STARTED", "RUN_ERROR"],
+  );
+  assert.equal(events[1]?.message, "Run stopped");
+});
+
+test("abortRun() called before run() has subscribed still stops the run it precedes", async () => {
+  const { KiteCodexAgent } = await import("../server/codex-agent");
+  let runSignal: AbortSignal | undefined;
+  const agent = new KiteCodexAgent(async function* (_input, signal) {
+    runSignal = signal;
+    yield { type: "turn.started" };
+  });
+  // No run has started yet, so `this.controller` doesn't exist for
+  // `abortRun()` to reach. Without latching this request, it would be
+  // dropped on the floor, and the run started right below would complete
+  // normally instead of ending as stopped.
+  agent.abortRun();
+  const events: { type: string; message?: string }[] = [];
+  await new Promise<void>((resolve) =>
+    agent
+      .run({
+        threadId: "t",
+        runId: "r",
+        messages: [],
+        tools: [],
+        context: [],
+        state: {},
+        forwardedProps: {},
+      })
+      .subscribe({ next: (e) => events.push(e), complete: resolve }),
+  );
   assert.equal(runSignal?.aborted, true);
   assert.deepEqual(
     events.map((e) => e.type),
@@ -200,6 +244,65 @@ test("Codex receives only allowlisted environment and isolated shell home", asyn
     assert.ok(!JSON.stringify(env).includes("fixture-secret"));
   } finally {
     delete process.env.KITE_TEST_UNRELATED_SECRET;
+  }
+});
+
+test("a Stop that lands during prompt preparation never starts the native run", async () => {
+  const { CodexRunner } = await import("../server/codex-agent");
+  const { ScreenshotRegistry } = await import("../server/screenshots");
+  const { mkdtemp, rm } = await import("node:fs/promises");
+  const { tmpdir } = await import("node:os");
+  const { join } = await import("node:path");
+  const root = await mkdtemp(join(tmpdir(), "kite-prepare-abort-test-"));
+  let runStreamedCalls = 0;
+  const runner = new CodexRunner({
+    statePath: root,
+    screenshots: new ScreenshotRegistry(),
+    getConfig: () => ({
+      apiKey: "fixture-key",
+      model: "gpt-5.4",
+      workspace: "/test/one",
+      mcpUrl: "http://localhost/mcp",
+      mcpToken: "fixture-token",
+    }),
+    createClient: () => ({
+      startThread: () => ({
+        runStreamed: async () => {
+          runStreamedCalls += 1;
+          throw new Error("runStreamed should not be called");
+        },
+      }),
+      resumeThread: () => {
+        throw new Error("Unexpected resume");
+      },
+    }),
+  });
+  const controller = new AbortController();
+  const iterator = runner.run(
+    {
+      threadId: "prepare-abort",
+      runId: "r",
+      messages: [{ id: "m", role: "user", content: "hello" }],
+      tools: [],
+      context: [],
+      state: {},
+      forwardedProps: {},
+    },
+    controller.signal,
+  );
+  try {
+    // `run()` is an async generator: calling `.next()` starts it running
+    // from the top (mkdir, the thread mapping, ...) but suspends at its
+    // first `await` without this test awaiting anything yet, so aborting
+    // synchronously right after -- on the same tick, before that first
+    // `await mkdir(...)` can resolve -- reproduces a Stop landing while
+    // preparation is still in flight, well before `thread.runStreamed`.
+    const first = iterator.next();
+    controller.abort();
+    await assert.rejects(first, /Run stopped/);
+    assert.equal(runStreamedCalls, 0);
+  } finally {
+    await rm(root, { recursive: true, force: true });
   }
 });
 
@@ -1182,7 +1285,7 @@ test("the real AG-UI middleware pipeline still carries the screenshot id on a bi
 
 type NoteRow = {
   name: string;
-  hasRegistry: boolean;
+  runnerHasCapture: boolean;
   registryNow?: () => number;
   imageSize: { width: number; height: number };
   referenceId: "valid" | "unknown" | "none";
@@ -1192,13 +1295,9 @@ type NoteRow = {
 // Shared setup for the note-state matrix below. `registry.add` always runs,
 // so the capture always exists in a registry -- backdated or forward-dated
 // when the row sets `registryNow`, to land it outside the freshness window
-// either way. `hasRegistry` decides only whether the runner's own registry
-// actually contains that capture, not whether it is given a registry at all:
-// `screenshots` is no longer optional (see CodexRunnerOptions in
-// server/codex-agent.ts), so a row with `hasRegistry: false` still gets a
-// real registry, just an empty one. Attaches a single image referencing the
-// capture (or not), and returns the first prompt part's text -- the note
-// codex-agent.ts chose for that state.
+// either way. Attaches a single image referencing the capture (or not), and
+// returns the first prompt part's text -- the note codex-agent.ts chose for
+// that state.
 async function firstNoteFor(row: NoteRow) {
   const { CodexRunner } = await import("../server/codex-agent");
   const { ScreenshotRegistry } = await import("../server/screenshots");
@@ -1217,7 +1316,7 @@ async function firstNoteFor(row: NoteRow) {
   let prompt: unknown;
   const runner = new CodexRunner({
     statePath: root,
-    screenshots: row.hasRegistry ? registry : new ScreenshotRegistry(),
+    screenshots: row.runnerHasCapture ? registry : new ScreenshotRegistry(),
     getConfig: () => ({
       apiKey: "fixture-key",
       model: "gpt-5.4",
@@ -1287,14 +1386,14 @@ test("screenshot notes cover every state, checked in the documented order", asyn
   const rows: NoteRow[] = [
     {
       name: "fresh",
-      hasRegistry: true,
+      runnerHasCapture: true,
       imageSize: { width: 1386, height: 900 },
       referenceId: "valid",
       opening: "Image 1 in this message is screenshot",
     },
     {
       name: "stale",
-      hasRegistry: true,
+      runnerHasCapture: true,
       registryNow: () => Date.now() - 11 * 60 * 1000,
       imageSize: { width: 1386, height: 900 },
       referenceId: "valid",
@@ -1303,14 +1402,14 @@ test("screenshot notes cover every state, checked in the documented order", asyn
     },
     {
       name: "wrong size",
-      hasRegistry: true,
+      runnerHasCapture: true,
       imageSize: { width: 100, height: 100 },
       referenceId: "valid",
       opening: "Image 1 in this message doesn't match the screenshot it names",
     },
     {
       name: "stale and wrong size (must be mismatched)",
-      hasRegistry: true,
+      runnerHasCapture: true,
       registryNow: () => Date.now() - 11 * 60 * 1000,
       imageSize: { width: 100, height: 100 },
       referenceId: "valid",
@@ -1318,7 +1417,7 @@ test("screenshot notes cover every state, checked in the documented order", asyn
     },
     {
       name: "future capture time",
-      hasRegistry: true,
+      runnerHasCapture: true,
       registryNow: () => Date.now() + 5 * 60 * 1000,
       imageSize: { width: 1386, height: 900 },
       referenceId: "valid",
@@ -1327,7 +1426,7 @@ test("screenshot notes cover every state, checked in the documented order", asyn
     },
     {
       name: "unknown id",
-      hasRegistry: true,
+      runnerHasCapture: true,
       imageSize: { width: 1386, height: 900 },
       referenceId: "unknown",
       opening:
@@ -1335,14 +1434,14 @@ test("screenshot notes cover every state, checked in the documented order", asyn
     },
     {
       name: "no id",
-      hasRegistry: true,
+      runnerHasCapture: true,
       imageSize: { width: 1386, height: 900 },
       referenceId: "none",
       opening: "Image 1 in this message has no screen reference",
     },
     {
       name: "runner whose registry is empty, given an id it doesn't have (must be unknown)",
-      hasRegistry: false,
+      runnerHasCapture: false,
       imageSize: { width: 1386, height: 900 },
       referenceId: "valid",
       opening:
@@ -1463,6 +1562,129 @@ test("temp screenshot directories are removed after a successful run and after a
       "expected no leftover screen-* directory after image 2 fails validation",
     );
   } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("a failed temp cleanup never replaces the run's real outcome", async () => {
+  const { CodexRunner } = await import("../server/codex-agent");
+  const { ScreenshotRegistry } = await import("../server/screenshots");
+  const { mkdtemp, rm, chmod } = await import("node:fs/promises");
+  const { tmpdir } = await import("node:os");
+  const { join } = await import("node:path");
+  const root = await mkdtemp(join(tmpdir(), "kite-cleanup-fail-test-"));
+  const image = Buffer.from(pngHeader(10, 10)).toString("base64");
+  const contentWith = (data: string) => [
+    {
+      id: "m",
+      role: "user" as const,
+      content: [
+        { type: "binary" as const, mimeType: "image/png" as const, data },
+      ],
+    },
+  ];
+  try {
+    // The image is already written to its `screen-*` directory by the time
+    // `runStreamed` is called, so removing write permission on its parent
+    // (`root`, this runner's statePath) blocks the `finally` block's `rm`
+    // cleanup below without disturbing anything this run already wrote.
+    const successRunner = new CodexRunner({
+      statePath: root,
+      screenshots: new ScreenshotRegistry(),
+      getConfig: () => ({
+        apiKey: "fixture-key",
+        model: "gpt-5.4",
+        workspace: "/test/one",
+        mcpUrl: "http://localhost/mcp",
+        mcpToken: "fixture-token",
+      }),
+      createClient: () => ({
+        startThread: () => ({
+          runStreamed: async () => {
+            await chmod(root, 0o555);
+            return {
+              events: (async function* () {
+                yield {
+                  type: "thread.started" as const,
+                  thread_id: "native-1",
+                };
+              })(),
+            };
+          },
+        }),
+        resumeThread: () => {
+          throw new Error("Unexpected resume");
+        },
+      }),
+    });
+    for await (const event of successRunner.run(
+      {
+        threadId: "cleanup-fails-but-run-succeeds",
+        runId: "r",
+        messages: contentWith(image),
+        tools: [],
+        context: [],
+        state: {},
+        forwardedProps: {},
+      },
+      new AbortController().signal,
+    ))
+      assert.equal(event.type, "thread.started");
+    // Writable again so the second runner below can create its own temp
+    // directory under `root`.
+    await chmod(root, 0o700);
+
+    // The same failed cleanup must also leave a real, non-abort error
+    // exactly as it was, not replace it with an EACCES from the `rm`.
+    const failureRunner = new CodexRunner({
+      statePath: root,
+      screenshots: new ScreenshotRegistry(),
+      getConfig: () => ({
+        apiKey: "fixture-key",
+        model: "gpt-5.4",
+        workspace: "/test/one",
+        mcpUrl: "http://localhost/mcp",
+        mcpToken: "fixture-token",
+      }),
+      createClient: () => ({
+        startThread: () => ({
+          runStreamed: async () => {
+            await chmod(root, 0o555);
+            return {
+              events: (async function* () {
+                yield {
+                  type: "thread.started" as const,
+                  thread_id: "native-2",
+                };
+                throw new Error("Simulated Codex stream failure");
+              })(),
+            };
+          },
+        }),
+        resumeThread: () => {
+          throw new Error("Unexpected resume");
+        },
+      }),
+    });
+    await assert.rejects(async () => {
+      for await (const event of failureRunner.run(
+        {
+          threadId: "cleanup-fails-and-run-fails",
+          runId: "r",
+          messages: contentWith(image),
+          tools: [],
+          context: [],
+          state: {},
+          forwardedProps: {},
+        },
+        new AbortController().signal,
+      ))
+        assert.equal(event.type, "thread.started");
+    }, /Simulated Codex stream failure/);
+  } finally {
+    // Restore before this test's own `rm(root, ...)` below, which needs
+    // `root` writable to remove what is still inside it.
+    await chmod(root, 0o700);
     await rm(root, { recursive: true, force: true });
   }
 });
