@@ -3,14 +3,28 @@ import assert from "node:assert/strict";
 import {
   askApproval,
   approvalHost,
+  DECLINED_MESSAGE,
   type ApprovalDeps,
   type ApprovalDialogOptions,
   type SheetHost,
 } from "../electron/approval";
 
-const CANCELLED = "The request was cancelled before you answered.";
+const CANCELLED = "The request was cancelled before the user answered.";
 const CLOSED =
-  "The approval prompt closed before you answered. Ask again if you still want this.";
+  "The approval prompt closed before the user answered. Don't retry unless the user asks again.";
+
+// askApproval itself never throws this - a decline is a `false` return, and
+// each caller turns that into its own error. electron/main.ts is the only
+// caller wired to this shared constant (electron/point-action.ts keeps its
+// own separate literal), and it can't be imported here because it pulls in
+// Electron, so this locks the constant's exact value instead of exercising
+// main.ts's use of it directly.
+test("DECLINED_MESSAGE reads as an instruction not to retry, not a bare refusal", () => {
+  assert.equal(
+    DECLINED_MESSAGE,
+    "The user declined. Don't retry unless they ask.",
+  );
+});
 
 test("activate runs before showMessageBox", async () => {
   const events: string[] = [];

@@ -54,12 +54,17 @@ import { performPointAction } from "./point-action";
 import {
   askApproval,
   approvalHost,
+  DECLINED_MESSAGE,
   throwIfCancelled,
   type ApprovalPrompt,
 } from "./approval";
 import { conceal, markTransparent } from "./window-occlusion";
 import type { Point } from "../src/buddy-drag";
-import { pointLabelSchema, screenshotIdSchema } from "../server/point-schema";
+import {
+  bundleIdSchema,
+  pointLabelSchema,
+  screenshotIdSchema,
+} from "../server/point-schema";
 import { startRuntime } from "../server/runtime";
 import { ScreenshotRegistry, resolvePoint } from "../server/screenshots";
 import type {
@@ -241,10 +246,24 @@ async function approve(prompt: ApprovalPrompt, signal?: AbortSignal) {
         },
         showMessageBox: (options) => {
           if (mustShow) {
-            // openWorkspace never calls restore(), and focus() does nothing
-            // on a window that isn't visible, which a minimized one isn't.
+            // mustShow only ever comes from approvalHost() choosing the
+            // workspace (see its return above), so this is always about the
+            // workspace, never the companion chat.
+            //
+            // app.show() undoes Cmd+H: that hides every OpenMuse window,
+            // including one hosting no sheet at all, and makes each of them
+            // report as not visible, so approvalHost() picks the workspace
+            // and asks for it to be shown even though nothing the user did
+            // targeted it specifically. openWorkspace() must not run here:
+            // it hides a companion chat that isn't hosting this prompt,
+            // which would close whatever chat the user had open just to
+            // unhide the app for an unrelated approval.
+            app.show?.();
+            // focus() does nothing on a window that isn't visible, which a
+            // minimized one isn't, and show() alone doesn't undo minimized.
             if (workspace.isMinimized()) workspace.restore();
-            openWorkspace();
+            workspace.show();
+            workspace.focus();
           }
           // Always the parented form. The async message box attaches a sheet
           // to its parent even while that window is hidden; the parentless
@@ -272,19 +291,16 @@ async function approve(prompt: ApprovalPrompt, signal?: AbortSignal) {
     else approvalHosts.delete(host);
   }
 }
-// The runtime passes each tool call's AbortSignal. The IPC handler passes
-// only the renderer's action, and hands its arguments over unchecked, so the
-// signal is validated like the action.
-async function approvedAction(input: unknown, signalInput?: unknown) {
-  const signal = z.instanceof(AbortSignal).optional().parse(signalInput);
+// The runtime is the only caller: the kite:action IPC route that used to
+// hand this a renderer's unvalidated input is gone (approvedAction is no
+// longer registered as an IPC handler at all), so this takes the runtime's
+// own AbortSignal directly instead of validating one out of unknown input.
+async function approvedAction(input: unknown, signal?: AbortSignal) {
   const action = z
     .discriminatedUnion("type", [
       z.object({
         type: z.literal("open-app"),
-        bundleId: z
-          .string()
-          .max(255)
-          .regex(/^[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+$/),
+        bundleId: bundleIdSchema,
       }),
       z.object({
         type: z.literal("point"),
@@ -308,7 +324,7 @@ async function approvedAction(input: unknown, signalInput?: unknown) {
         signal,
       ))
     )
-      throw new Error("User declined action");
+      throw new Error(DECLINED_MESSAGE);
     throwIfCancelled(signal);
     await runHelper(
       () => exec(helper, ["--open-app", action.bundleId], appLaunchTimeout),
@@ -889,7 +905,6 @@ app
         }),
     );
     handle("screenshot", captureScreenshotOnce);
-    handle("action", approvedAction);
     handle("openWorkspace", openWorkspace);
     ipcMain.handle("kite:toggleCompanionChat", (event) => {
       if (

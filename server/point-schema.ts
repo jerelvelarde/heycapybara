@@ -143,3 +143,12 @@ export function pointPrompt(label: string, displayName: string) {
     detail: `The agent says it points at: ${label}`,
   };
 }
+
+// Must match native/Recorder.swift's --open-app pattern (guarded by a
+// parity test in tests/tools.test.ts): a bundle id there is rejected by the
+// native helper even after the user has approved it here, so the two checks
+// have to agree on exactly what counts as a valid bundle id.
+export const bundleIdSchema = z
+  .string()
+  .max(255)
+  .regex(/^[A-Za-z0-9][A-Za-z0-9-]*(?:\.[A-Za-z0-9][A-Za-z0-9-]*)+$/);

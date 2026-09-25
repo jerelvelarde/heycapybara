@@ -65,7 +65,9 @@ export type DesktopAction =
       type: "point";
       screenshotId: string;
       // Pixels within that screenshot (origin top-left), not global screen
-      // points - they were global screen points before this branch.
+      // points. The main process resolves the pixel against the
+      // screenshot's registered display and converts it to global screen
+      // points before it reaches the native pointer helper.
       x: number;
       y: number;
       label: string;
@@ -101,7 +103,6 @@ export interface KiteAPI {
   exportSkill(id: string): Promise<boolean>;
   permissions(kind: "accessibility" | "screenCapture"): Promise<Permissions>;
   screenshot(): Promise<ScreenshotAttachment>;
-  action(action: DesktopAction): Promise<void>;
   buddyDrag(
     action: "begin" | "move" | "end",
     point: { x: number; y: number },

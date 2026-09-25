@@ -49,6 +49,14 @@ export type ApprovalDeps = {
   hostHidden?(): boolean;
 };
 
+// The model reads this message, not the user, so it must say not to retry
+// rather than invite one - a bare "declined" leaves the model free to ask
+// again right away. `electron/main.ts` throws this for a declined open-app
+// request. `electron/point-action.ts` has its own separate literal for a
+// declined point and is not wired to this constant.
+export const DECLINED_MESSAGE =
+  "The user declined. Don't retry unless they ask.";
+
 // Stop, or the MCP call timing out, can cancel the request after the user
 // allowed it but before the action runs. The action must not run then.
 export function throwIfCancelled(signal?: AbortSignal) {
@@ -87,7 +95,7 @@ export async function askApproval(
   // own error instead of reading as "no". A request that is already
   // cancelled never activates OpenMuse or shows the box at all.
   if (signal?.aborted)
-    throw new Error("The request was cancelled before you answered.");
+    throw new Error("The request was cancelled before the user answered.");
   deps.activate();
   const { response } = await deps.showMessageBox({
     type: "question",
@@ -101,10 +109,10 @@ export async function askApproval(
   });
   if (response === 1) return true;
   if (signal?.aborted)
-    throw new Error("The request was cancelled before you answered.");
+    throw new Error("The request was cancelled before the user answered.");
   if (deps.hostHidden?.())
     throw new Error(
-      "The approval prompt closed before you answered. Ask again if you still want this.",
+      "The approval prompt closed before the user answered. Don't retry unless the user asks again.",
     );
   return false;
 }

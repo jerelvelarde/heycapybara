@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, rm, readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Store } from "../electron/store";
@@ -8,6 +8,17 @@ import { createToolHandler } from "../server/tools";
 import type { DesktopAction } from "../src/types";
 
 type Handler = (request: Request) => Promise<Response>;
+
+// A promise this test controls the settling of, so an action fake can pause
+// mid-call until the test says to continue - used to keep a tool call
+// genuinely in flight while the test inspects it, instead of timing that
+// inspection against garbage collection (see the signal-forwarding test
+// below).
+function deferred(): { promise: Promise<void>; resolve: () => void } {
+  let resolve!: () => void;
+  const promise = new Promise<void>((r) => (resolve = r));
+  return { promise, resolve };
+}
 
 // Builds a fresh store, temp dir and MCP handler for one test, and removes
 // the temp dir afterward however the test finishes. Each test also creates
@@ -112,6 +123,72 @@ test("open_application invokes the action for a valid bundle id", async () => {
       });
     },
   );
+});
+
+// bundleIdSchema is tighter than the pattern this replaced: a hyphen may no
+// longer start or end the segment right after a dot, and a trailing dot
+// with nothing after it is still refused. Without this, the user could
+// approve an app launch that native/Recorder.swift's own, always-stricter
+// check then rejects anyway.
+test("open_application rejects a hyphen-adjacent-to-dot or trailing-dot bundle id, but still accepts a real one", async () => {
+  const actions: DesktopAction[] = [];
+  await withHandler(
+    { action: async (action) => void actions.push(action) },
+    async (handler) => {
+      for (const bundleId of ["com.-x", "-a.b", "com."]) {
+        const rejected = await requestTo(handler, "tools/call", {
+          name: "open_application",
+          arguments: { bundleId },
+        });
+        assert.equal(
+          rejected.result.isError,
+          true,
+          `"${bundleId}" must be rejected`,
+        );
+      }
+      assert.equal(actions.length, 0);
+
+      const accepted = await requestTo(handler, "tools/call", {
+        name: "open_application",
+        arguments: { bundleId: "com.apple.TextEdit" },
+      });
+      assert.ok(!accepted.result.isError);
+      assert.equal(actions.length, 1);
+    },
+  );
+});
+
+// Guards against the schema and the helper drifting apart again: the user
+// could otherwise approve an app launch that native/Recorder.swift's
+// --open-app check then refuses anyway (or the reverse, silently loosening
+// what the user is asked to approve).
+test("open_application's published bundle-id pattern matches native/Recorder.swift's --open-app check", async () => {
+  await withHandler({}, async (handler) => {
+    const list = await requestTo(handler, "tools/list", {});
+    const openApplicationTool = list.result.tools.find(
+      (tool: { name: string }) => tool.name === "open_application",
+    );
+    assert.ok(openApplicationTool, "open_application must be published");
+    const pattern: string | undefined =
+      openApplicationTool.inputSchema.properties.bundleId.pattern;
+    assert.ok(pattern, "open_application's bundleId must publish a pattern");
+
+    // Swift needs `\\.` where the JS regex source only needs `\.` (Swift
+    // string literals double a backslash to escape it), and this file's
+    // style prefers a non-capturing group where native/Recorder.swift's
+    // pattern, written before this schema existed, uses a plain one -
+    // neither difference changes what either pattern matches, so both are
+    // normalized away before comparing.
+    const swiftStyle = pattern.replaceAll("(?:", "(").replace(/\\/g, "\\\\");
+    const swiftSource = await readFile(
+      new URL("../native/Recorder.swift", import.meta.url),
+      "utf8",
+    );
+    assert.ok(
+      swiftSource.includes(swiftStyle),
+      `native/Recorder.swift's --open-app pattern no longer matches bundleIdSchema.\nExpected native/Recorder.swift to contain:\n${swiftStyle}`,
+    );
+  });
 });
 
 test("point_on_screen requires a screenshot id", async () => {
@@ -345,6 +422,57 @@ test("an action that throws reaches the model as an error result with its messag
   );
 });
 
+// The other point_on_screen refusal tests above only check isError, not
+// that the model actually receives the schema's own wording (a caller that
+// only sees "isError: true" can't tell the model what to fix). This checks
+// one schema-level refusal end to end: a real double space, run through
+// pointLabelSchema's own refine, not a fake.
+test("point_on_screen's single-spaces refusal reaches the model with its exact message", async () => {
+  const actions: DesktopAction[] = [];
+  await withHandler(
+    { action: async (action) => void actions.push(action) },
+    async (handler) => {
+      const result = await requestTo(handler, "tools/call", {
+        name: "point_on_screen",
+        arguments: { ...validPoint, label: "Save  button" },
+      });
+      assert.equal(result.result.isError, true);
+      assert.ok(
+        result.result.content[0].text.includes(
+          "Use single spaces between words",
+        ),
+      );
+      assert.equal(actions.length, 0);
+    },
+  );
+});
+
+// resolvePoint's own "outside the screenshot" refusal is exercised in
+// tests/screenshots.test.ts; this only checks that server/tools.ts passes a
+// refusal like it - not a generic one - through to the model with its exact
+// text intact, the same way the action's own decline and cancellation
+// errors must.
+test("an outside-image refusal thrown by the action reaches the model with its exact message", async () => {
+  const times = String.fromCodePoint(0xd7); // U+00D7, spelled out per this
+  // file's convention of keeping non-ASCII characters out of its source.
+  const refusal = `(2222, 3333) is outside the 1386${times}900 screenshot.`;
+  await withHandler(
+    {
+      action: async () => {
+        throw new Error(refusal);
+      },
+    },
+    async (handler) => {
+      const result = await requestTo(handler, "tools/call", {
+        name: "point_on_screen",
+        arguments: { ...validPoint, label: "Save button" },
+      });
+      assert.equal(result.result.isError, true);
+      assert.ok(result.result.content[0].text.includes(refusal));
+    },
+  );
+});
+
 test("the label reaches the action trimmed of surrounding whitespace", async () => {
   const actions: DesktopAction[] = [];
   await withHandler(
@@ -382,45 +510,67 @@ test('returns "Desktop actions unavailable" when no action is configured', async
   });
 });
 
-test("open_application and point_on_screen both forward the request's own AbortSignal to the action", async () => {
-  const seenSignals: AbortSignal[] = [];
+// Each call gets its own AbortController, aborted while that call is still
+// in flight - not after both calls have already finished. By then the
+// Request driving a finished call is unreferenced, and Node only keeps
+// request.signal following the caller's AbortSignal through a weak
+// reference, so a GC between the calls finishing and the later abort() can
+// silently sever it (reproduced: a forced full GC right before that abort()
+// made the old version of this test fail). Checking signal.aborted inside
+// the action itself, while it is paused on `gate` and the call has
+// therefore not resolved yet, means the Request and whatever keeps its
+// signal linked to the controller are still reachable through this same
+// call stack - so the assertion can't depend on when, or whether, garbage
+// collection runs.
+async function checkLiveSignalForwarding(
+  handler: Handler,
+  seen: { signal?: AbortSignal },
+  gate: ReturnType<typeof deferred>,
+  name: "open_application" | "point_on_screen",
+  args: Record<string, unknown>,
+) {
   const controller = new AbortController();
+  const inFlight = requestTo(
+    handler,
+    "tools/call",
+    { name, arguments: args },
+    { signal: controller.signal },
+  );
+  controller.abort();
+  gate.resolve();
+  const result = await inFlight;
+  assert.ok(!result.result.isError, `${name} must still succeed`);
+  assert.equal(
+    seen.signal?.aborted,
+    true,
+    `${name}'s action must see its request's own signal already aborted`,
+  );
+}
+
+test("open_application and point_on_screen each forward the request's own, still-live AbortSignal to the action", async () => {
+  const seen: { signal?: AbortSignal } = {};
+  let gate = deferred();
   await withHandler(
     {
-      action: async (_action, signal) => void seenSignals.push(signal),
+      action: async (_action, signal) => {
+        // Reached while its request is still in flight (nothing here has
+        // been awaited to completion yet) - see the comment above.
+        await gate.promise;
+        seen.signal = signal;
+      },
     },
     async (handler) => {
-      const opened = await requestTo(
-        handler,
-        "tools/call",
-        {
-          name: "open_application",
-          arguments: { bundleId: "com.apple.TextEdit" },
-        },
-        { signal: controller.signal },
-      );
-      assert.ok(!opened.result.isError);
-      const pointed = await requestTo(
-        handler,
-        "tools/call",
-        {
-          name: "point_on_screen",
-          arguments: { ...validPoint, label: "Save button" },
-        },
-        { signal: controller.signal },
-      );
-      assert.ok(!pointed.result.isError);
+      await checkLiveSignalForwarding(handler, seen, gate, "open_application", {
+        bundleId: "com.apple.TextEdit",
+      });
+
+      gate = deferred();
+      await checkLiveSignalForwarding(handler, seen, gate, "point_on_screen", {
+        ...validPoint,
+        label: "Save button",
+      });
     },
   );
-  // Neither tool call has aborted anything yet: the action saw a live,
-  // not-yet-aborted signal, not a pre-aborted stand-in.
-  assert.equal(seenSignals.length, 2);
-  assert.ok(seenSignals.every((signal) => signal.aborted === false));
-  // Aborting the controller the request was built from reaches the exact
-  // signal object the action received, proving it is (or follows) the
-  // request's own signal rather than a disconnected copy.
-  controller.abort();
-  assert.ok(seenSignals.every((signal) => signal.aborted === true));
 });
 
 test("open_application's bundle-id length boundary: 255 characters passes, 256 is rejected", async () => {

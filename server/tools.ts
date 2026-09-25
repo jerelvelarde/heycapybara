@@ -11,7 +11,11 @@ import { z } from "zod";
 import type { Store } from "../electron/store";
 import type { DesktopAction } from "../src/types";
 import { safeAgentError } from "./codex-agent";
-import { pointLabelSchema, screenshotIdSchema } from "./point-schema";
+import {
+  bundleIdSchema,
+  pointLabelSchema,
+  screenshotIdSchema,
+} from "./point-schema";
 
 export function createToolHandler(options: {
   store: Store;
@@ -101,10 +105,7 @@ export function createToolHandler(options: {
         description:
           "Open an installed macOS app after a native user approval dialog",
         inputSchema: {
-          bundleId: z
-            .string()
-            .max(255)
-            .regex(/^[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+$/),
+          bundleId: bundleIdSchema,
         },
       },
       async ({ bundleId }) => {
