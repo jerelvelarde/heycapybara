@@ -201,3 +201,94 @@ test("conversations resume their own native thread and reject workspace changes"
     await rm(root, { recursive: true, force: true });
   }
 });
+
+test("attached screenshots are introduced with their id, display and pixel size", async () => {
+  const { CodexRunner, instructions } = await import("../server/codex-agent");
+  const { ScreenshotRegistry } = await import("../server/screenshots");
+  const { mkdtemp, rm } = await import("node:fs/promises");
+  const { tmpdir } = await import("node:os");
+  const { join } = await import("node:path");
+  const root = await mkdtemp(join(tmpdir(), "kite-prompt-test-"));
+  const screenshots = new ScreenshotRegistry();
+  const shot = screenshots.add({
+    displayId: "1",
+    label: "Built-in Retina Display",
+    bounds: { x: 0, y: 0, width: 1512, height: 982 },
+    width: 1512,
+    height: 982,
+  });
+  let prompt: unknown;
+  const runner = new CodexRunner({
+    statePath: root,
+    screenshots,
+    getConfig: () => ({
+      apiKey: "fixture-key",
+      model: "gpt-5.4",
+      workspace: "/test/one",
+      mcpUrl: "http://localhost/mcp",
+      mcpToken: "fixture-token",
+    }),
+    createClient: () => ({
+      startThread: () => ({
+        runStreamed: async (input) => {
+          prompt = input;
+          return {
+            events: (async function* () {
+              yield { type: "thread.started" as const, thread_id: "native-1" };
+            })(),
+          };
+        },
+      }),
+      resumeThread: () => {
+        throw new Error("Unexpected resume");
+      },
+    }),
+  });
+  const image = Buffer.from("fixture image").toString("base64");
+  try {
+    const events = runner.run(
+      {
+        threadId: "prompt",
+        runId: "r",
+        messages: [
+          {
+            id: "m",
+            role: "user",
+            content: [
+              { type: "text", text: "Where is Export?" },
+              {
+                type: "binary",
+                mimeType: "image/png",
+                data: image,
+                id: shot.id,
+              },
+              { type: "binary", mimeType: "image/png", data: image },
+            ],
+          },
+        ],
+        tools: [],
+        context: [],
+        state: {},
+        forwardedProps: {},
+      },
+      new AbortController().signal,
+    );
+    for await (const event of events)
+      assert.equal(event.type, "thread.started");
+    const parts = prompt as { type: string; text?: string }[];
+    assert.deepEqual(
+      parts.map((part) => part.type),
+      ["text", "text", "local_image", "text", "local_image"],
+    );
+    assert.match(parts[1].text ?? "", /^Image 1 in this message is screenshot/);
+    assert.match(parts[1].text ?? "", new RegExp(shot.id));
+    assert.match(parts[1].text ?? "", /1512×982 pixels/);
+    assert.match(
+      parts[3].text ?? "",
+      /^Image 2 in this message has no screen reference/,
+    );
+    assert.match(instructions, /never guess screen coordinates/i);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});

@@ -11,6 +11,7 @@ import { CodexRunner, KiteCodexAgent } from "./codex-agent";
 import { createToolHandler } from "./tools";
 import type { DesktopAction } from "../src/types";
 import type { Store } from "../electron/store";
+import type { Screenshot } from "./screenshots";
 import { runtimeConfig } from "./config";
 import { authorized } from "./auth";
 
@@ -20,6 +21,7 @@ export async function startRuntime(
     statePath?: string;
     binaryPath?: string;
     action?: (action: DesktopAction) => Promise<void>;
+    screenshots?: { get(id: string): Screenshot | undefined };
   } = {},
 ) {
   const config = runtimeConfig(process.env);
@@ -54,6 +56,7 @@ export async function startRuntime(
   const runner = new CodexRunner({
     statePath,
     binaryPath: options.binaryPath,
+    screenshots: options.screenshots,
     getConfig: () => ({
       apiKey: sessionKey,
       model: config.model,
