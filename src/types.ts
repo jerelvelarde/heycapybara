@@ -99,6 +99,21 @@ export type DesktopAction =
       key: string;
       modifiers: ("command" | "shift" | "option" | "control")[];
     };
+// A screenshot a computer-use tool returns to the model. `png` is the
+// image's bare base64, as an MCP image content block carries it.
+export type ActionScreenshot = {
+  id: string;
+  label: string;
+  width: number;
+  height: number;
+  png: string;
+};
+// What a desktop action tells the model: OpenMuse's note, and the
+// screenshot it describes when the action took one.
+export type DesktopActionResult = {
+  text: string;
+  screenshot?: ActionScreenshot;
+};
 export interface KiteAPI {
   state(): Promise<Snapshot>;
   setCompanion(companion: Companion): Promise<void>;
