@@ -7,6 +7,11 @@ import { Store } from "../electron/store";
 import { createToolHandler, type DesktopActionHandler } from "../server/tools";
 import type { AgentRun } from "../server/run-registry";
 import type { DesktopAction } from "../src/types";
+import {
+  BLOCKED_CHORD_MESSAGE,
+  KEY_NAMES,
+  MODIFIERS,
+} from "../server/computer-schema";
 
 type Handler = (request: Request, run: AgentRun) => Promise<Response>;
 
@@ -639,6 +644,265 @@ test("open_application and point_on_screen hand the action the run the call came
       assert.equal(seen.length, 2);
       assert.equal(seen[0], run);
       assert.equal(seen[1], run);
+    },
+  );
+});
+
+const shotResult = {
+  id: "shot_5e6f7a8b",
+  label: "Test display",
+  width: 1512,
+  height: 982,
+  png: "iVBORw0KGgo=",
+};
+
+test("take_screenshot returns the action's note, then its screenshot as a PNG image", async () => {
+  const actions: DesktopAction[] = [];
+  await withHandler(
+    {
+      action: async (action) => {
+        actions.push(action);
+        return { text: "note", screenshot: shotResult };
+      },
+    },
+    async (handler) => {
+      const result = await requestTo(handler, "tools/call", {
+        name: "take_screenshot",
+        arguments: {},
+      });
+      assert.ok(!result.result.isError);
+      assert.deepEqual(result.result.content, [
+        { type: "text", text: "note" },
+        { type: "image", data: shotResult.png, mimeType: "image/png" },
+      ]);
+      assert.deepEqual(actions, [{ type: "screenshot" }]);
+    },
+  );
+});
+
+test("a computer-use action that returns nothing is an error, not a silent success", async () => {
+  await withHandler({ action: async () => {} }, async (handler) => {
+    const result = await requestTo(handler, "tools/call", {
+      name: "take_screenshot",
+      arguments: {},
+    });
+    assert.equal(result.result.isError, true);
+    assert.equal(
+      result.result.content[0].text,
+      "The desktop action returned no result",
+    );
+  });
+});
+
+test("click_on_screen fills in one left click and forwards the target; without a screenshot the result is text alone", async () => {
+  const actions: DesktopAction[] = [];
+  await withHandler(
+    {
+      action: async (action) => {
+        actions.push(action);
+        return { text: "sent" };
+      },
+    },
+    async (handler) => {
+      const result = await requestTo(handler, "tools/call", {
+        name: "click_on_screen",
+        arguments: { ...validPoint, label: "Report spam" },
+      });
+      assert.deepEqual(result.result.content, [{ type: "text", text: "sent" }]);
+      assert.deepEqual(actions, [
+        {
+          type: "click",
+          ...validPoint,
+          label: "Report spam",
+          button: "left",
+          clicks: 1,
+        },
+      ]);
+    },
+  );
+});
+
+test("click_on_screen refuses a fourth click, a middle button, a missing label and a malformed screenshot id", async () => {
+  const actions: DesktopAction[] = [];
+  await withHandler(
+    { action: async (action) => void actions.push(action) },
+    async (handler) => {
+      for (const args of [
+        { ...validPoint, label: "Inbox", clicks: 4 },
+        { ...validPoint, label: "Inbox", button: "middle" },
+        { ...validPoint },
+        { ...validPoint, label: "Inbox", screenshotId: "shot_XYZ12345" },
+      ]) {
+        const result = await requestTo(handler, "tools/call", {
+          name: "click_on_screen",
+          arguments: args,
+        });
+        assert.equal(result.result.isError, true, JSON.stringify(args));
+      }
+      assert.equal(actions.length, 0);
+    },
+  );
+});
+
+test("scroll_on_screen takes 1 to 10 whole notches in one of four directions", async () => {
+  const actions: DesktopAction[] = [];
+  await withHandler(
+    {
+      action: async (action) => {
+        actions.push(action);
+        return { text: "scrolled" };
+      },
+    },
+    async (handler) => {
+      const call = (direction: unknown, amount: unknown) =>
+        requestTo(handler, "tools/call", {
+          name: "scroll_on_screen",
+          arguments: { ...validPoint, label: "Inbox", direction, amount },
+        });
+      assert.ok(!(await call("down", 10)).result.isError);
+      for (const [direction, amount] of [
+        ["down", 0],
+        ["down", 11],
+        ["down", 1.5],
+        ["sideways", 3],
+      ])
+        assert.equal((await call(direction, amount)).result.isError, true);
+      assert.deepEqual(actions, [
+        {
+          type: "scroll",
+          ...validPoint,
+          label: "Inbox",
+          direction: "down",
+          amount: 10,
+        },
+      ]);
+    },
+  );
+});
+
+test("type_text refuses line breaks and text over the limit with the schema's message", async () => {
+  const actions: DesktopAction[] = [];
+  await withHandler(
+    {
+      action: async (action) => {
+        actions.push(action);
+        return { text: "typed" };
+      },
+    },
+    async (handler) => {
+      const typeText = (text: string) =>
+        requestTo(handler, "tools/call", {
+          name: "type_text",
+          arguments: { text },
+        });
+      const broken = await typeText("a\nb");
+      assert.equal(broken.result.isError, true);
+      assert.ok(
+        broken.result.content[0].text.includes("Use press_keys for Return"),
+      );
+      assert.equal((await typeText("a".repeat(1001))).result.isError, true);
+      assert.ok(!(await typeText("a".repeat(1000))).result.isError);
+      assert.deepEqual(actions, [{ type: "type", text: "a".repeat(1000) }]);
+    },
+  );
+});
+
+test("press_keys forwards a key with its modifiers, which default to none", async () => {
+  const actions: DesktopAction[] = [];
+  await withHandler(
+    {
+      action: async (action) => {
+        actions.push(action);
+        return { text: "pressed" };
+      },
+    },
+    async (handler) => {
+      await requestTo(handler, "tools/call", {
+        name: "press_keys",
+        arguments: { key: "l", modifiers: ["command"] },
+      });
+      await requestTo(handler, "tools/call", {
+        name: "press_keys",
+        arguments: { key: "return" },
+      });
+      assert.deepEqual(actions, [
+        { type: "keys", key: "l", modifiers: ["command"] },
+        { type: "keys", key: "return", modifiers: [] },
+      ]);
+    },
+  );
+});
+
+test("press_keys refuses unknown keys, repeated modifiers and blocked shortcuts without calling the action", async () => {
+  const actions: DesktopAction[] = [];
+  await withHandler(
+    { action: async (action) => void actions.push(action) },
+    async (handler) => {
+      for (const args of [
+        { key: "enter" },
+        { key: "l", modifiers: ["command", "command"] },
+        { key: "l", modifiers: ["fn"] },
+      ]) {
+        const result = await requestTo(handler, "tools/call", {
+          name: "press_keys",
+          arguments: args,
+        });
+        assert.equal(result.result.isError, true, JSON.stringify(args));
+      }
+      const blocked = await requestTo(handler, "tools/call", {
+        name: "press_keys",
+        arguments: { key: "q", modifiers: ["command", "shift"] },
+      });
+      assert.equal(blocked.result.isError, true);
+      assert.equal(blocked.result.content[0].text, BLOCKED_CHORD_MESSAGE);
+      assert.equal(actions.length, 0);
+    },
+  );
+});
+
+test("press_keys publishes its key names and modifiers as enums the model can read", async () => {
+  await withHandler({}, async (handler) => {
+    const list = await requestTo(handler, "tools/list", {});
+    const pressKeys = list.result.tools.find(
+      (tool: { name: string }) => tool.name === "press_keys",
+    );
+    assert.deepEqual(pressKeys.inputSchema.properties.key.enum, [...KEY_NAMES]);
+    assert.deepEqual(pressKeys.inputSchema.properties.modifiers.items.enum, [
+      ...MODIFIERS,
+    ]);
+  });
+});
+
+test("open_url takes only an https address, and forwards it with the app", async () => {
+  const actions: DesktopAction[] = [];
+  await withHandler(
+    {
+      action: async (action) => {
+        actions.push(action);
+        return { text: "opened" };
+      },
+    },
+    async (handler) => {
+      const open = (url: string) =>
+        requestTo(handler, "tools/call", {
+          name: "open_url",
+          arguments: { url, bundleId: "com.google.Chrome" },
+        });
+      for (const url of [
+        "http://mail.google.com",
+        "javascript:alert(1)",
+        "https://exa mple.com",
+        "https://user:pw@mail.google.com",
+      ])
+        assert.equal((await open(url)).result.isError, true, url);
+      assert.ok(!(await open("https://mail.google.com")).result.isError);
+      assert.deepEqual(actions, [
+        {
+          type: "open-url",
+          url: "https://mail.google.com",
+          bundleId: "com.google.Chrome",
+        },
+      ]);
     },
   );
 });

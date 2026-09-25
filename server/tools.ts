@@ -17,6 +17,19 @@ import {
   pointLabelSchema,
   screenshotIdSchema,
 } from "./point-schema";
+import {
+  BLOCKED_CHORD_MESSAGE,
+  TYPE_MAX_LENGTH,
+  blockedChord,
+  clicksSchema,
+  httpsUrlSchema,
+  keyNameSchema,
+  modifiersSchema,
+  mouseButtonSchema,
+  scrollAmountSchema,
+  scrollDirectionSchema,
+  typedTextSchema,
+} from "./computer-schema";
 
 // `signal` aborts when this one tool call is cancelled (Codex dropped its
 // request); `run.signal` when the whole run ends. A control grant lasts for
@@ -113,7 +126,7 @@ export function createToolHandler(options: {
       "open_application",
       {
         description:
-          "Open an installed macOS app after a native user approval dialog",
+          "Open an installed macOS app after a native user approval dialog, unless the user already let you control the Mac for this task",
         inputSchema: {
           bundleId: bundleIdSchema,
         },
@@ -151,6 +164,104 @@ export function createToolHandler(options: {
         );
         return result("Pointer displayed after user approval");
       },
+    );
+    // A computer-use tool's result: OpenMuse's note, then the screenshot it
+    // describes, when the action took one.
+    const act = async (action: DesktopAction) => {
+      if (!options.action) throw new Error("Desktop actions unavailable");
+      const outcome = await options.action(action, request.signal, run);
+      if (!outcome) throw new Error("The desktop action returned no result");
+      return {
+        content: [
+          { type: "text" as const, text: outcome.text },
+          ...(outcome.screenshot
+            ? [
+                {
+                  type: "image" as const,
+                  data: outcome.screenshot.png,
+                  mimeType: "image/png",
+                },
+              ]
+            : []),
+        ],
+      };
+    };
+    const target = {
+      screenshotId: screenshotIdSchema,
+      x: z.number(),
+      y: z.number(),
+      label: pointLabelSchema.describe(
+        'What you act on, such as "Report spam button": one line of visible text, up to 60 characters, with at least one letter or number. The first action in a task shows it to the user.',
+      ),
+    };
+    server.registerTool(
+      "take_screenshot",
+      {
+        description:
+          "See the main display while you carry out a task on the user's Mac. The first computer-use tool you call in a task asks the user to let you control the Mac until the task ends. Returns the screenshot and its id; click_on_screen, scroll_on_screen and point_on_screen take x, y in its pixels.",
+        inputSchema: {},
+      },
+      async () => act({ type: "screenshot" }),
+    );
+    server.registerTool(
+      "click_on_screen",
+      {
+        description:
+          "Click something visible in a screenshot. Pass the screenshot's id, x, y in its pixels (origin at the top-left) and a short label naming the target. A ring shows the spot just before the click. Returns a screenshot taken after the click; use it for your next click or scroll.",
+        inputSchema: {
+          ...target,
+          button: mouseButtonSchema,
+          clicks: clicksSchema.describe(
+            "2 for a double click, 3 for a triple click",
+          ),
+        },
+      },
+      async ({ screenshotId, x, y, label, button, clicks }) =>
+        act({ type: "click", screenshotId, x, y, label, button, clicks }),
+    );
+    server.registerTool(
+      "scroll_on_screen",
+      {
+        description:
+          "Scroll whatever is under a spot in a screenshot, by 1 to 10 wheel notches. Pass the screenshot's id, x, y in its pixels and a short label naming what you scroll. Returns a screenshot taken after the scroll.",
+        inputSchema: {
+          ...target,
+          direction: scrollDirectionSchema,
+          amount: scrollAmountSchema,
+        },
+      },
+      async ({ screenshotId, x, y, label, direction, amount }) =>
+        act({ type: "scroll", screenshotId, x, y, label, direction, amount }),
+    );
+    server.registerTool(
+      "type_text",
+      {
+        description: `Type text into the focused field of the frontmost app, up to ${TYPE_MAX_LENGTH} characters. Click the field first. No line breaks or tabs: use press_keys for Return, Tab and other keys. Refused while OpenMuse itself is in front, and in password fields.`,
+        inputSchema: { text: typedTextSchema },
+      },
+      async ({ text }) => act({ type: "type", text }),
+    );
+    server.registerTool(
+      "press_keys",
+      {
+        description:
+          'Press one key, optionally with modifier keys held, such as key "l" with modifiers ["command"] to focus a browser\'s address bar, or "return" alone. Key names are key positions on a US keyboard; use type_text to enter text. Refused while OpenMuse itself is in front.',
+        inputSchema: { key: keyNameSchema, modifiers: modifiersSchema },
+      },
+      async ({ key, modifiers }) => {
+        if (blockedChord(key, modifiers))
+          throw new Error(BLOCKED_CHORD_MESSAGE);
+        return act({ type: "keys", key, modifiers });
+      },
+    );
+    server.registerTool(
+      "open_url",
+      {
+        description:
+          "Open an https web page in an installed app, such as Google Chrome (com.google.Chrome) or Safari (com.apple.Safari). Asks the user first, unless they already let you control the Mac for this task.",
+        inputSchema: { url: httpsUrlSchema, bundleId: bundleIdSchema },
+      },
+      async ({ url, bundleId }) => act({ type: "open-url", url, bundleId }),
     );
     const transport = new WebStandardStreamableHTTPServerTransport({
       enableJsonResponse: true,
