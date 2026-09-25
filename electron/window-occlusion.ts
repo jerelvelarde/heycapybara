@@ -26,7 +26,7 @@ export type ConcealableWindow = {
   setIgnoreMouseEvents(ignore: boolean): void;
 };
 
-// Buddy, the notch and companion chat windows are made transparent: true and
+// Buddy and companion chat windows are made transparent: true and
 // frameless. Electron's only call site for setIgnoresMouseEvents: is
 // SetIgnoreMouseEvents (Electron v44.4.5's shell/browser/native_window_mac.mm);
 // it never runs at window creation, so these windows start out on AppKit's

@@ -25,12 +25,11 @@ export type Skill = {
   approvedAt?: string;
 };
 export type Permissions = { accessibility: boolean; screenCapture: boolean };
+export type PermissionKind = keyof Permissions;
 export type Companion = "capybara" | "kite";
-export type Placement = "notch" | "floating";
 export type CompanionTrayMode = "chat" | "record";
 export type Settings = {
   companion: Companion;
-  placement: Placement;
   onboardingComplete: boolean;
   backend: string;
   workspace: string;
@@ -75,14 +74,8 @@ export type DesktopAction =
 export interface KiteAPI {
   state(): Promise<Snapshot>;
   setCompanion(companion: Companion): Promise<void>;
-  setPlacement(placement: Placement): Promise<void>;
-  completeOnboarding(): Promise<void>;
+  completeOnboarding(options?: { openWorkspace?: boolean }): Promise<void>;
   replayOnboarding(): Promise<void>;
-  startAppDrag(): void;
-  openAccessibilitySettings(): Promise<void>;
-  closeAccessibilityGuide(): Promise<void>;
-  revealAppInFinder(): Promise<void>;
-  setNotchExpanded(expanded: boolean): Promise<void>;
   setModelKey(key: string): Promise<void>;
   chooseWorkspace(): Promise<void>;
   verifyIntelligence(): Promise<void>;
@@ -101,7 +94,8 @@ export interface KiteAPI {
   }): Promise<Skill>;
   deleteSkill(id: string): Promise<void>;
   exportSkill(id: string): Promise<boolean>;
-  permissions(kind: "accessibility" | "screenCapture"): Promise<Permissions>;
+  permissions(kind: PermissionKind): Promise<Permissions>;
+  openPermissionSettings(kind: PermissionKind): Promise<void>;
   screenshot(): Promise<ScreenshotAttachment>;
   buddyDrag(
     action: "begin" | "move" | "end",

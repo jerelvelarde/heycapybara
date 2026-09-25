@@ -3,9 +3,9 @@
 // `--open-app` commands; the long-running recorder mode also prints
 // `status` lines as it starts and stops, outside of `runHelper` (e.g.
 // "Ready; waiting for start command" and "Already recording"). The query
-// commands (`--permissions`, `--notch-inset`, `--request-accessibility`,
-// `--request-screen`) print one bare JSON object with no `status` line.
-// Of those, only `--permissions` and `--notch-inset`'s output is parsed by
+// commands (`--permissions`, `--request-accessibility`, `--request-screen`)
+// print one bare JSON object with no `status` line.
+// Of those, only `--permissions`' output is parsed by
 // its caller (`JSON.parse` on the resolved stdout); `--request-accessibility`
 // and `--request-screen` still run through `runHelper`, but main.ts
 // discards the stdout they resolve to and re-reads permissions separately

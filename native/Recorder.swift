@@ -186,10 +186,6 @@ let recorder = Recorder()
 if args.count > 1 {
     switch args[1] {
     case "--permissions": emit(permissions()); exit(EXIT_SUCCESS)
-    case "--notch-inset":
-        let topInset = NSScreen.screens.first?.safeAreaInsets.top ?? 0
-        emit(["topInset": Double(topInset)])
-        exit(EXIT_SUCCESS)
     case "--request-accessibility":
         let options = [kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: true] as CFDictionary
         _ = AXIsProcessTrustedWithOptions(options)

@@ -21,18 +21,17 @@ import {
 import { promisify } from "node:util";
 import { createInterface } from "node:readline";
 import { fileURLToPath } from "node:url";
-import { join, dirname, resolve } from "node:path";
+import { join, dirname } from "node:path";
 import { randomUUID } from "node:crypto";
 import { writeFile } from "node:fs/promises";
 import { z } from "zod";
 import { Store } from "./store";
 import {
-  loadPreferences,
+  startupPreferences,
   savePreferences,
   companionSchema,
-  placementSchema,
 } from "./preferences";
-import { notchPosition } from "./notch-geometry";
+import { recordingBlockedReason, replayBlockedReason } from "./setup-guards";
 import {
   CHAT_SIZE,
   RECORD_SIZE,
@@ -92,77 +91,59 @@ const appLaunchTimeout = { timeout: 60_000 };
 const screenshots = new ScreenshotRegistry();
 let workspace: BrowserWindow;
 let buddy: BrowserWindow;
-let notch: BrowserWindow;
 let companionChat: BrowserWindow;
+let onboarding: BrowserWindow | undefined;
+// Set once preferences load; the setup window's close handler uses it to skip setup.
+let skipOnboarding: (() => Promise<void>) | undefined;
 let trayMode: CompanionTrayMode = "chat";
-let notchExpanded = false;
-let accessibilityGuideActive = false;
-let notchTopInset = 0;
-let appDragIcon: Electron.NativeImage;
 let tray: Tray;
 let buddyPosition: Point | undefined;
 let buddyGesture: BuddyGesture | undefined;
 let buddySaveQueue = Promise.resolve();
 const buddyPositionPath = () =>
   join(app.getPath("userData"), "buddy-position.json");
-const appBundlePath = () => resolve(app.getPath("exe"), "../../..");
 const buddyAreas = () =>
   screen.getAllDisplays().map((display) => display.workArea);
-function notchSize() {
-  return !settings?.onboardingComplete
-    ? accessibilityGuideActive
-      ? { width: 460, height: 190 }
-      : { width: 460, height: 640 }
-    : notchExpanded
-      ? { width: 360, height: 260 }
-      : { width: 250, height: 62 };
-}
-function fittedNotchBounds() {
-  const display = screen.getPrimaryDisplay();
-  const requested = notchSize();
-  const location = notchPosition(display, notchTopInset, requested);
-  const bounds = {
-    ...location,
-    width: requested.width,
-    height: Math.max(
-      1,
-      Math.min(
-        requested.height,
-        display.workArea.y + display.workArea.height - location.y - 8,
-      ),
-    ),
+// A copy that macOS reopened (for example after a Screen Recording change) can start while the
+// quitting copy still holds ⌘⇧K, so a failed registration is retried before it counts.
+async function registerWorkspaceShortcut() {
+  const toggle = () => {
+    if (workspace.isDestroyed()) return;
+    if (workspace.isVisible() && workspace.isFocused()) workspace.hide();
+    else openWorkspace();
   };
-  if (accessibilityGuideActive && !settings?.onboardingComplete)
-    bounds.y = Math.max(
-      display.workArea.y,
-      display.workArea.y + display.workArea.height - bounds.height - 20,
-    );
-  return bounds;
-}
-function positionNotch() {
-  if (!notch || notch.isDestroyed()) return;
-  notch.setBounds(fittedNotchBounds());
-}
-async function refreshNotchInset() {
-  const stdout = await runHelper(() =>
-    exec(helper, ["--notch-inset"], helperTimeout),
-  );
-  notchTopInset = z
-    .object({ topInset: z.number().nonnegative() })
-    .parse(JSON.parse(stdout)).topInset;
-  positionNotch();
+  for (const wait of [0, 1000, 3000]) {
+    if (wait) await new Promise((resolve) => setTimeout(resolve, wait));
+    // before-quit has already unregistered every shortcut; do not take it back.
+    if ((app as typeof app & { quitting?: boolean }).quitting) return false;
+    if (globalShortcut.register("CommandOrControl+Shift+K", toggle))
+      return true;
+  }
+  return false;
 }
 function syncCompanionWindows() {
-  if (!buddy || !notch || !settings) return;
-  positionNotch();
-  if (!settings.onboardingComplete || settings.placement === "notch") {
+  // A preference save can land after quitting has destroyed the windows.
+  if (
+    !buddy ||
+    buddy.isDestroyed() ||
+    !settings ||
+    (app as typeof app & { quitting?: boolean }).quitting
+  )
+    return;
+  if (!settings.onboardingComplete) {
     buddy.hide();
-    companionChat?.hide();
-    notch.showInactive();
-  } else {
-    notch.hide();
-    buddy.showInactive();
+    if (companionChat && !companionChat.isDestroyed()) companionChat.hide();
+    if (!onboarding || onboarding.isDestroyed())
+      onboarding = makeOnboardingWindow();
+    else {
+      onboarding.show();
+      onboarding.focus();
+    }
+    return;
   }
+  if (onboarding && !onboarding.isDestroyed()) onboarding.destroy();
+  onboarding = undefined;
+  buddy.showInactive();
 }
 function positionCompanionChat() {
   if (!companionChat || companionChat.isDestroyed() || !buddy) return;
@@ -174,8 +155,8 @@ function positionCompanionChat() {
   companionChat.setPosition(point.x, point.y);
 }
 function openCompanionTray(mode: CompanionTrayMode, toggle = false) {
-  if (settings.placement !== "floating" || !settings.onboardingComplete)
-    throw new Error("Select the floating companion to open its controls");
+  if (!settings.onboardingComplete || setupReopenings > 0)
+    throw new Error("Finish setup to use the companion.");
   if (toggle && companionChat.isVisible() && trayMode === mode) {
     companionChat.hide();
   } else {
@@ -211,6 +192,8 @@ let settings: Settings;
 let runtime: Awaited<ReturnType<typeof startRuntime>>;
 let recordingQueue = Promise.resolve();
 let transitioning = false;
+// Setup replays that passed their guard and are still saving; a counter so overlapping replays cannot clear each other.
+let setupReopenings = 0;
 const broadcast = () =>
   BrowserWindow.getAllWindows().forEach((w) =>
     w.webContents.send("kite:update"),
@@ -219,8 +202,8 @@ const broadcast = () =>
 // a window left out of this list still shows up in captures and is never
 // cleared before the pointer ring appears over it.
 function openMuseWindows() {
-  return [workspace, buddy, notch, companionChat].filter(
-    (win) => win && !win.isDestroyed(),
+  return [workspace, buddy, onboarding, companionChat].filter(
+    (win): win is BrowserWindow => !!win && !win.isDestroyed(),
   );
 }
 // How many approval sheets each window is hosting right now. Hiding a window
@@ -355,6 +338,13 @@ async function approvedAction(input: unknown, signal?: AbortSignal) {
   );
 }
 
+const permissionKindSchema = z.enum(["accessibility", "screenCapture"]);
+const permissionPanes = {
+  accessibility:
+    "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility",
+  screenCapture:
+    "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture",
+} as const;
 async function permissions(): Promise<Permissions> {
   const stdout = await runHelper(() =>
     exec(helper, ["--permissions"], helperTimeout),
@@ -402,6 +392,11 @@ async function finishRecording() {
   }
 }
 async function startRecording(title: string) {
+  const blocked = recordingBlockedReason({
+    complete: settings.onboardingComplete,
+    reopening: setupReopenings > 0,
+  });
+  if (blocked) throw new Error(blocked);
   if (transitioning || recorder || store.active)
     throw new Error("Recording is already active or changing state");
   transitioning = true;
@@ -558,9 +553,8 @@ function makeWindow(isBuddy: boolean) {
       query: isBuddy ? { buddy: "1" } : {},
     });
   win.once("ready-to-show", () => {
+    // The workspace never shows at launch. This first sync is what opens setup on a new install, so setup at launch waits for the buddy window to be ready to show.
     if (isBuddy) syncCompanionWindows();
-    else if (settings.placement !== "floating" || !settings.onboardingComplete)
-      win.show();
   });
   win.on("close", (event) => {
     if (!(app as typeof app & { quitting?: boolean }).quitting) {
@@ -598,12 +592,14 @@ function makeCompanionChatWindow() {
     : win.loadFile(join(root, "dist/renderer/index.html"), {
         query: { companionChat: "1" },
       });
-  void loaded.catch((error: unknown) =>
+  void loaded.catch((error: unknown) => {
+    // Quitting aborts a load that is still running; a dialog then would hold up the quit.
+    if ((app as typeof app & { quitting?: boolean }).quitting) return;
     dialog.showErrorBox(
       "OpenMuse chat could not load",
       error instanceof Error ? error.message : "Unknown loading error",
-    ),
-  );
+    );
+  });
   win.on("close", (event) => {
     if (!(app as typeof app & { quitting?: boolean }).quitting) {
       event.preventDefault();
@@ -612,18 +608,23 @@ function makeCompanionChatWindow() {
   });
   return win;
 }
-function makeNotchWindow() {
-  const bounds = fittedNotchBounds();
+function makeOnboardingWindow() {
+  const width = 520;
+  const height = 600;
+  const { workArea } = screen.getPrimaryDisplay();
   const win = new BrowserWindow({
-    ...bounds,
+    width,
+    height,
     show: false,
-    frame: false,
-    transparent: true,
+    x: Math.round(workArea.x + (workArea.width - width) / 2),
+    y: Math.round(workArea.y + (workArea.height - height) / 2),
     resizable: false,
-    alwaysOnTop: true,
-    acceptFirstMouse: true,
-    skipTaskbar: true,
-    backgroundColor: "#00000000",
+    minimizable: false,
+    maximizable: false,
+    fullscreenable: false,
+    title: "Welcome to OpenMuse",
+    titleBarStyle: "hiddenInset",
+    backgroundColor: "#ffffff",
     webPreferences: {
       preload: join(dirname(fileURLToPath(import.meta.url)), "preload.cjs"),
       contextIsolation: true,
@@ -631,24 +632,60 @@ function makeNotchWindow() {
       sandbox: true,
     },
   });
-  // transparent: true above, so marked where it's made (see markTransparent).
-  markTransparent(win);
-  win.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
+  win.on("closed", () => {
+    if (onboarding === win) onboarding = undefined;
+  });
   win.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
   win.webContents.on("will-navigate", (event) => event.preventDefault());
-  if (process.env.KITE_DEV_URL)
-    void win.loadURL(process.env.KITE_DEV_URL + "?notch=1");
-  else
-    void win.loadFile(join(root, "dist/renderer/index.html"), {
-      query: { notch: "1" },
+  // Keep "Welcome to OpenMuse" instead of index.html's <title>.
+  win.on("page-title-updated", (event) => event.preventDefault());
+  const loaded = process.env.KITE_DEV_URL
+    ? win.loadURL(process.env.KITE_DEV_URL + "?onboarding=1")
+    : win.loadFile(join(root, "dist/renderer/index.html"), {
+        query: { onboarding: "1" },
+      });
+  void loaded.catch((error: unknown) => {
+    // Completing or skipping setup can destroy the window while it loads, and quitting aborts the
+    // load; neither is a failure, and a dialog during a quit would hold the quit up.
+    if (
+      win.isDestroyed() ||
+      (app as typeof app & { quitting?: boolean }).quitting
+    )
+      return;
+    console.error("OpenMuse setup could not load", error);
+    // The closed handler clears `onboarding`, so the next sync builds a fresh window.
+    win.destroy();
+    void dialog.showMessageBox({
+      type: "error",
+      message: "OpenMuse setup could not load",
+      detail:
+        "Choose Replay setup from the OpenMuse menu bar icon to try again.",
     });
-  win.once("ready-to-show", syncCompanionWindows);
-  win.webContents.once("did-finish-load", syncCompanionWindows);
+  });
+  win.once("ready-to-show", () => {
+    win.show();
+    win.focus();
+  });
   win.on("close", (event) => {
-    if (!(app as typeof app & { quitting?: boolean }).quitting) {
-      event.preventDefault();
-      win.hide();
-    }
+    // Quitting is not a skip: onboardingComplete stays false on disk, so a relaunch reopens setup.
+    // The !skipOnboarding check is defensive: every window is created after skipOnboarding is set.
+    if (
+      (app as typeof app & { quitting?: boolean }).quitting ||
+      !skipOnboarding
+    )
+      return;
+    // Closing skips setup. The window stays until the save succeeds; syncCompanionWindows() then destroys it (destroy() emits no close event).
+    event.preventDefault();
+    void skipOnboarding().catch((error: unknown) => {
+      console.error("Could not skip setup", error);
+      if (win.isDestroyed()) return;
+      void dialog.showMessageBox(win, {
+        type: "error",
+        message: "Could not skip setup",
+        detail:
+          "OpenMuse could not save your settings. Check free disk space and folder permissions, then close this window again.",
+      });
+    });
   });
   return win;
 }
@@ -659,7 +696,7 @@ function handle(name: string, fn: (...args: unknown[]) => unknown) {
       ![
         workspace?.webContents,
         buddy?.webContents,
-        notch?.webContents,
+        onboarding?.webContents,
         companionChat?.webContents,
       ].includes(event.sender) ||
       event.senderFrame !== event.sender.mainFrame
@@ -671,11 +708,19 @@ function handle(name: string, fn: (...args: unknown[]) => unknown) {
 app
   .whenReady()
   .then(async () => {
-    store = new Store(join(app.getPath("userData"), "library"));
+    const userData = app.getPath("userData");
+    const preferencesPath = join(userData, "preferences.json");
+    const libraryPath = join(userData, "library");
+    // First, because Store.load() creates the library and an existing library means a returning install.
+    const savedPreferences = await startupPreferences(
+      preferencesPath,
+      libraryPath,
+    );
+    store = new Store(libraryPath);
     await store.load();
-    await loadLinkedEnvironment(app.getPath("userData"));
+    await loadLinkedEnvironment(userData);
     runtime = await startRuntime(store, {
-      statePath: join(app.getPath("userData"), "agent"),
+      statePath: join(userData, "agent"),
       binaryPath: app.isPackaged
         ? join(process.resourcesPath, "codex-runtime/bin/codex")
         : undefined,
@@ -683,89 +728,56 @@ app
       screenshots,
     });
     settings = runtime.settings;
-    const preferencesPath = join(app.getPath("userData"), "preferences.json");
-    const savedPreferences = await loadPreferences(preferencesPath);
     settings.companion = savedPreferences.companion;
-    settings.placement = savedPreferences.placement;
     settings.onboardingComplete = savedPreferences.onboardingComplete;
     let preferenceQueue = Promise.resolve();
     function updatePreferences(change: Partial<typeof savedPreferences>) {
       const update = preferenceQueue.then(async () => {
         const next = await savePreferences(preferencesPath, {
           companion: settings.companion,
-          placement: settings.placement,
           onboardingComplete: settings.onboardingComplete,
           ...change,
         });
         settings.companion = next.companion;
-        settings.placement = next.placement;
         settings.onboardingComplete = next.onboardingComplete;
-        if ("onboardingComplete" in change) {
-          notchExpanded = false;
-          accessibilityGuideActive = false;
-        }
-        syncCompanionWindows();
+        // Any save whose change names onboardingComplete resyncs windows, even if the value is unchanged; a companion-only save does not, since a resync would re-show a companion the user hid.
+        if ("onboardingComplete" in change) syncCompanionWindows();
         broadcast();
       });
       // Return the failed write to this caller while keeping later saves retryable.
       preferenceQueue = update.catch(() => {});
       return update;
     }
+    skipOnboarding = () => updatePreferences({ onboardingComplete: true });
+    async function replaySetup() {
+      const blocked = replayBlockedReason({
+        active: !!store.active,
+        changing: transitioning || !!recorder,
+      });
+      if (blocked) throw new Error(blocked);
+      setupReopenings++;
+      try {
+        await updatePreferences({ onboardingComplete: false });
+      } finally {
+        setupReopenings--;
+      }
+    }
     handle("setCompanion", (input) =>
       updatePreferences({ companion: companionSchema.parse(input) }),
     );
-    handle("setPlacement", (input) =>
-      updatePreferences({ placement: placementSchema.parse(input) }),
+    handle("completeOnboarding", async (input) => {
+      const options = z
+        .strictObject({ openWorkspace: z.boolean().optional() })
+        .optional()
+        .parse(input);
+      await updatePreferences({ onboardingComplete: true });
+      // Open the workspace only after setup is saved, so a failed save stays visible in the setup window.
+      if (options?.openWorkspace) openWorkspace();
+    });
+    handle("replayOnboarding", replaySetup);
+    handle("openPermissionSettings", (kind) =>
+      shell.openExternal(permissionPanes[permissionKindSchema.parse(kind)]),
     );
-    handle("completeOnboarding", () =>
-      updatePreferences({ onboardingComplete: true }),
-    );
-    handle("replayOnboarding", () =>
-      updatePreferences({ onboardingComplete: false }),
-    );
-    handle("revealAppInFinder", () => {
-      shell.showItemInFolder(app.isPackaged ? appBundlePath() : root);
-    });
-    ipcMain.handle("kite:openAccessibilitySettings", async (event) => {
-      if (
-        event.sender !== notch?.webContents ||
-        event.senderFrame !== event.sender.mainFrame
-      )
-        throw new Error("Untrusted setup sender");
-      accessibilityGuideActive = true;
-      positionNotch();
-      try {
-        await shell.openExternal(
-          "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility",
-        );
-      } catch (error) {
-        accessibilityGuideActive = false;
-        positionNotch();
-        throw error;
-      }
-    });
-    ipcMain.handle("kite:closeAccessibilityGuide", (event) => {
-      if (
-        event.sender !== notch?.webContents ||
-        event.senderFrame !== event.sender.mainFrame
-      )
-        throw new Error("Untrusted setup sender");
-      accessibilityGuideActive = false;
-      positionNotch();
-    });
-    handle("setNotchExpanded", (input) => {
-      notchExpanded = z.boolean().parse(input);
-      if (settings.onboardingComplete) positionNotch();
-    });
-    ipcMain.on("kite:startAppDrag", (event) => {
-      if (
-        event.sender !== notch?.webContents ||
-        event.senderFrame !== event.sender.mainFrame ||
-        !app.isPackaged
-      )
-        return;
-      event.sender.startDrag({ file: appBundlePath(), icon: appDragIcon });
-    });
     session.defaultSession.setPermissionRequestHandler(
       (_wc, _permission, callback) => callback(false),
     );
@@ -862,12 +874,12 @@ app
       return true;
     });
     handle("permissions", async (kind) => {
-      z.enum(["accessibility", "screenCapture"]).parse(kind);
+      const parsed = permissionKindSchema.parse(kind);
       await runHelper(() =>
         exec(
           helper,
           [
-            kind === "accessibility"
+            parsed === "accessibility"
               ? "--request-accessibility"
               : "--request-screen",
           ],
@@ -962,18 +974,13 @@ app
         }
       },
     );
-    await refreshNotchInset();
-    const bundledIcon = nativeImage.createFromPath(
-      join(root, "dist/renderer/capybara.png"),
-    );
-    appDragIcon = bundledIcon.isEmpty()
-      ? nativeImage.createFromDataURL(trayIcon)
-      : bundledIcon.resize({ width: 64, height: 64 });
     workspace = makeWindow(false);
     buddy = makeWindow(true);
-    notch = makeNotchWindow();
     companionChat = makeCompanionChatWindow();
     const restoreVisibleBuddy = () => {
+      // Display changes also arrive while quitting, after the companion is destroyed; touching it
+      // then throws, and Electron's uncaught-exception dialog holds the quit up.
+      if (buddy.isDestroyed()) return;
       buddyGesture = undefined;
       const [x, y] = buddy.getPosition();
       const position = clampBuddyPosition({ x, y }, buddyAreas());
@@ -987,30 +994,9 @@ app
         }),
       );
     };
-    function reflowDisplays() {
-      restoreVisibleBuddy();
-      void refreshNotchInset().catch((error: unknown) =>
-        dialog.showMessageBox({
-          type: "error",
-          message: "Could not reposition the notch companion",
-          detail: error instanceof Error ? error.message : "Unknown error",
-        }),
-      );
-    }
-    screen.on("display-removed", reflowDisplays);
-    screen.on("display-added", reflowDisplays);
-    screen.on("display-metrics-changed", reflowDisplays);
-    if (
-      !globalShortcut.register("CommandOrControl+Shift+K", () => {
-        if (workspace.isVisible() && workspace.isFocused()) workspace.hide();
-        else openWorkspace();
-      })
-    )
-      await dialog.showMessageBox(workspace, {
-        type: "warning",
-        message:
-          "⌘⇧K is in use by another app. Open OpenMuse from the menu bar.",
-      });
+    screen.on("display-removed", restoreVisibleBuddy);
+    screen.on("display-added", restoreVisibleBuddy);
+    screen.on("display-metrics-changed", restoreVisibleBuddy);
     const icon = nativeImage
       .createFromDataURL(trayIcon)
       .resize({ width: 18, height: 18 });
@@ -1024,13 +1010,17 @@ app
         {
           label: "Replay setup",
           click: () => {
-            void updatePreferences({ onboardingComplete: false }).catch(
-              (error: unknown) =>
-                dialog.showErrorBox(
-                  "Could not replay setup",
+            void replaySetup().catch((error: unknown) => {
+              // A sheet on the workspace, not a parentless alert: on macOS that would freeze the
+              // main process, and the usual refusal comes while a recording is still sending events.
+              openWorkspace();
+              void dialog.showMessageBox(workspace, {
+                type: "error",
+                message: "Could not replay setup",
+                detail:
                   error instanceof Error ? error.message : "Unknown error",
-                ),
-            );
+              });
+            });
           },
         },
         {
@@ -1043,7 +1033,19 @@ app
         { label: "Quit OpenMuse Desktop", click: () => app.quit() },
       ]),
     );
-    app.on("activate", openWorkspace);
+    app.on("activate", () => {
+      if (settings.onboardingComplete) openWorkspace();
+      else syncCompanionWindows();
+    });
+    // Registered last, once the menu bar item exists. A taken shortcut is only logged: on macOS a
+    // parentless alert freezes the main process until it is dismissed, and a sheet on the workspace,
+    // which is hidden at launch, would never be seen.
+    void registerWorkspaceShortcut().then((registered) => {
+      if (!registered && !(app as typeof app & { quitting?: boolean }).quitting)
+        console.warn(
+          "⌘⇧K is in use by another app; open OpenMuse from the menu bar.",
+        );
+    });
   })
   .catch(async (error) => {
     await dialog.showMessageBox({

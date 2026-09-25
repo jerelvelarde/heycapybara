@@ -2088,532 +2088,201 @@ body:has(.companion-chat),
   }
 }
 
-.placement-options {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 10px;
-  margin: 18px 0 8px;
-}
-.placement-option {
-  justify-content: flex-start;
-  text-align: left;
-  gap: 10px;
-  min-width: 0;
-  padding: 12px;
-  border: 1px solid var(--line);
-  border-radius: 11px;
-  background: var(--white);
-}
-.placement-option:hover {
-  background: var(--sky);
-}
-.placement-option[aria-pressed="true"] {
-  border-color: var(--blue-dark);
-  background: var(--sky);
-}
-.placement-option > svg:first-child {
-  color: var(--blue-dark);
-}
-.placement-option > span {
-  display: grid;
-  gap: 3px;
-  flex: 1;
-}
-.placement-option strong {
-  font-size: 12px;
-}
-.placement-option small {
-  font-size: 10px;
-  color: var(--muted);
-}
-.placement-option > svg:last-child {
-  color: var(--blue-dark);
-}
-.placement-replay {
-  margin: 7px 0 20px;
+.setup-replay {
+  margin-top: 14px;
 }
 
-/* The notch is a separate transparent native window. All content stays in its safe area. */
-html:has(.notch),
-body:has(.notch),
-#root:has(.notch),
-html:has(.notch-loading),
-body:has(.notch-loading),
-#root:has(.notch-loading) {
-  background: transparent;
-}
-body:has(.notch),
-body:has(.notch-loading) {
-  overflow: hidden;
-}
-.notch {
-  width: 100%;
-  color: var(--text);
-  font-family: "DM Sans", sans-serif;
-  -webkit-app-region: no-drag;
-}
-.notch button {
-  -webkit-app-region: no-drag;
-}
-.notch-setup {
-  max-width: 430px;
-  max-height: 100vh;
-  overflow-y: auto;
-  margin: 0 auto;
-  padding: 20px 25px 22px;
+/* Setup window (first launch and Replay setup). .onboarding-titlebar reserves the hidden-inset title bar strip as a drag region, pinned to the top while setup scrolls so the window stays draggable. */
+body:has(.onboarding) {
   background: var(--white);
-  border: 1px solid #daeaf5;
-  border-radius: 0 0 24px 24px;
-  box-shadow:
-    0 18px 55px #102b3d30,
-    0 2px 10px #102b3d14;
 }
-.notch-topline {
+.onboarding {
+  --onboarding-titlebar-height: 38px;
+  height: 100vh;
+  overflow-y: auto;
+  /* Scrolling to a focused control keeps it clear of the pinned title bar strip. */
+  scroll-padding-top: var(--onboarding-titlebar-height);
   display: flex;
-  justify-content: space-between;
+  flex-direction: column;
   align-items: center;
-  color: var(--muted);
-  font-size: 9px;
-  font-weight: 700;
-  letter-spacing: 1px;
+  padding: 0 44px 32px;
+  background: var(--white);
+  user-select: none;
 }
-.notch-brand {
+.onboarding-titlebar {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  align-self: stretch;
+  flex: 0 0 var(--onboarding-titlebar-height);
+  margin: 0 -44px;
+  background: var(--white);
+  -webkit-app-region: drag;
+}
+.onboarding button {
+  -webkit-app-region: no-drag;
+}
+.onboarding-dots {
   display: flex;
-  align-items: center;
   gap: 6px;
-  color: var(--text);
-  font-family: Manrope, sans-serif;
-  font-size: 14px;
-  font-weight: 800;
+  margin-bottom: 14px;
+}
+.onboarding-dots span {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--line);
+}
+.onboarding-dots span.current {
+  background: var(--blue-dark);
+}
+.onboarding-screen {
+  flex: 1;
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  animation: onboarding-in 220ms ease-out;
+}
+.onboarding-screen h1 {
+  margin-top: 6px;
+  font-size: 26px;
   letter-spacing: -0.4px;
+  outline: none;
 }
-.notch-brand-mark {
-  color: var(--blue-dark);
-  font-size: 21px;
-}
-.notch-progress {
-  display: flex;
-  gap: 5px;
-  margin: 16px 0 18px;
-}
-.notch-progress span {
-  flex: 1;
-  height: 3px;
-  border-radius: 4px;
-  background: #e9edf0;
-}
-.notch-progress span.current {
-  background: var(--blue-dark);
-}
-.notch-step {
-  display: flex;
-  flex-direction: column;
-  align-items: flex-start;
-}
-.notch-eyebrow {
-  color: var(--blue-dark);
-  font-weight: 750;
-  font-size: 9px;
-  letter-spacing: 1.35px;
-  margin: 3px 0 7px;
-}
-.notch-step h1 {
-  font-size: 24px;
-  line-height: 1.17;
-  letter-spacing: -0.9px;
-  margin: 0 0 9px;
-}
-.notch-step > p {
+.onboarding-screen > p:not([class]) {
+  max-width: 340px;
+  margin-top: 8px;
   color: var(--muted);
-  font-size: 12px;
-  line-height: 1.55;
-  max-width: 355px;
+  font-size: 13px;
+  line-height: 1.5;
 }
-.notch-icon {
+.onboarding-art {
+  position: relative;
+  height: 190px;
   display: grid;
   place-items: center;
-  width: 41px;
-  height: 41px;
-  border-radius: 13px;
-  background: var(--sky);
-  color: var(--blue-dark);
-  margin-bottom: 15px;
+  margin: 16px 0 8px;
 }
-.notch-mascot {
-  width: 105px;
-  height: 93px;
-  align-self: center;
-  margin: 4px 0 13px;
-  display: grid;
-  place-items: center;
+.onboarding-art .sprite-capybara {
+  width: 170px;
+  height: 170px;
 }
-.notch-mascot img {
-  width: 100%;
-  height: 100%;
-  object-fit: contain;
-  -webkit-user-drag: none;
-}
-.notch-welcome,
-.notch-ready {
-  align-items: center;
-  text-align: center;
-}
-.notch-welcome > p,
-.notch-ready > p {
-  max-width: 320px;
-}
-.notch-primary {
-  min-height: 37px;
-  padding: 0 15px;
-  border-radius: 9px;
-  background: var(--blue-dark);
-  color: white;
-  font-weight: 700;
-  font-size: 11px;
-}
-.notch-primary:hover:not(:disabled) {
-  background: #105fa6;
-}
-.notch-welcome .notch-primary,
-.notch-ready .notch-primary {
-  margin-top: 20px;
-}
-.notch-secondary {
-  min-height: 37px;
-  padding: 0 12px;
-  border: 1px solid #d9e6ed;
-  border-radius: 9px;
-  color: var(--text);
-  background: white;
-  font-weight: 650;
-  font-size: 11px;
-}
-.notch-secondary:hover:not(:disabled) {
-  background: var(--sky);
-}
-.notch-actions {
-  display: flex;
-  gap: 8px;
-  flex-wrap: wrap;
-  margin-top: 15px;
-}
-.notch-drag-row {
-  width: 100%;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 15px;
-  padding: 15px;
-  margin-top: 14px;
-  border-radius: 14px;
-  background: var(--sky);
-  border: 1px solid #dceef9;
-}
-.notch-app-tile,
-.notch-system-tile {
-  width: 123px;
-  min-height: 102px;
-  padding: 10px 6px;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  gap: 3px;
-  text-align: center;
-  border-radius: 10px;
-  background: white;
-  border: 1px solid #e1e8ed;
-}
-.notch-app-tile {
-  cursor: grab;
-}
-.notch-app-tile:active {
-  cursor: grabbing;
-}
-.notch-app-tile img {
-  width: 40px;
-  height: 40px;
-  object-fit: contain;
-  pointer-events: none;
-  -webkit-user-drag: none;
-}
-.notch-app-tile strong,
-.notch-system-tile strong {
-  font-size: 10px;
-}
-.notch-app-tile span,
-.notch-system-tile span {
-  font-size: 9px;
-  color: var(--muted);
-}
-.notch-drag-arrow {
-  color: var(--blue-dark);
-}
-.notch-system-tile svg {
-  color: var(--blue-dark);
-  margin-bottom: 11px;
-}
-.notch-status {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  gap: 10px;
-  width: 100%;
-  padding: 11px 0;
-  margin-top: 12px;
-  border-top: 1px solid var(--line);
-  font-size: 10px;
-}
-.notch-status span {
-  display: flex;
-  align-items: center;
-  gap: 5px;
-}
-.notch-status-granted {
-  color: #26714b;
-}
-.notch-status-waiting {
-  color: var(--muted);
-}
-.notch-status button,
-.notch-link {
-  color: var(--blue-dark);
-  font-size: 10px;
-  font-weight: 700;
-  padding: 4px 0;
-}
-.notch-hint {
-  font-size: 10px !important;
-  line-height: 1.4 !important;
-}
-.notch-next {
-  margin-top: 14px;
-  margin-left: auto;
-  min-height: 34px;
-  padding: 0 12px;
-  border-radius: 8px;
-  background: var(--sky);
-  color: var(--blue-dark);
-  font-size: 11px;
-  font-weight: 750;
-}
-.notch-next:hover:not(:disabled) {
-  background: var(--blue);
-}
-.notch-permission-card {
-  display: flex;
-  align-items: center;
-  gap: 11px;
-  width: 100%;
-  padding: 13px;
-  border: 1px solid #daeaf5;
-  background: var(--sky);
-  border-radius: 11px;
-  margin-top: 20px;
-}
-.notch-permission-card > svg {
-  color: var(--blue-dark);
-}
-.notch-permission-card > span {
-  display: grid;
-  flex: 1;
-  gap: 3px;
-}
-.notch-permission-card strong {
-  font-size: 11px;
-}
-.notch-permission-card small {
-  font-size: 10px;
-  color: var(--muted);
-}
-.notch-bottom-actions {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  width: 100%;
-  margin-top: 14px;
-}
-.notch-bottom-actions .notch-next {
-  margin: 0;
-}
-.notch-icon-check {
+.onboarding-check {
+  position: absolute;
+  right: -4px;
+  bottom: 22px;
   width: 30px;
   height: 30px;
   display: grid;
   place-items: center;
+  border: 2px solid var(--white);
   border-radius: 50%;
   color: #26714b;
   background: var(--green);
-  margin-bottom: 8px;
 }
-.notch-error {
-  position: relative;
+.onboarding-actions {
+  margin-top: auto;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+}
+.onboarding-actions .button {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 11px 20px;
+  font-size: 13px;
+  font-weight: 600;
+}
+.onboarding-actions .text-button {
+  font-size: 12px;
+  font-weight: 600;
+}
+.onboarding-permissions {
+  width: 100%;
+  margin: 22px 0 0;
+  padding: 0;
+  list-style: none;
+  display: grid;
+  gap: 10px;
+  text-align: left;
+}
+.onboarding-permission {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 14px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+}
+.onboarding-permission > div {
+  flex: 1;
+  min-width: 0;
+}
+.onboarding-permission strong {
+  font-size: 13px;
+}
+.onboarding-permission small {
+  color: var(--muted);
+  font-weight: 500;
+}
+.onboarding-permission p {
+  margin-top: 3px;
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.4;
+}
+.onboarding-permission-icon {
+  flex: 0 0 36px;
+  height: 36px;
+  display: grid;
+  place-items: center;
+  border-radius: 10px;
+  color: var(--blue-dark);
+  background: var(--sky);
+}
+.onboarding-granted {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  color: #26714b;
+  font-size: 11px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+.onboarding-waiting svg {
+  vertical-align: -2px;
+}
+.onboarding-note {
+  margin-top: 12px;
+  color: var(--muted);
+  font-size: 11px;
+}
+.onboarding-error {
   width: 100%;
   margin-top: 12px;
-  padding: 9px 26px 9px 10px;
+  padding: 9px 12px;
   border: 1px solid #ebc2bb;
   border-radius: 8px;
   background: #fff3f0;
   color: #8c3f33;
-  font-size: 10px;
-  line-height: 1.4;
-}
-.notch-error button {
-  position: absolute;
-  right: 6px;
-  top: 7px;
-}
-.notch-home {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  padding-top: 0;
-}
-.notch-pill {
-  min-width: 190px;
-  height: 43px;
-  padding: 4px 15px;
-  border-radius: 0 0 20px 20px;
-  background: #11191c;
-  box-shadow: 0 7px 17px #142b3840;
-  color: white;
-  font-weight: 750;
-  letter-spacing: 0.1px;
-}
-.notch-pill img {
-  width: 35px;
-  height: 35px;
-  object-fit: contain;
-  -webkit-user-drag: none;
-}
-.notch-kite-mark {
-  display: grid;
-  place-items: center;
-  width: 35px;
-  height: 35px;
-  color: #c8e7ff;
-  font-size: 29px;
-}
-.notch-live {
-  width: 7px;
-  height: 7px;
-  border-radius: 50%;
-  background: #e7806e;
-}
-.notch-home-panel {
-  width: 280px;
-  padding: 16px;
-  border: 1px solid #daeaf5;
-  border-radius: 0 0 17px 17px;
-  background: white;
-  box-shadow: 0 17px 38px #102b3d2d;
-}
-.notch-home-panel > p:first-child {
-  font-size: 10px;
-  color: var(--muted);
-  margin-bottom: 9px;
-}
-.notch-home-actions {
-  display: grid;
-  gap: 4px;
-}
-.notch-home-actions button {
-  justify-content: flex-start;
-  padding: 10px;
-  border-radius: 8px;
-  color: var(--text);
   font-size: 11px;
-  font-weight: 650;
-}
-.notch-home-actions button:hover {
-  background: var(--sky);
-}
-.notch-home-actions svg {
-  color: var(--blue-dark);
-}
-.notch-permission-guide {
-  display: flex;
-  align-items: center;
-  gap: 13px;
-  width: calc(100% - 16px);
-  min-height: 164px;
-  margin: 8px;
-  padding: 15px;
-  border: 1px solid #daeaf5;
-  border-radius: 20px;
-  background: white;
-  box-shadow: 0 14px 40px #102b3d35;
-}
-.notch-guide-app-tile {
-  display: flex;
-  flex: none;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  gap: 3px;
-  width: 115px;
-  min-height: 122px;
-  border: 1px solid #c9e6f9;
-  border-radius: 13px;
-  background: var(--sky);
-  text-align: center;
-  cursor: grab;
-}
-.notch-guide-app-tile:active {
-  cursor: grabbing;
-}
-.notch-guide-app-tile img {
-  width: 55px;
-  height: 55px;
-  object-fit: contain;
-  pointer-events: none;
-  -webkit-user-drag: none;
-}
-.notch-guide-app-tile strong {
-  font-size: 10px;
-}
-.notch-guide-copy {
-  display: flex;
-  flex: 1;
-  flex-direction: column;
-  gap: 7px;
-  min-width: 0;
-}
-.notch-guide-copy > strong {
-  font-size: 12px;
-  line-height: 1.25;
-}
-.notch-guide-copy > span {
-  color: var(--muted);
-  font-size: 10px;
   line-height: 1.4;
+  text-align: left;
+  /* Setup text is not selectable, but an error can be copied into a bug report. */
+  user-select: text;
 }
-.notch-guide-actions {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 9px;
-  margin-top: 3px;
-}
-.notch-guide-actions button {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  color: var(--blue-dark);
-  font-size: 10px;
-  font-weight: 700;
-}
-.notch-guide-error {
-  position: absolute;
-  bottom: 6px;
-  left: 150px;
-  color: #8c3f33;
-  font-size: 9px;
+@keyframes onboarding-in {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
 }
 @media (prefers-reduced-motion: reduce) {
-  .notch *,
-  .notch *::before,
-  .notch *::after {
-    animation: none !important;
-    transition: none !important;
+  .onboarding-screen {
+    animation: none;
   }
 }
