@@ -2,7 +2,25 @@ import { randomUUID } from "node:crypto";
 import { EventType, type BaseEvent } from "@ag-ui/core";
 import type { ThreadEvent } from "@openai/codex-sdk";
 
-export function codexEvents(event: ThreadEvent): BaseEvent[] {
+/**
+ * An event OpenMuse's own runner emits next to Codex's, before a turn starts
+ * (server/codex-agent.ts). It reaches the chat as one AG-UI custom event.
+ */
+export type KiteNotice = {
+  type: "kite.notice";
+  name: string;
+  value: Record<string, unknown>;
+};
+
+export function codexEvents(event: ThreadEvent | KiteNotice): BaseEvent[] {
+  if (event.type === "kite.notice")
+    return [
+      {
+        type: EventType.CUSTOM,
+        name: event.name,
+        value: event.value,
+      } as BaseEvent,
+    ];
   if (event.type === "error" || event.type === "turn.failed")
     throw new Error(
       event.type === "error" ? event.message : event.error.message,

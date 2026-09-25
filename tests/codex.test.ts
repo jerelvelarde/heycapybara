@@ -1967,3 +1967,20 @@ test("the instructions never let the agent enter passwords, even where typing is
   assert.match(instructions, /never type, paste or otherwise enter passwords/);
   assert.match(instructions, /Never type commands into a terminal/);
 });
+
+test("codexEvents turns an OpenMuse notice into one AG-UI custom event", () => {
+  assert.deepEqual(
+    codexEvents({
+      type: "kite.notice",
+      name: "kite.memory-recalled",
+      value: { count: 1, previews: ["How to label spam"] },
+    }),
+    [
+      {
+        type: "CUSTOM",
+        name: "kite.memory-recalled",
+        value: { count: 1, previews: ["How to label spam"] },
+      },
+    ],
+  );
+});
