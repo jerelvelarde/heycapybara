@@ -65,6 +65,7 @@ import {
   openUrl,
   pressKeys,
   scrollOnScreen,
+  STOPPED_MESSAGE,
   takeScreenshot,
   toActionScreenshot,
   typeText,
@@ -222,6 +223,20 @@ function openMuseWindows() {
 // ends the sheet on it as a Cancel (NativeWindowMac::Hide), so openWorkspace
 // leaves a companion chat that is hosting one on screen.
 const approvalHosts = new Map<BrowserWindow, number>();
+// How many OpenMuse dialogs of any kind are open: approval sheets, but also
+// the working-folder and export choosers and error alerts. Agent input sent
+// while one is up could answer it - "Open" on the folder chooser would widen
+// what Codex may edit - so promptOpen() counts these too. Every dialog call
+// goes through here (tests/main-sheets.test.ts).
+let sheetsOpen = 0;
+async function showDialog<T>(show: () => T | Promise<T>): Promise<T> {
+  sheetsOpen++;
+  try {
+    return await show();
+  } finally {
+    sheetsOpen--;
+  }
+}
 async function approve(prompt: ApprovalPrompt, signal?: AbortSignal) {
   const { host, mustShow } = approvalHost({ companionChat, workspace });
   // -1, as bounce() itself returns when OpenMuse is already active, means
@@ -263,7 +278,7 @@ async function approve(prompt: ApprovalPrompt, signal?: AbortSignal) {
           // Always the parented form. The async message box attaches a sheet
           // to its parent even while that window is hidden; the parentless
           // form runs a blocking modal loop on macOS.
-          return dialog.showMessageBox(host, { ...options });
+          return showDialog(() => dialog.showMessageBox(host, { ...options }));
         },
         // Hiding a window ends its sheet and orders it out in the same call,
         // and the box resolves on a later task, so a host that is off screen
@@ -326,7 +341,7 @@ const computer: ComputerDeps = {
   resolve: (request) =>
     resolvePoint(screenshots, screen.getAllDisplays(), request),
   windows: openMuseWindows,
-  promptOpen: () => approvalHosts.size > 0,
+  promptOpen: () => approvalHosts.size > 0 || sheetsOpen > 0,
   confirm: approve,
   capture: async () => toActionScreenshot(await captureNow()),
   wait: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
@@ -430,16 +445,27 @@ async function approvedAction(
           message: "The agent wants to open an app",
           detail: `The agent says the app is: ${action.bundleId}`,
         },
-        signal,
+        cancel,
       ))
     )
       throw new Error(DECLINED_MESSAGE);
-    throwIfCancelled(signal);
+    throwIfCancelled(cancel);
     grants.acting(run);
-    await runHelper(
-      () => exec(helper, ["--open-app", action.bundleId], appLaunchTimeout),
-      helperStatus.appOpened,
-    );
+    try {
+      await runHelper(
+        () =>
+          exec(helper, ["--open-app", action.bundleId], {
+            ...appLaunchTimeout,
+            signal: cancel,
+          }),
+        helperStatus.appOpened,
+      );
+    } catch (error) {
+      // Stop kills the launch, which the helper can't report, so say so the
+      // way the other actions do (send() in electron/computer-action.ts).
+      if (cancel.aborted) throw new Error(STOPPED_MESSAGE, { cause: error });
+      throw error;
+    }
     return;
   }
   await performPointAction(
@@ -462,7 +488,7 @@ async function approvedAction(
         );
       },
     },
-    signal,
+    cancel,
   );
 }
 
@@ -562,10 +588,13 @@ async function startRecording(title: string) {
           })
           .catch(async () => {
             child.kill();
-            await dialog.showMessageBox({
-              type: "error",
-              message: "Recording stopped because an event could not be saved.",
-            });
+            await showDialog(() =>
+              dialog.showMessageBox({
+                type: "error",
+                message:
+                  "Recording stopped because an event could not be saved.",
+              }),
+            );
           });
       } catch {
         readyReject(new Error("Invalid native recorder event"));
@@ -587,11 +616,13 @@ async function startRecording(title: string) {
           })
           .catch(async () => {
             broadcast();
-            await dialog.showMessageBox({
-              type: "error",
-              message:
-                "Could not finalize the recording. Retry Stop or restart OpenMuse Desktop.",
-            });
+            await showDialog(() =>
+              dialog.showMessageBox({
+                type: "error",
+                message:
+                  "Could not finalize the recording. Retry Stop or restart OpenMuse Desktop.",
+              }),
+            );
           });
       }
     });
@@ -723,9 +754,11 @@ function makeCompanionChatWindow() {
   void loaded.catch((error: unknown) => {
     // Quitting aborts a load that is still running; a dialog then would hold up the quit.
     if ((app as typeof app & { quitting?: boolean }).quitting) return;
-    dialog.showErrorBox(
-      "OpenMuse chat could not load",
-      error instanceof Error ? error.message : "Unknown loading error",
+    void showDialog(() =>
+      dialog.showErrorBox(
+        "OpenMuse chat could not load",
+        error instanceof Error ? error.message : "Unknown loading error",
+      ),
     );
   });
   win.on("close", (event) => {
@@ -783,12 +816,14 @@ function makeOnboardingWindow() {
     console.error("OpenMuse setup could not load", error);
     // The closed handler clears `onboarding`, so the next sync builds a fresh window.
     win.destroy();
-    void dialog.showMessageBox({
-      type: "error",
-      message: "OpenMuse setup could not load",
-      detail:
-        "Choose Replay setup from the OpenMuse menu bar icon to try again.",
-    });
+    void showDialog(() =>
+      dialog.showMessageBox({
+        type: "error",
+        message: "OpenMuse setup could not load",
+        detail:
+          "Choose Replay setup from the OpenMuse menu bar icon to try again.",
+      }),
+    );
   });
   win.once("ready-to-show", () => {
     win.show();
@@ -807,12 +842,14 @@ function makeOnboardingWindow() {
     void skipOnboarding().catch((error: unknown) => {
       console.error("Could not skip setup", error);
       if (win.isDestroyed()) return;
-      void dialog.showMessageBox(win, {
-        type: "error",
-        message: "Could not skip setup",
-        detail:
-          "OpenMuse could not save your settings. Check free disk space and folder permissions, then close this window again.",
-      });
+      void showDialog(() =>
+        dialog.showMessageBox(win, {
+          type: "error",
+          message: "Could not skip setup",
+          detail:
+            "OpenMuse could not save your settings. Check free disk space and folder permissions, then close this window again.",
+        }),
+      );
     });
   });
   return win;
@@ -910,12 +947,14 @@ app
       (_wc, _permission, callback) => callback(false),
     );
     handle("chooseWorkspace", async () => {
-      const result = await dialog.showOpenDialog(workspace, {
-        title: "Choose OpenMuse's working folder",
-        message: "Codex can edit files and run commands in this folder.",
-        properties: ["openDirectory", "createDirectory"],
-        defaultPath: settings.workspace,
-      });
+      const result = await showDialog(() =>
+        dialog.showOpenDialog(workspace, {
+          title: "Choose OpenMuse's working folder",
+          message: "Codex can edit files and run commands in this folder.",
+          properties: ["openDirectory", "createDirectory"],
+          defaultPath: settings.workspace,
+        }),
+      );
       if (result.canceled || !result.filePaths[0]) return;
       await runtime.setWorkspace(result.filePaths[0]);
       broadcast();
@@ -992,11 +1031,13 @@ app
     handle("exportSkill", async (id) => {
       const skill = store.skills.find((s) => s.id === id);
       if (!skill) throw new Error("Skill not found");
-      const result = await dialog.showSaveDialog(workspace, {
-        title: "Export workflow skill",
-        defaultPath: "SKILL.md",
-        filters: [{ name: "Markdown", extensions: ["md"] }],
-      });
+      const result = await showDialog(() =>
+        dialog.showSaveDialog(workspace, {
+          title: "Export workflow skill",
+          defaultPath: "SKILL.md",
+          filters: [{ name: "Markdown", extensions: ["md"] }],
+        }),
+      );
       if (result.canceled || !result.filePath) return false;
       await writeFile(result.filePath, skill.markdown, { mode: 0o600 });
       return true;
@@ -1094,11 +1135,14 @@ app
       buddy.setPosition(position.x, position.y);
       positionCompanionChat();
       void persistBuddyPosition().catch((error: unknown) =>
-        dialog.showMessageBox({
-          type: "error",
-          message: "Could not save companion position",
-          detail: error instanceof Error ? error.message : "Unknown save error",
-        }),
+        showDialog(() =>
+          dialog.showMessageBox({
+            type: "error",
+            message: "Could not save companion position",
+            detail:
+              error instanceof Error ? error.message : "Unknown save error",
+          }),
+        ),
       );
     };
     screen.on("display-removed", restoreVisibleBuddy);
@@ -1121,12 +1165,14 @@ app
               // A sheet on the workspace, not a parentless alert: on macOS that would freeze the
               // main process, and the usual refusal comes while a recording is still sending events.
               openWorkspace();
-              void dialog.showMessageBox(workspace, {
-                type: "error",
-                message: "Could not replay setup",
-                detail:
-                  error instanceof Error ? error.message : "Unknown error",
-              });
+              void showDialog(() =>
+                dialog.showMessageBox(workspace, {
+                  type: "error",
+                  message: "Could not replay setup",
+                  detail:
+                    error instanceof Error ? error.message : "Unknown error",
+                }),
+              );
             });
           },
         },
@@ -1155,11 +1201,14 @@ app
     });
   })
   .catch(async (error) => {
-    await dialog.showMessageBox({
-      type: "error",
-      message: "OpenMuse Desktop could not start",
-      detail: error instanceof Error ? error.message : "Unknown startup error",
-    });
+    await showDialog(() =>
+      dialog.showMessageBox({
+        type: "error",
+        message: "OpenMuse Desktop could not start",
+        detail:
+          error instanceof Error ? error.message : "Unknown startup error",
+      }),
+    );
     app.quit();
   });
 app.on("before-quit", () => {
