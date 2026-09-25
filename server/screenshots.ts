@@ -178,3 +178,7 @@ export function describeScreenshot(shot: Screenshot, imageNumber: number) {
 export function unreferencedImageNote(imageNumber: number) {
   return `Image ${imageNumber} in this message has no screen reference, so point_on_screen cannot target it.`;
 }
+
+export function staleImageNote(imageNumber: number) {
+  return `Image ${imageNumber} in this message is a screenshot that is too old to point at. Ask the user to attach a new one if you need to point.`;
+}

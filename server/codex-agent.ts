@@ -22,8 +22,12 @@ import { Observable } from "rxjs";
 import { codexEvents } from "./codex-events";
 import {
   describeScreenshot,
+  isFresh,
+  pngSize,
+  staleImageNote,
   unreferencedImageNote,
   type ScreenshotLookup,
+  type Size,
 } from "./screenshots";
 
 export const instructions = `You are OpenMuse, a capable macOS workflow agent powered by Codex.
@@ -226,20 +230,26 @@ export class CodexRunner {
             )
               throw new Error("Only PNG screenshots up to 12 MB are supported");
             imageNumber += 1;
+            const bytes = Buffer.from(part.data, "base64");
+            let size: Size;
+            try {
+              size = pngSize(bytes);
+            } catch {
+              throw new Error("Only PNG screenshots up to 12 MB are supported");
+            }
             const shot = part.id
               ? this.options.screenshots?.get(part.id)
               : undefined;
-            prompt.push({
-              type: "text",
-              text: shot
-                ? describeScreenshot(shot, imageNumber)
-                : unreferencedImageNote(imageNumber),
-            });
+            let note: string;
+            if (!shot) note = unreferencedImageNote(imageNumber);
+            else if (!isFresh(shot)) note = staleImageNote(imageNumber);
+            else if (size.width === shot.width && size.height === shot.height)
+              note = describeScreenshot(shot, imageNumber);
+            else note = unreferencedImageNote(imageNumber);
+            prompt.push({ type: "text", text: note });
             temp ??= await mkdtemp(join(this.options.statePath, "screen-"));
             const path = join(temp, randomUUID() + ".png");
-            await writeFile(path, Buffer.from(part.data, "base64"), {
-              mode: 0o600,
-            });
+            await writeFile(path, bytes, { mode: 0o600 });
             prompt.push({ type: "local_image", path });
           } else throw new Error("Unsupported message attachment");
         }

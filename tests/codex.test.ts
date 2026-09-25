@@ -1,6 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { codexEvents } from "../server/codex-events";
+import { pngHeader } from "./png-fixture";
 
 test("Codex completion emits a single valid AG-UI text message", () => {
   const events = codexEvents({
@@ -214,8 +215,8 @@ test("attached screenshots are introduced with their id, display and pixel size"
     displayId: "1",
     label: "Built-in Retina Display",
     bounds: { x: 0, y: 0, width: 1512, height: 982 },
-    width: 1512,
-    height: 982,
+    width: 1386,
+    height: 900,
   });
   let prompt: unknown;
   const runner = new CodexRunner({
@@ -244,7 +245,8 @@ test("attached screenshots are introduced with their id, display and pixel size"
       },
     }),
   });
-  const image = Buffer.from("fixture image").toString("base64");
+  const referenced = Buffer.from(pngHeader(1386, 900)).toString("base64");
+  const unreferenced = Buffer.from(pngHeader(640, 480)).toString("base64");
   try {
     const events = runner.run(
       {
@@ -259,10 +261,10 @@ test("attached screenshots are introduced with their id, display and pixel size"
               {
                 type: "binary",
                 mimeType: "image/png",
-                data: image,
+                data: referenced,
                 id: shot.id,
               },
-              { type: "binary", mimeType: "image/png", data: image },
+              { type: "binary", mimeType: "image/png", data: unreferenced },
             ],
           },
         ],
@@ -282,12 +284,235 @@ test("attached screenshots are introduced with their id, display and pixel size"
     );
     assert.match(parts[1].text ?? "", /^Image 1 in this message is screenshot/);
     assert.match(parts[1].text ?? "", new RegExp(shot.id));
-    assert.match(parts[1].text ?? "", /1512×982 pixels/);
+    assert.match(parts[1].text ?? "", /1386×900 pixels/);
+    assert.match(parts[1].text ?? "", /Built-in Retina Display/);
+    assert.match(parts[1].text ?? "", /origin at the top-left/);
     assert.match(
       parts[3].text ?? "",
       /^Image 2 in this message has no screen reference/,
     );
     assert.match(instructions, /never guess screen coordinates/i);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("a screenshot whose attached image doesn't match the registered capture size gets no screen reference", async () => {
+  const { CodexRunner } = await import("../server/codex-agent");
+  const { ScreenshotRegistry } = await import("../server/screenshots");
+  const { mkdtemp, rm } = await import("node:fs/promises");
+  const { tmpdir } = await import("node:os");
+  const { join } = await import("node:path");
+  const root = await mkdtemp(join(tmpdir(), "kite-prompt-mismatch-test-"));
+  const screenshots = new ScreenshotRegistry();
+  const shot = screenshots.add({
+    displayId: "1",
+    label: "Built-in Retina Display",
+    bounds: { x: 0, y: 0, width: 1512, height: 982 },
+    width: 1386,
+    height: 900,
+  });
+  let prompt: unknown;
+  const runner = new CodexRunner({
+    statePath: root,
+    screenshots,
+    getConfig: () => ({
+      apiKey: "fixture-key",
+      model: "gpt-5.4",
+      workspace: "/test/one",
+      mcpUrl: "http://localhost/mcp",
+      mcpToken: "fixture-token",
+    }),
+    createClient: () => ({
+      startThread: () => ({
+        runStreamed: async (input) => {
+          prompt = input;
+          return {
+            events: (async function* () {
+              yield { type: "thread.started" as const, thread_id: "native-1" };
+            })(),
+          };
+        },
+      }),
+      resumeThread: () => {
+        throw new Error("Unexpected resume");
+      },
+    }),
+  });
+  const mismatched = Buffer.from(pngHeader(100, 100)).toString("base64");
+  try {
+    const events = runner.run(
+      {
+        threadId: "prompt",
+        runId: "r",
+        messages: [
+          {
+            id: "m",
+            role: "user",
+            content: [
+              {
+                type: "binary",
+                mimeType: "image/png",
+                data: mismatched,
+                id: shot.id,
+              },
+            ],
+          },
+        ],
+        tools: [],
+        context: [],
+        state: {},
+        forwardedProps: {},
+      },
+      new AbortController().signal,
+    );
+    for await (const event of events)
+      assert.equal(event.type, "thread.started");
+    const parts = prompt as { type: string; text?: string }[];
+    assert.match(
+      parts[0].text ?? "",
+      /^Image 1 in this message has no screen reference/,
+    );
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("a screenshot capture older than 10 minutes is described as too stale to point at", async () => {
+  const { CodexRunner } = await import("../server/codex-agent");
+  const { ScreenshotRegistry } = await import("../server/screenshots");
+  const { mkdtemp, rm } = await import("node:fs/promises");
+  const { tmpdir } = await import("node:os");
+  const { join } = await import("node:path");
+  const root = await mkdtemp(join(tmpdir(), "kite-prompt-stale-test-"));
+  const screenshots = new ScreenshotRegistry(
+    16,
+    () => Date.now() - 11 * 60 * 1000,
+  );
+  const shot = screenshots.add({
+    displayId: "1",
+    label: "Built-in Retina Display",
+    bounds: { x: 0, y: 0, width: 1512, height: 982 },
+    width: 1386,
+    height: 900,
+  });
+  let prompt: unknown;
+  const runner = new CodexRunner({
+    statePath: root,
+    screenshots,
+    getConfig: () => ({
+      apiKey: "fixture-key",
+      model: "gpt-5.4",
+      workspace: "/test/one",
+      mcpUrl: "http://localhost/mcp",
+      mcpToken: "fixture-token",
+    }),
+    createClient: () => ({
+      startThread: () => ({
+        runStreamed: async (input) => {
+          prompt = input;
+          return {
+            events: (async function* () {
+              yield { type: "thread.started" as const, thread_id: "native-1" };
+            })(),
+          };
+        },
+      }),
+      resumeThread: () => {
+        throw new Error("Unexpected resume");
+      },
+    }),
+  });
+  const image = Buffer.from(pngHeader(1386, 900)).toString("base64");
+  try {
+    const events = runner.run(
+      {
+        threadId: "prompt",
+        runId: "r",
+        messages: [
+          {
+            id: "m",
+            role: "user",
+            content: [
+              {
+                type: "binary",
+                mimeType: "image/png",
+                data: image,
+                id: shot.id,
+              },
+            ],
+          },
+        ],
+        tools: [],
+        context: [],
+        state: {},
+        forwardedProps: {},
+      },
+      new AbortController().signal,
+    );
+    for await (const event of events)
+      assert.equal(event.type, "thread.started");
+    const parts = prompt as { type: string; text?: string }[];
+    assert.match(
+      parts[0].text ?? "",
+      /^Image 1 in this message is a screenshot that is too old to point at/,
+    );
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("a binary attachment that isn't actually a PNG is rejected even when labelled image/png", async () => {
+  const { CodexRunner } = await import("../server/codex-agent");
+  const { mkdtemp, rm } = await import("node:fs/promises");
+  const { tmpdir } = await import("node:os");
+  const { join } = await import("node:path");
+  const root = await mkdtemp(join(tmpdir(), "kite-prompt-badpng-test-"));
+  const runner = new CodexRunner({
+    statePath: root,
+    getConfig: () => ({
+      apiKey: "fixture-key",
+      model: "gpt-5.4",
+      workspace: "/test/one",
+      mcpUrl: "http://localhost/mcp",
+      mcpToken: "fixture-token",
+    }),
+    createClient: () => ({
+      startThread: () => ({
+        runStreamed: async () => {
+          throw new Error("runStreamed should not be called");
+        },
+      }),
+      resumeThread: () => {
+        throw new Error("Unexpected resume");
+      },
+    }),
+  });
+  const notAPng = Buffer.from("not actually a png").toString("base64");
+  try {
+    await assert.rejects(async () => {
+      for await (const event of runner.run(
+        {
+          threadId: "prompt",
+          runId: "r",
+          messages: [
+            {
+              id: "m",
+              role: "user",
+              content: [
+                { type: "binary", mimeType: "image/png", data: notAPng },
+              ],
+            },
+          ],
+          tools: [],
+          context: [],
+          state: {},
+          forwardedProps: {},
+        },
+        new AbortController().signal,
+      ))
+        assert.equal(event.type, "thread.started");
+    }, /Only PNG screenshots/);
   } finally {
     await rm(root, { recursive: true, force: true });
   }

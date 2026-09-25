@@ -13,6 +13,7 @@ import {
   unreferencedImageNote,
   type Screenshot,
 } from "../server/screenshots";
+import { pngHeader } from "./png-fixture";
 
 const display = { x: 0, y: 0, width: 1512, height: 982 };
 const shot: Screenshot = {
@@ -24,17 +25,6 @@ const shot: Screenshot = {
   height: 900,
   capturedAt: 1_000_000,
 };
-
-function pngHeader(width: number, height: number) {
-  const bytes = new Uint8Array(33);
-  bytes.set([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
-  const view = new DataView(bytes.buffer);
-  view.setUint32(8, 13);
-  bytes.set([0x49, 0x48, 0x44, 0x52], 12);
-  view.setUint32(16, width);
-  view.setUint32(20, height);
-  return bytes;
-}
 
 test("the prompt budget matches Codex's high-detail limits", () => {
   assert.equal(fitsPromptBudget({ width: 1920, height: 1200 }), true);
