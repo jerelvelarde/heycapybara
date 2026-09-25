@@ -558,6 +558,7 @@ app
         ? join(process.resourcesPath, "codex-runtime/bin/codex")
         : undefined,
       action: approvedAction,
+      screenshots,
     });
     settings = runtime.settings;
     const preferencesPath = join(app.getPath("userData"), "preferences.json");
