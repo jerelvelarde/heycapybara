@@ -48,7 +48,7 @@ import {
   loadBuddyPosition,
   saveBuddyPosition,
 } from "./buddy-position";
-import { runHelper, helperStatus } from "./helper-result";
+import { runHelper, helperStatus, withInput } from "./helper-result";
 import { performPointAction } from "./point-action";
 import {
   askApproval,
@@ -59,15 +59,24 @@ import {
 } from "./approval";
 import { conceal, markTransparent } from "./window-occlusion";
 import type { Point } from "../src/buddy-drag";
+import { ControlGrants } from "./control-grant";
 import {
-  bundleIdSchema,
-  pointLabelSchema,
-  screenshotIdSchema,
-} from "../server/point-schema";
+  clickOnScreen,
+  openUrl,
+  pressKeys,
+  scrollOnScreen,
+  takeScreenshot,
+  toActionScreenshot,
+  typeText,
+  type ComputerDeps,
+} from "./computer-action";
+import { desktopActionSchema } from "../server/computer-schema";
+import type { AgentRun } from "../server/run-registry";
 import { startRuntime } from "../server/runtime";
 import { ScreenshotRegistry, resolvePoint } from "../server/screenshots";
 import type {
   CompanionTrayMode,
+  DesktopActionResult,
   Permissions,
   ScreenshotAttachment,
   Settings,
@@ -88,6 +97,9 @@ const helperTimeout = { timeout: 15_000 };
 // A first launch of an app can walk through Gatekeeper's notarization
 // check, which can take longer than every other helper call.
 const appLaunchTimeout = { timeout: 60_000 };
+// Typing sends one key event pair per character, a few milliseconds apart
+// (native/Recorder.swift --type), so it gets longer than other commands.
+const typingTimeout = { timeout: 30_000 };
 const screenshots = new ScreenshotRegistry();
 let workspace: BrowserWindow;
 let buddy: BrowserWindow;
@@ -275,31 +287,144 @@ async function approve(prompt: ApprovalPrompt, signal?: AbortSignal) {
     else approvalHosts.delete(host);
   }
 }
+// One control grant per agent run (electron/control-grant.ts), asked like
+// every other prompt: as a sheet on an OpenMuse window, through approve().
+const grants = new ControlGrants(approve);
+
+// Takes one screenshot of the main display. The composer's attach button
+// shares captures through singleFlight (in whenReady below); the agent's
+// take_screenshot, and the screenshot after a click or scroll, call this
+// directly, so they never reuse a capture that started before the agent's
+// last action.
+function captureNow(): Promise<ScreenshotAttachment> {
+  return captureScreenshot({
+    screenCaptureAllowed: async () => (await permissions()).screenCapture,
+    primaryDisplay: () => screen.getPrimaryDisplay(),
+    displays: () => screen.getAllDisplays(),
+    conceal: () => conceal(openMuseWindows().filter((win) => win.isVisible())),
+    wait: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+    sources: (target) =>
+      desktopCapturer.getSources({
+        types: ["screen"],
+        thumbnailSize: target,
+      }),
+    // A 2x NativeImage keeps its scale factor through resize(), so its PNG
+    // would stay 2x; rebuilding it from its own pixels makes the target a
+    // pixel size.
+    rebuild: (png, size) =>
+      nativeImage.createFromBuffer(png).resize(size).toPNG(),
+    register: (input) => screenshots.add(input),
+    sourcesTimeoutMs: 10_000,
+  });
+}
+
+// What the computer-use actions (electron/computer-action.ts) run on.
+// openMuseWindows() includes the setup window while it exists, so a click
+// or scroll under it clears it too instead of landing on OpenMuse.
+const computer: ComputerDeps = {
+  grants,
+  resolve: (request) =>
+    resolvePoint(screenshots, screen.getAllDisplays(), request),
+  windows: openMuseWindows,
+  promptOpen: () => approvalHosts.size > 0,
+  confirm: approve,
+  capture: async () => toActionScreenshot(await captureNow()),
+  wait: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+  click: async (point, button, clicks, signal) => {
+    await runHelper(
+      () =>
+        exec(
+          helper,
+          ["--click", String(point.x), String(point.y), button, String(clicks)],
+          { ...helperTimeout, signal },
+        ),
+      helperStatus.clickSent,
+    );
+  },
+  scroll: async (point, direction, amount, signal) => {
+    await runHelper(
+      () =>
+        exec(
+          helper,
+          [
+            "--scroll",
+            String(point.x),
+            String(point.y),
+            direction,
+            String(amount),
+          ],
+          { ...helperTimeout, signal },
+        ),
+      helperStatus.scrollSent,
+    );
+  },
+  // The text goes on stdin: any process on the Mac can read another's
+  // arguments.
+  type: async (text, signal) => {
+    await runHelper(
+      () =>
+        withInput(exec(helper, ["--type"], { ...typingTimeout, signal }), text),
+      helperStatus.textTyped,
+    );
+  },
+  keys: async (key, modifiers, signal) => {
+    await runHelper(
+      () =>
+        exec(helper, ["--keys", key, ...modifiers], {
+          ...helperTimeout,
+          signal,
+        }),
+      helperStatus.keysPressed,
+    );
+  },
+  openUrl: async (url, bundleId, signal) => {
+    await runHelper(
+      () =>
+        exec(helper, ["--open-url", bundleId, url], {
+          ...appLaunchTimeout,
+          signal,
+        }),
+      helperStatus.webPageOpened,
+    );
+  },
+};
+
 // The runtime is the only caller: the kite:action IPC route that used to
 // hand this a renderer's unvalidated input is gone (approvedAction is no
 // longer registered as an IPC handler at all), so this takes the runtime's
-// own AbortSignal directly instead of validating one out of unknown input.
-async function approvedAction(input: unknown, signal?: AbortSignal) {
-  const action = z
-    .discriminatedUnion("type", [
-      z.object({
-        type: z.literal("open-app"),
-        bundleId: bundleIdSchema,
-      }),
-      z.object({
-        type: z.literal("point"),
-        screenshotId: screenshotIdSchema,
-        x: z.number(),
-        y: z.number(),
-        label: pointLabelSchema,
-      }),
-    ])
-    .parse(input);
+// own AbortSignal for the call, and the run the call belongs to
+// (server/tools.ts), directly instead of validating them out of unknown
+// input.
+async function approvedAction(
+  input: unknown,
+  signal: AbortSignal,
+  run: AgentRun,
+): Promise<DesktopActionResult | void> {
+  const action = desktopActionSchema.parse(input);
+  // Computer-use actions stop when their call is cancelled or when their run
+  // ends, whichever comes first, so Stop cancels one that is under way.
+  const cancel = AbortSignal.any([signal, run.signal]);
+  switch (action.type) {
+    case "screenshot":
+      return takeScreenshot(run, cancel, computer);
+    case "click":
+      return clickOnScreen(action, run, cancel, computer);
+    case "scroll":
+      return scrollOnScreen(action, run, cancel, computer);
+    case "type":
+      return typeText(action.text, run, cancel, computer);
+    case "keys":
+      return pressKeys(action, run, cancel, computer);
+    case "open-url":
+      return openUrl(action, run, cancel, computer);
+  }
   if (action.type === "open-app") {
-    // The bundle id comes from the model, so like a pointer label it goes on
-    // its own attributed line in the detail, where it can't rewrite the
-    // message.
+    // Under a control grant the user already let the agent act for this task
+    // (electron/control-grant.ts), so opening an app doesn't ask again. The
+    // bundle id comes from the model, so like a pointer label it goes on its
+    // own attributed line in the detail, where it can't rewrite the message.
     if (
+      !grants.has(run) &&
       !(await approve(
         {
           message: "The agent wants to open an app",
@@ -310,6 +435,7 @@ async function approvedAction(input: unknown, signal?: AbortSignal) {
     )
       throw new Error(DECLINED_MESSAGE);
     throwIfCancelled(signal);
+    grants.acting(run);
     await runHelper(
       () => exec(helper, ["--open-app", action.bundleId], appLaunchTimeout),
       helperStatus.appOpened,
@@ -320,7 +446,9 @@ async function approvedAction(input: unknown, signal?: AbortSignal) {
     action.label,
     {
       resolve: () => resolvePoint(screenshots, screen.getAllDisplays(), action),
-      confirm: approve,
+      // Pointing doesn't ask under a control grant either.
+      confirm: (prompt, promptSignal) =>
+        grants.has(run) ? Promise.resolve(true) : approve(prompt, promptSignal),
       windows: openMuseWindows,
       showPointer: async (point) => {
         await runHelper(
@@ -893,30 +1021,9 @@ app
     // needs it, so overlapping captures can't see each other's windows.
     // This guard exists so a burst of quick clicks shares one real capture
     // and adds one registry entry, instead of hitting desktopCapturer and
-    // screenshots.add() once per click.
-    const captureScreenshotOnce = singleFlight(
-      (): Promise<ScreenshotAttachment> =>
-        captureScreenshot({
-          screenCaptureAllowed: async () => (await permissions()).screenCapture,
-          primaryDisplay: () => screen.getPrimaryDisplay(),
-          displays: () => screen.getAllDisplays(),
-          conceal: () =>
-            conceal(openMuseWindows().filter((win) => win.isVisible())),
-          wait: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
-          sources: (target) =>
-            desktopCapturer.getSources({
-              types: ["screen"],
-              thumbnailSize: target,
-            }),
-          // A 2x NativeImage keeps its scale factor through resize(), so its
-          // PNG would stay 2x; rebuilding it from its own pixels makes the
-          // target a pixel size.
-          rebuild: (png, size) =>
-            nativeImage.createFromBuffer(png).resize(size).toPNG(),
-          register: (input) => screenshots.add(input),
-          sourcesTimeoutMs: 10_000,
-        }),
-    );
+    // screenshots.add() once per click. The agent's captures bypass this;
+    // see captureNow.
+    const captureScreenshotOnce = singleFlight(captureNow);
     handle("screenshot", captureScreenshotOnce);
     handle("openWorkspace", openWorkspace);
     ipcMain.handle("kite:toggleCompanionChat", (event) => {
