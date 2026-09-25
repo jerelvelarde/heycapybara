@@ -8,6 +8,7 @@ import { join } from "node:path";
 import {
   reportedError,
   runHelper,
+  withInput,
   helperStatus,
   type HelperStatus,
 } from "../electron/helper-result";
@@ -461,7 +462,8 @@ test("native/Recorder.swift reports each helperStatus value as a status event, a
 // (none of them contain the literal substring "exec("), so a synchronous
 // helper call would slip past both counts; it gets its own separate,
 // simpler check instead, since the helper must never be run synchronously
-// at all, wrapped or not.
+// at all, wrapped or not. `withInput(`, which only writes the helper's
+// stdin, may sit between the arrow and `exec(`.
 test("every exec(helper call in electron/main.ts is wrapped in runHelper(, execFile is never called directly, and the helper is never spawned synchronously", async () => {
   const source = await readFile(
     new URL("../electron/main.ts", import.meta.url),
@@ -469,7 +471,7 @@ test("every exec(helper call in electron/main.ts is wrapped in runHelper(, execF
   );
   const count = (pattern: RegExp) => (source.match(pattern) ?? []).length;
   const wrapped = count(
-    /runHelper\(\s*(?:async\s*)?\(\)\s*=>\s*(?:\{\s*return\s+)?exec\(\s*helper\b/g,
+    /runHelper\(\s*(?:async\s*)?\(\)\s*=>\s*(?:\{\s*return\s+)?(?:withInput\(\s*)?exec\(\s*helper\b/g,
   );
   const bare = count(/\bexec\(\s*helper\b/g);
   assert.ok(bare > 0, "expected at least one exec(helper call");
@@ -488,4 +490,16 @@ test("every exec(helper call in electron/main.ts is wrapped in runHelper(, execF
     0,
     "the helper must never be run synchronously (execFileSync/execSync/spawnSync)",
   );
+});
+
+test("withInput hands a process its input on stdin", async () => {
+  const { stdout } = await withInput(exec("/bin/cat", []), "typed text");
+  assert.equal(stdout, "typed text");
+});
+
+// A helper that refuses before reading stdin exits while the input is
+// still being written, which fails the write with EPIPE. Unhandled, that
+// `error` event would crash the whole main process.
+test("withInput survives a process that exits without reading its input", async () => {
+  await withInput(exec("/usr/bin/true", []), "x".repeat(1 << 20));
 });
