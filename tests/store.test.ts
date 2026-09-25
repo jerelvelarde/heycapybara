@@ -73,6 +73,15 @@ test("rejects path traversal, unknown recordings and malformed skills", async ()
     /name/,
   );
 });
+test("install user id is created once and reused across restarts", async () => {
+  const store = await fixture();
+  await store.load();
+  const id = store.installUserId;
+  assert.match(id, /^openmuse-/);
+  const again = new Store(store.root);
+  await again.load();
+  assert.equal(again.installUserId, id);
+});
 test("deleted evidence stays deleted and is excluded from prompts", async () => {
   const s = await fixture();
   await s.load();

@@ -19,10 +19,6 @@ import { createLearningReader, settleAfter } from "./learning";
 import { createMemoryAccess } from "./memory";
 import { KNOWLEDGE_TOOLS, createIntelligenceProxy } from "./intelligence-proxy";
 
-// The one local user that every run, memory and knowledge-base call belongs
-// to, so a lesson saved in one conversation is recalled in the next.
-const LOCAL_USER = { id: "kite-local-owner", name: "Kite desktop user" };
-
 export async function startRuntime(
   store: Store,
   options: {
@@ -38,6 +34,11 @@ export async function startRuntime(
 ) {
   const config = runtimeConfig(process.env);
   const token = randomBytes(32).toString("hex");
+  // Generated once per install and persisted in the store (electron/store.ts
+  // installUserId), so every run, memory and knowledge-base call in this
+  // install shares one Intelligence user id without colliding with anyone
+  // else who has the same project key.
+  const localUser = { id: store.installUserId, name: "Kite desktop user" };
   const intelligence = config.intelligenceConfigured
     ? new CopilotKitIntelligence({
         apiKey: process.env.CPK_INTELLIGENCE_API_KEY!,
@@ -62,7 +63,7 @@ export async function startRuntime(
         )
     : undefined;
   const memory = intelligence
-    ? createMemoryAccess(intelligence, LOCAL_USER.id)
+    ? createMemoryAccess(intelligence, localUser.id)
     : undefined;
   // ɵgetApiUrl is CopilotKit's own accessor for the endpoint its middleware
   // uses; recheck it on upgrade.
@@ -70,7 +71,7 @@ export async function startRuntime(
     ? createIntelligenceProxy({
         url: `${intelligence.ɵgetApiUrl()}/mcp`,
         apiKey: process.env.CPK_INTELLIGENCE_API_KEY!,
-        userId: LOCAL_USER.id,
+        userId: localUser.id,
       })
     : undefined;
   let sessionKey = process.env.OPENAI_API_KEY;
@@ -128,7 +129,7 @@ export async function startRuntime(
     ? new CopilotRuntime({
         agents: () => ({ default: agent }),
         intelligence,
-        identifyUser: async () => LOCAL_USER,
+        identifyUser: async () => localUser,
       })
     : new CopilotRuntime({ agents: () => ({ default: agent }) });
   const handler = createCopilotRuntimeHandler({
