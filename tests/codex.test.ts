@@ -1961,3 +1961,9 @@ test("the instructions describe computer use, and no longer say the agent can't 
     /Screenshots come only from user attachments/,
   );
 });
+
+test("the instructions never let the agent enter passwords, even where typing is refused", async () => {
+  const { instructions } = await import("../server/codex-agent");
+  assert.match(instructions, /never type, paste or otherwise enter passwords/);
+  assert.match(instructions, /Never type commands into a terminal/);
+});

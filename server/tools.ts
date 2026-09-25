@@ -236,7 +236,7 @@ export function createToolHandler(options: {
     server.registerTool(
       "type_text",
       {
-        description: `Type text into the focused field of the frontmost app, up to ${TYPE_MAX_LENGTH} characters. Click the field first. No line breaks or tabs: use press_keys for Return, Tab and other keys. Refused while OpenMuse itself is in front, and in password fields.`,
+        description: `Type text into the focused field of the frontmost app, up to ${TYPE_MAX_LENGTH} characters. Click the field first. No line breaks or tabs: use press_keys for Return, Tab and other keys. Refused while OpenMuse itself is in front, and in password fields the app reports to Accessibility; never enter passwords, payment details or one-time codes regardless.`,
         inputSchema: { text: typedTextSchema },
       },
       async ({ text }) => act({ type: "type", text }),
@@ -245,7 +245,7 @@ export function createToolHandler(options: {
       "press_keys",
       {
         description:
-          'Press one key, optionally with modifier keys held, such as key "l" with modifiers ["command"] to focus a browser\'s address bar, or "return" alone. Key names are key positions on a US keyboard; use type_text to enter text. Refused while OpenMuse itself is in front.',
+          'Press one key, optionally with modifier keys held, such as key "l" with modifiers ["command"] to focus a browser\'s address bar, or "return" alone. Key names are key positions on a US keyboard; use type_text to enter text. Refused while OpenMuse itself is in front, and character-key presses are refused in password fields the app reports to Accessibility; never enter passwords, payment details or one-time codes regardless.',
         inputSchema: { key: keyNameSchema, modifiers: modifiersSchema },
       },
       async ({ key, modifiers }) => {
