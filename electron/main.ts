@@ -56,19 +56,14 @@ import { conceal, markTransparent } from "./window-occlusion";
 import type { Point } from "../src/buddy-drag";
 import { pointLabelSchema, screenshotIdSchema } from "../server/point-schema";
 import { startRuntime } from "../server/runtime";
-import {
-  ScreenshotRegistry,
-  captureSize,
-  fitThumbnail,
-  resolvePoint,
-  sameBounds,
-} from "../server/screenshots";
+import { ScreenshotRegistry, resolvePoint } from "../server/screenshots";
 import type {
   CompanionTrayMode,
   Permissions,
   ScreenshotAttachment,
   Settings,
 } from "../src/types";
+import { captureScreenshot, singleFlight } from "./screen-capture";
 
 // Preserve the installed app's data across the display-name rebrand.
 app.setPath("userData", join(app.getPath("appData"), "Kite"));
@@ -85,7 +80,6 @@ const helperTimeout = { timeout: 15_000 };
 // check, which can take longer than every other helper call.
 const appLaunchTimeout = { timeout: 60_000 };
 const screenshots = new ScreenshotRegistry();
-let captureInFlight: Promise<ScreenshotAttachment> | undefined;
 let workspace: BrowserWindow;
 let buddy: BrowserWindow;
 let notch: BrowserWindow;
@@ -788,104 +782,36 @@ app
       );
       return permissions();
     });
-    handle("screenshot", (): Promise<ScreenshotAttachment> => {
-      // Nested fades (conceal() in window-occlusion.ts) already keep every
-      // window concealed for as long as any overlapping capture or pointer
-      // needs it, so overlapping captures can't see each other's windows.
-      // This guard exists so a burst of quick clicks shares one real capture
-      // and adds one registry entry, instead of hitting desktopCapturer and
-      // screenshots.add() once per click.
-      if (captureInFlight) return captureInFlight;
-      const capture = (async (): Promise<ScreenshotAttachment> => {
-        if (!(await permissions()).screenCapture)
-          throw new Error("Enable Screen Recording permission in Settings.");
-        const display = screen.getPrimaryDisplay();
-        const target = captureSize(display.size);
-        const restore = conceal(
-          openMuseWindows().filter((win) => win.isVisible()),
-        );
-        try {
-          // 200ms is about 12 frames: several frames of margin for the
-          // compositor to actually drop the concealed windows before we
-          // capture, not just the one frame a bare wait would guarantee.
-          // Do not shorten this to one frame.
-          await new Promise((resolve) => setTimeout(resolve, 200));
-          const sources = await new Promise<Electron.DesktopCapturerSource[]>(
-            (resolveSources, rejectSources) => {
-              const timer = setTimeout(() => {
-                rejectSources(
-                  new Error(
-                    "Screen capture didn't respond. Try again, or quit and reopen OpenMuse Desktop.",
-                  ),
-                );
-              }, 10_000);
-              desktopCapturer
-                .getSources({ types: ["screen"], thumbnailSize: target })
-                .then((result) => {
-                  clearTimeout(timer);
-                  resolveSources(result);
-                })
-                .catch((error: unknown) => {
-                  clearTimeout(timer);
-                  rejectSources(error);
-                });
-            },
-          );
-          // A capture of another display would put the pointer in the wrong place.
-          const source = sources.find(
-            (candidate) => candidate.display_id === String(display.id),
-          );
-          if (!source)
-            throw new Error(
-              `Couldn't find a screen source for ${display.label || "Main display"}. Try again, or reconnect the display.`,
-            );
-          if (source.thumbnail.isEmpty())
-            throw new Error(
-              "Screen capture came back empty. If you just granted Screen Recording, quit and reopen OpenMuse Desktop.",
-            );
+    // Nested fades (conceal() in window-occlusion.ts) already keep every
+    // window concealed for as long as any overlapping capture or pointer
+    // needs it, so overlapping captures can't see each other's windows.
+    // This guard exists so a burst of quick clicks shares one real capture
+    // and adds one registry entry, instead of hitting desktopCapturer and
+    // screenshots.add() once per click.
+    const captureScreenshotOnce = singleFlight(
+      (): Promise<ScreenshotAttachment> =>
+        captureScreenshot({
+          screenCaptureAllowed: async () => (await permissions()).screenCapture,
+          primaryDisplay: () => screen.getPrimaryDisplay(),
+          displays: () => screen.getAllDisplays(),
+          conceal: () =>
+            conceal(openMuseWindows().filter((win) => win.isVisible())),
+          wait: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+          sources: (target) =>
+            desktopCapturer.getSources({
+              types: ["screen"],
+              thumbnailSize: target,
+            }),
           // A 2x NativeImage keeps its scale factor through resize(), so its
           // PNG would stay 2x; rebuilding it from its own pixels makes the
           // target a pixel size.
-          const rawPng = source.thumbnail.toPNG();
-          const { png, size } = fitThumbnail(
-            {
-              toPNG: () => rawPng,
-              resize: (resizeTarget) =>
-                nativeImage.createFromBuffer(rawPng).resize(resizeTarget),
-            },
-            target,
-          );
-          // The display can change while we waited and captured; catch it here
-          // rather than register bounds that no longer match the image.
-          const current = screen
-            .getAllDisplays()
-            .find((candidate) => candidate.id === display.id);
-          if (!current || !sameBounds(current.bounds, display.bounds))
-            throw new Error(
-              "The display changed during the capture. Try again.",
-            );
-          const shot = screenshots.add({
-            displayId: String(display.id),
-            label: display.label || "Main display",
-            bounds: display.bounds,
-            ...size,
-          });
-          return {
-            id: shot.id,
-            label: shot.label,
-            width: size.width,
-            height: size.height,
-            dataUrl: "data:image/png;base64," + png.toString("base64"),
-          };
-        } finally {
-          restore();
-        }
-      })().finally(() => {
-        captureInFlight = undefined;
-      });
-      captureInFlight = capture;
-      return capture;
-    });
+          rebuild: (png, size) =>
+            nativeImage.createFromBuffer(png).resize(size).toPNG(),
+          register: (input) => screenshots.add(input),
+          sourcesTimeoutMs: 10_000,
+        }),
+    );
+    handle("screenshot", captureScreenshotOnce);
     handle("action", approvedAction);
     handle("openWorkspace", openWorkspace);
     ipcMain.handle("kite:toggleCompanionChat", (event) => {
