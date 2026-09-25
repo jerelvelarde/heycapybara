@@ -1,0 +1,66 @@
+#!/usr/bin/env node
+// Stands in for the `codex` CLI in tests/runtime-e2e.test.ts. The Codex SDK
+// spawns it as `codex exec --experimental-json ... --image <path>` and writes
+// the prompt to its stdin. It records that call, then prints the shortest
+// JSONL event stream the SDK accepts as one finished turn with one assistant
+// message.
+import { randomUUID } from "node:crypto";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
+
+// The runtime hands Codex only an allowlisted environment (codexEnvironment
+// in server/codex-agent.ts), so a variable the test sets never reaches this
+// process. CODEX_HOME does: CodexRunner points it into the state directory
+// the test gives startRuntime.
+const home = process.env.CODEX_HOME;
+if (!home) throw new Error("fake-codex: CODEX_HOME is not set");
+
+const argv = process.argv.slice(2);
+const chunks = [];
+for await (const chunk of process.stdin) chunks.push(chunk);
+const stdin = Buffer.concat(chunks).toString("utf8");
+
+// CodexRunner deletes its copies of the images once the run ends, so what
+// identifies each one is read now: its size and its first 24 bytes, the PNG
+// signature and IHDR chunk that hold its width and height.
+const images = [];
+argv.forEach((arg, index) => {
+  if (arg !== "--image") return;
+  const bytes = readFileSync(argv[index + 1]);
+  images.push({
+    size: bytes.length,
+    header: bytes.subarray(0, 24).toString("hex"),
+  });
+});
+
+// One entry per call, so a test can tell one call from several.
+const record = join(home, "fake-codex-calls.json");
+const calls = existsSync(record)
+  ? JSON.parse(readFileSync(record, "utf8"))
+  : [];
+calls.push({ argv, stdin, images });
+writeFileSync(record, JSON.stringify(calls, null, 2));
+
+const events = [
+  { type: "thread.started", thread_id: randomUUID() },
+  { type: "turn.started" },
+  {
+    type: "item.completed",
+    item: {
+      id: "item_0",
+      type: "agent_message",
+      text: "Fake Codex finished the turn.",
+    },
+  },
+  {
+    type: "turn.completed",
+    usage: {
+      input_tokens: 0,
+      cached_input_tokens: 0,
+      cache_write_input_tokens: 0,
+      output_tokens: 0,
+      reasoning_output_tokens: 0,
+    },
+  },
+];
+for (const event of events) process.stdout.write(JSON.stringify(event) + "\n");
