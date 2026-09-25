@@ -49,7 +49,7 @@ import {
   loadBuddyPosition,
   saveBuddyPosition,
 } from "./buddy-position";
-import { runHelper } from "./helper-result";
+import { runHelper, helperStatus } from "./helper-result";
 import { performPointAction } from "./point-action";
 import { askApproval, approvalHost } from "./approval";
 import { conceal, markTransparent } from "./window-occlusion";
@@ -263,7 +263,7 @@ async function approvedAction(input: unknown) {
       throw new Error("User declined action");
     await runHelper(
       () => exec(helper, ["--open-app", action.bundleId], appLaunchTimeout),
-      "Application opened",
+      helperStatus.appOpened,
     );
     return;
   }
@@ -279,7 +279,7 @@ async function approvedAction(input: unknown) {
             ["--point", String(point.x), String(point.y)],
             helperTimeout,
           ),
-        "Point displayed",
+        helperStatus.pointDisplayed,
       );
     },
   });

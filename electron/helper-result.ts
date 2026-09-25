@@ -1,69 +1,113 @@
 // The helper prints one JSON object per line. Failures are `error` events.
-// Only `--point` and `--open-app` confirm success with a `status` event;
-// the query commands (`--permissions`, `--notch-inset`,
-// `--request-accessibility`, `--request-screen`) print one bare JSON
-// object with no `status` line. Unreadable lines are skipped so the
+// A `status` event confirms success for the one-shot `--point` and
+// `--open-app` commands; the long-running recorder mode also prints
+// `status` lines as it starts and stops, outside of `runHelper`. The query
+// commands (`--permissions`, `--notch-inset`, `--request-accessibility`,
+// `--request-screen`) print one bare JSON object with no `status` line;
+// for those, an unreadable line is skipped here and fails later, in the
+// caller's `JSON.parse`. Unreadable lines are skipped here too, so the
 // process's own exit reason, or the missing confirmation, decides.
-export function reportedError(stdout: string) {
+
+type HelperEvent = { kind?: unknown; detail?: unknown };
+
+function isHelperEvent(value: unknown): value is HelperEvent {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+// Shared by `reportedError` and `reportsStatus`: split stdout into lines,
+// skip blanks and lines that aren't parseable JSON, and yield only the
+// ones that parsed to an object. A line can just as easily parse to
+// `null`, a number, a string or an array, none of which carry `kind` or
+// `detail`.
+function* parsedLines(stdout: string): Generator<HelperEvent> {
   for (const line of stdout.split("\n")) {
     if (!line.trim()) continue;
-    let event: { kind?: unknown; detail?: unknown };
+    let parsed: unknown;
     try {
-      event = JSON.parse(line);
+      parsed = JSON.parse(line);
     } catch {
       continue;
     }
-    if (event?.kind === "error")
+    if (isHelperEvent(parsed)) yield parsed;
+  }
+}
+
+export function reportedError(stdout: string): string | undefined {
+  for (const event of parsedLines(stdout)) {
+    if (event.kind === "error")
       return typeof event.detail === "string" && event.detail.trim()
         ? event.detail
         : "The desktop helper reported an error";
   }
+  return undefined;
 }
 
 // Scans the same way `reportedError` does, looking for a `status` event
 // whose detail confirms the specific action the caller asked for.
-function reportsStatus(stdout: string, detail: string): boolean {
-  for (const line of stdout.split("\n")) {
-    if (!line.trim()) continue;
-    let event: { kind?: unknown; detail?: unknown };
-    try {
-      event = JSON.parse(line);
-    } catch {
-      continue;
-    }
-    if (event?.kind === "status" && event.detail === detail) return true;
+function reportsStatus(stdout: string, detail: HelperStatus): boolean {
+  for (const event of parsedLines(stdout)) {
+    if (event.kind === "status" && event.detail === detail) return true;
   }
   return false;
 }
+
+// The exact status strings the native helper reports for the two one-shot
+// commands that confirm success this way. Shared with electron/main.ts so
+// a typo in either place can't silently desync the two sides.
+export const helperStatus = {
+  pointDisplayed: "Point displayed",
+  appOpened: "Application opened",
+} as const;
+
+type HelperStatus = (typeof helperStatus)[keyof typeof helperStatus];
 
 type ExecFailure = Error & {
   stdout?: unknown;
   code?: unknown;
   signal?: unknown;
   killed?: unknown;
+  syscall?: unknown;
 };
 
-// promisified execFile rejects on a non-zero exit, a spawn failure, a
-// signal or a timeout, with the output attached. Its message contains the
-// helper's path, its arguments and stderr, so report the helper's own
-// reason instead. The original error is kept as `cause` for local
-// debugging only: it still holds that path, those arguments and stderr,
-// so nothing may log or display it.
+// promisified execFile usually rejects asynchronously, with `stdout`
+// attached, for a non-zero exit, a signal, a timeout, or a spawn error
+// Node reports that way (EACCES, EAGAIN, EMFILE, ENFILE, ENOENT). A
+// handful of rarer spawn errors (EPERM, ENOEXEC, EBADARCH, ...) can only
+// be reported synchronously; `promisify` still turns that into a
+// rejection (a synchronous throw inside a `Promise` executor rejects it
+// rather than escaping the call), but the resulting error carries no
+// `stdout` at all. It is identifiable instead by `syscall` being exactly
+// "spawn" -- an asynchronous failure's `syscall` also starts with
+// "spawn ", followed by the helper's path.
+function isHelperFailure(error: unknown): error is ExecFailure {
+  return (
+    error instanceof Error &&
+    ("stdout" in error || (error as ExecFailure).syscall === "spawn")
+  );
+}
+
+// Either shape's `message` embeds the helper's path, its arguments and
+// sometimes stderr (see e.g. Node's child_process exithandler), so report
+// the helper's own reason instead, built only from `stdout`, `code`,
+// `signal` and `killed` -- `runHelper` never reads `message`. No `cause`
+// is kept on the thrown error either: Electron logs a rejected
+// `ipcMain.handle` handler together with its `cause` (console.error,
+// "Error occurred in handler for '...'"), which would print that same
+// path, arguments and stderr right back out.
 export async function runHelper(
   run: () => Promise<{ stdout: string }>,
-  expectedStatus?: string,
+  expectedStatus?: HelperStatus,
 ): Promise<string> {
-  let stdout: string;
+  let stdout = "";
+  let failureMessage: string | undefined;
   try {
     ({ stdout } = await run());
   } catch (error) {
-    if (!(error instanceof Error) || !("stdout" in error)) throw error;
-    const failure = error as ExecFailure;
-    throw new Error(
-      reportedError(String(failure.stdout ?? "")) ?? failureCause(failure),
-      { cause: error },
-    );
+    if (!isHelperFailure(error)) throw error;
+    failureMessage =
+      reportedError(String(error.stdout ?? "")) ?? failureCause(error);
   }
+  if (failureMessage !== undefined) throw new Error(failureMessage);
   const reported = reportedError(stdout);
   if (reported) throw new Error(reported);
   if (expectedStatus && !reportsStatus(stdout, expectedStatus))
