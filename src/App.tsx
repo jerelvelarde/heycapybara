@@ -98,6 +98,7 @@ export function App() {
           settings={data.settings}
           mode={data.trayMode}
           active={data.active}
+          learning={data.learning}
         />
       </CopilotKitProvider>
     );
@@ -1211,6 +1212,7 @@ function Workspace({
         }}
         onDone={() => setRequest(null)}
         onBusy={setAgentBusy}
+        learning={data.learning}
       />
       {newRecording && (
         <div className="modal-backdrop">

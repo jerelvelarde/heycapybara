@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { useAgent, useCopilotKit } from "@copilotkit/react-core/v2";
 import {
   ArrowUp,
+  BookOpen,
   Camera,
   LoaderCircle,
   Plus,
@@ -17,7 +18,8 @@ import {
   requestAttachment,
   userContent,
 } from "./message-content";
-import type { ScreenshotAttachment, Settings } from "./types";
+import { LearningStrip } from "./LearningStrip";
+import type { LearningStatus, ScreenshotAttachment, Settings } from "./types";
 export type AgentRequest = {
   id: string;
   prompt: string;
@@ -30,6 +32,7 @@ export function Assistant({
   onDone,
   onBusy,
   newConversationSignal = 0,
+  learning,
 }: {
   settings: Settings;
   request: AgentRequest | null;
@@ -37,6 +40,7 @@ export function Assistant({
   onDone: () => void;
   onBusy: (busy: boolean) => void;
   newConversationSignal?: number;
+  learning?: LearningStatus;
 }) {
   const { agent, isReady } = useAgent();
   const { copilotkit } = useCopilotKit();
@@ -48,6 +52,9 @@ export function Assistant({
   const [activities, setActivities] = useState<
     { id: string; summary: string }[]
   >([]);
+  // What the agent used from Intelligence in this conversation.
+  const [usedSkills, setUsedSkills] = useState<string[]>([]);
+  const [recalled, setRecalled] = useState<string[]>([]);
   const cancelled = useRef(false);
   const handled = useRef("");
   const bottom = useRef<HTMLDivElement>(null);
@@ -65,20 +72,43 @@ export function Assistant({
   // resolves late never lands on the wrong message - and its error is
   // dropped too.
   const attachmentEpoch = useRef(createEpoch());
-  useEffect(() => {
-    if (!newConversationSignal) return;
+  function resetConversation() {
     agent.threadId = crypto.randomUUID();
     agent.setMessages([]);
-    setInput("");
     setImage(null);
     showError("");
     setActivities([]);
-    setPhase("");
+    setUsedSkills([]);
+    setRecalled([]);
     attachmentEpoch.current.advance();
+  }
+  useEffect(() => {
+    if (!newConversationSignal) return;
+    resetConversation();
+    setInput("");
+    setPhase("");
   }, [newConversationSignal]);
   useEffect(() => {
     const subscription = agent.subscribe({
       onCustomEvent: ({ event }) => {
+        if (event.name === "kite.learned-skill") {
+          const name = event.value?.name;
+          if (typeof name === "string")
+            setUsedSkills((previous) =>
+              previous.includes(name) ? previous : [...previous, name],
+            );
+          return;
+        }
+        if (event.name === "kite.memory-recalled") {
+          const previews = event.value?.previews;
+          if (Array.isArray(previews))
+            setRecalled(
+              previews.filter(
+                (preview): preview is string => typeof preview === "string",
+              ),
+            );
+          return;
+        }
         if (
           event.name !== "kite.activity" ||
           typeof event.value?.summary !== "string"
@@ -252,14 +282,7 @@ export function Assistant({
           title="New conversation"
           className="icon-button"
           disabled={busy}
-          onClick={() => {
-            agent.threadId = crypto.randomUUID();
-            agent.setMessages([]);
-            setImage(null);
-            showError("");
-            setActivities([]);
-            attachmentEpoch.current.advance();
-          }}
+          onClick={resetConversation}
         >
           <Plus size={18} />
         </button>
@@ -314,6 +337,19 @@ export function Assistant({
               );
             })
         )}
+        {learning && recalled.length > 0 && (
+          <div className="learned-skill-chip">
+            <Sparkles size={12} /> Recalled from Intelligence Memory:{" "}
+            {recalled[0]}
+            {recalled.length > 1 ? ` (+${recalled.length - 1} more)` : ""}
+          </div>
+        )}
+        {learning &&
+          usedSkills.map((name) => (
+            <div className="learned-skill-chip" key={name}>
+              <BookOpen size={12} /> Using learned skill: {name}
+            </div>
+          ))}
         {activities.length > 0 && (
           <details className="agent-activity" open={busy}>
             <summary>Agent activity · {activities.length}</summary>
@@ -331,6 +367,13 @@ export function Assistant({
         {error && <div className="inline-error">{error}</div>}
         <div ref={bottom} />
       </div>
+      {learning && (
+        <LearningStrip
+          status={learning}
+          onTry={resetConversation}
+          onError={(message) => showError(message)}
+        />
+      )}
       <form
         className="composer"
         onSubmit={(e) => {
