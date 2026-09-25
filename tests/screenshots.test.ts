@@ -40,6 +40,7 @@ test("the prompt budget matches Codex's high-detail limits", () => {
   assert.equal(fitsPromptBudget({ width: 1601, height: 1600 }), false);
   assert.equal(fitsPromptBudget({ width: 2049, height: 100 }), false);
   assert.equal(fitsPromptBudget({ width: 2048, height: 1280 }), false);
+  assert.equal(fitsPromptBudget({ width: 100, height: 2049 }), false);
 });
 
 test("captures keep the display's shape and pass through Codex unchanged", () => {
@@ -112,9 +113,14 @@ test("PNG size comes from the image header", () => {
   jpeg[0] = 0xff;
   assert.throws(() => pngSize(jpeg), /not a PNG/);
   assert.throws(() => pngSize(new Uint8Array([1, 2, 3])), /not a PNG/);
+  assert.throws(() => pngSize(pngHeader(0, 5)), /not a PNG/);
+  const badChunkType = pngHeader(10, 10);
+  badChunkType.set([0x49, 0x48, 0x44, 0x58], 12); // "IHDX"
+  assert.throws(() => pngSize(badChunkType), /not a PNG/);
+  assert.throws(() => pngSize(pngHeader(10, 10).subarray(0, 23)), /not a PNG/);
 });
 
-test("the registry issues unguessable ids and keeps only recent captures", () => {
+test("the registry issues random ids and keeps only recent captures", () => {
   const registry = new ScreenshotRegistry(2, () => 42);
   const bounds = { ...display };
   const input = {
@@ -129,12 +135,36 @@ test("the registry issues unguessable ids and keeps only recent captures", () =>
   assert.match(first.id, /^shot_[0-9a-f]{8}$/);
   assert.notEqual(first.id, second.id);
   assert.equal(first.capturedAt, 42);
+  assert.ok(Object.isFrozen(first));
+  assert.ok(Object.isFrozen(first.bounds));
   bounds.x = 500;
-  assert.equal(registry.get(first.id)?.bounds.x, 0);
+  const stored = registry.get(first.id);
+  assert.equal(stored?.bounds.x, 0);
+  assert.ok(stored && Object.isFrozen(stored));
+  assert.ok(stored && Object.isFrozen(stored.bounds));
   registry.add(input);
   assert.equal(registry.get(first.id), undefined);
   assert.ok(registry.get(second.id));
   assert.equal(registry.get("shot_00000000"), undefined);
+});
+
+test("the registry keeps the documented default of 16 captures", () => {
+  const registry = new ScreenshotRegistry();
+  const input = {
+    displayId: "1",
+    label: "Built-in Retina Display",
+    bounds: { ...display },
+    width: 1386,
+    height: 900,
+  };
+  const captures = Array.from({ length: 17 }, () => registry.add(input));
+  assert.equal(registry.get(captures[0].id), undefined);
+  assert.ok(registry.get(captures[1].id));
+});
+
+test("the registry requires a positive integer limit", () => {
+  assert.throws(() => new ScreenshotRegistry(0), /at least one capture/);
+  assert.throws(() => new ScreenshotRegistry(1.5), /at least one capture/);
 });
 
 test("image pixels map to the centre of the matching screen point", () => {

@@ -2,15 +2,15 @@ import { randomBytes } from "node:crypto";
 
 export type Rect = { x: number; y: number; width: number; height: number };
 export type Size = { width: number; height: number };
-export type Screenshot = {
+export type Screenshot = Readonly<{
   id: string;
   displayId: string;
   label: string;
-  bounds: Rect;
+  bounds: Readonly<Rect>;
   width: number;
   height: number;
   capturedAt: number;
-};
+}>;
 
 // Codex re-encodes prompt images outside these limits (codex-rs utils/image,
 // PromptImageMode::HIGH_DETAIL). A resized image no longer matches the pixel
@@ -67,7 +67,11 @@ export function pngSize(png: Uint8Array): Size {
   )
     throw new Error("Screen capture is not a PNG image");
   const view = new DataView(png.buffer, png.byteOffset, png.byteLength);
-  return { width: view.getUint32(16), height: view.getUint32(20) };
+  const width = view.getUint32(16);
+  const height = view.getUint32(20);
+  if (width === 0 || height === 0)
+    throw new Error("Screen capture is not a PNG image");
+  return { width, height };
 }
 
 export class ScreenshotRegistry {
@@ -75,17 +79,20 @@ export class ScreenshotRegistry {
   constructor(
     private readonly limit = 16,
     private readonly now = () => Date.now(),
-  ) {}
+  ) {
+    if (!Number.isInteger(limit) || limit < 1)
+      throw new Error("The screenshot registry must keep at least one capture");
+  }
   add(input: Omit<Screenshot, "id" | "capturedAt">): Screenshot {
     let id: string;
     do id = "shot_" + randomBytes(4).toString("hex");
     while (this.entries.has(id));
-    const shot = {
+    const shot: Screenshot = Object.freeze({
       ...input,
-      bounds: { ...input.bounds },
+      bounds: Object.freeze({ ...input.bounds }),
       id,
       capturedAt: this.now(),
-    };
+    });
     this.entries.set(id, shot);
     for (const oldest of this.entries.keys()) {
       if (this.entries.size <= this.limit) break;
