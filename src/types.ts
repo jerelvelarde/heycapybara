@@ -70,6 +70,34 @@ export type DesktopAction =
       x: number;
       y: number;
       label: string;
+    }
+  | { type: "open-url"; url: string; bundleId: string }
+  | { type: "screenshot" }
+  | {
+      type: "click";
+      // Like "point": pixels in that screenshot, converted to screen
+      // points in the main process.
+      screenshotId: string;
+      x: number;
+      y: number;
+      label: string;
+      button: "left" | "right";
+      clicks: number;
+    }
+  | {
+      type: "scroll";
+      screenshotId: string;
+      x: number;
+      y: number;
+      label: string;
+      direction: "up" | "down" | "left" | "right";
+      amount: number;
+    }
+  | { type: "type"; text: string }
+  | {
+      type: "keys";
+      key: string;
+      modifiers: ("command" | "shift" | "option" | "control")[];
     };
 export interface KiteAPI {
   state(): Promise<Snapshot>;
