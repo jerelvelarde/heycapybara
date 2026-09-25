@@ -30,6 +30,7 @@ import {
 import { Assistant, type AgentRequest } from "./Assistant";
 import { Buddy } from "./Buddy";
 import { CompanionChat } from "./CompanionChat";
+import { openLabel } from "./learning-view";
 import { Onboarding } from "./Onboarding";
 import { Sprite } from "./Sprite";
 import { manualDraft, skillPrompt } from "./skill";
@@ -843,20 +844,20 @@ function Workspace({
                 {[
                   {
                     n: "01",
-                    title: "Capture the workflow",
-                    body: "Record across your Mac. Review the evidence before it leaves your device.",
+                    title: "Teach it once",
+                    body: "Do the task with OpenMuse in chat, then press Learn from this. The lesson goes to your Intelligence Memory.",
                     icon: Radio,
                   },
                   {
                     n: "02",
-                    title: "Discover what works",
-                    body: "Intelligence analyzes completed threads and proposes reusable skills.",
+                    title: "Intelligence remembers",
+                    body: "New conversations start with what Intelligence recalls for the task. Intelligence can also learn from your conversations on its own.",
                     icon: Sparkles,
                   },
                   {
                     n: "03",
-                    title: "Bring it back to OpenMuse",
-                    body: "Review and publish skills in Intelligence. OpenMuse loads them on future runs.",
+                    title: "Skills, when you approve them",
+                    body: "Start an analysis and approve a proposed skill in Intelligence. OpenMuse uses it in new conversations.",
                     icon: BookOpen,
                   },
                 ].map(({ n, title, body, icon: Icon }) => (
@@ -882,6 +883,20 @@ function Workspace({
                   label="Skill delivery"
                   value={data.settings.deliveryStatus}
                 />
+                <Setting label="Learning" value={data.learning.message} />
+                <Setting
+                  label="Intelligence Memory"
+                  value={
+                    data.learning.memoryError ??
+                    (data.learning.memories === null
+                      ? "Not checked yet"
+                      : `${data.learning.memories} notes`)
+                  }
+                />
+                <Setting
+                  label="Learned skills"
+                  value={data.learning.skills.join(", ") || "None yet"}
+                />
                 <Setting
                   label="Learning container"
                   value={data.settings.containerId}
@@ -896,8 +911,9 @@ function Workspace({
                 <p className="footnote">
                   Both ingestion and skill delivery use this container. Create
                   it in your Intelligence project and enable skill delivery.
-                  Automatic analyses follow the project’s schedule and require
-                  eligible completed threads.
+                  Memory needs no container. Starting an analysis and approving
+                  a skill happen in Intelligence; OpenMuse shows each step here
+                  and in chat.
                 </p>
                 <button
                   className="button secondary"
@@ -908,6 +924,26 @@ function Workspace({
                 >
                   {working ? "Checking…" : "Verify connection"}
                 </button>
+                <button
+                  className="button secondary"
+                  disabled={working || data.learning.phase === "off"}
+                  onClick={() =>
+                    void perform(() => window.kite!.watchLearning())
+                  }
+                >
+                  Check learning now
+                </button>
+                {data.learning.link && (
+                  <button
+                    className="button primary"
+                    onClick={() =>
+                      void perform(() => window.kite!.openLearningStep())
+                    }
+                  >
+                    {openLabel(data.learning.link.kind)}{" "}
+                    <ExternalLink size={15} />
+                  </button>
+                )}
                 <button
                   className="button primary"
                   onClick={() => void window.kite!.openIntelligence()}
