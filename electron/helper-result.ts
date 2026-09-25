@@ -1,5 +1,8 @@
-// The helper prints one JSON object per line. Failures are `error` events,
-// and success prints a `status` event. Unreadable lines are skipped so the
+// The helper prints one JSON object per line. Failures are `error` events.
+// Only `--point` and `--open-app` confirm success with a `status` event;
+// the query commands (`--permissions`, `--notch-inset`,
+// `--request-accessibility`, `--request-screen`) print one bare JSON
+// object with no `status` line. Unreadable lines are skipped so the
 // process's own exit reason, or the missing confirmation, decides.
 export function reportedError(stdout: string) {
   for (const line of stdout.split("\n")) {
@@ -41,8 +44,11 @@ type ExecFailure = Error & {
 };
 
 // promisified execFile rejects on a non-zero exit, a spawn failure, a
-// signal or a timeout, with the output attached. Its message includes the
-// helper's path and arguments, so report the helper's own reason instead.
+// signal or a timeout, with the output attached. Its message contains the
+// helper's path, its arguments and stderr, so report the helper's own
+// reason instead. The original error is kept as `cause` for local
+// debugging only: it still holds that path, those arguments and stderr,
+// so nothing may log or display it.
 export async function runHelper(
   run: () => Promise<{ stdout: string }>,
   expectedStatus?: string,
@@ -73,6 +79,8 @@ function failureCause(failure: ExecFailure) {
     return `The desktop helper was stopped by ${failure.signal}`;
   if (failure.code === "ENOENT" || failure.code === "EACCES")
     return `The desktop helper is missing or not executable (${failure.code})`;
+  if (failure.code === "ERR_CHILD_PROCESS_STDIO_MAXBUFFER")
+    return "The desktop helper produced more output than expected";
   if (typeof failure.code === "string" && failure.code)
     return `The desktop helper could not run (${failure.code})`;
   if (typeof failure.code === "number")
