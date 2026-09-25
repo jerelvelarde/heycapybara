@@ -43,6 +43,13 @@ export function markTransparent(win: ConcealableWindow) {
   transparentWindows.add(win);
 }
 
+// Whether markTransparent() was called on this window. clearAround in
+// electron/computer-action.ts hides such a window instead of fading it,
+// because a faded one still catches clicks on its opaque pixels.
+export function isMarkedTransparent(win: ConcealableWindow) {
+  return transparentWindows.has(win);
+}
+
 // Fades in progress, keyed by window identity, so overlapping conceal() calls
 // on the same window nest instead of clobbering each other's recorded
 // opacity. `ignoredMouse` records whether this fade actually called

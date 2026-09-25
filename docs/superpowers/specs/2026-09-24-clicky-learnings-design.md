@@ -21,7 +21,7 @@ Deferred: the capybara flying to its target (a click-through overlay at screen-s
 
 ## Boundaries every PR keeps
 
-- Every desktop action still needs the native "Allow once" approval. Pointing does not click or type.
+- Every desktop action still needs the native "Allow once" approval. Pointing does not click or type. (Computer use, added after this stack on `jerel/act-for-me`, asks once per task instead: see `docs/superpowers/plans/2026-09-25-act-for-me.md`.)
 - Model and Intelligence keys stay in the Node runtime. Nothing new reaches a renderer or a Codex shell.
 - A failure names its real cause. Never mock success or say "out of credits" (Clicky plays that for every error).
 - No PR in this stack adds analytics or sends transcripts anywhere new; Clicky sends full transcripts and replies to PostHog. The CopilotKit runtime's built-in usage telemetry predates this stack and is out of its scope.

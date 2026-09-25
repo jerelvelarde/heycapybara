@@ -1,6 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
+import { existsSync, readFileSync } from "node:fs";
+import { mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
 import { request as httpRequest } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -8,6 +9,7 @@ import { setTimeout as sleep } from "node:timers/promises";
 import { Store } from "../electron/store";
 import type { startRuntime } from "../server/runtime";
 import { ScreenshotRegistry } from "../server/screenshots";
+import type { AgentRun } from "../server/run-registry";
 
 // Isolates this test from whatever the shell environment happens to export:
 // a stray KITE_MODEL or CPK_INTELLIGENCE_* value would otherwise change
@@ -107,42 +109,19 @@ async function waitFor(
 
 // A stand-in `codex` binary (CodexRunner spawns it directly, per its
 // `codexPathOverride`, the same way tests/runtime-e2e.test.ts's FAKE_CODEX
-// does) whose only job is to leak the one secret this file's next test
-// needs and production never exposes: the bearer token the real /mcp route
-// checks. server/runtime.ts generates that token fresh per runtime and
-// keeps it in a closure, never returning it on `settings` -- its one other
-// holder is whatever process CodexRunner spawns, which receives it as the
-// KITE_MCP_TOKEN environment variable (server/codex-agent.ts,
-// codexEnvironment), the same allowlisted environment object a real `codex`
-// binary reads to call kite MCP tools itself. This fixture drains stdin
-// (so the SDK's `child.stdin.end()` doesn't hang) and writes out that one
-// variable, then answers with the same minimal JSONL turn
-// tests/fixtures/fake-codex.mjs uses, so the one-shot chat turn that spawns
-// it still finishes normally.
+// does) whose only job is to leak the one secret this file's next test needs
+// and production never exposes: the bearer token the real /mcp route checks.
+// CodexRunner mints that token for each run (server/run-registry.ts) and
+// hands it only to the process it spawns, as the KITE_MCP_TOKEN environment
+// variable (server/codex-agent.ts, codexEnvironment). The token works only
+// while its run is open, so this fixture never finishes its turn: it writes
+// the token out, drains stdin, and waits until the runtime kills it on close.
 function leakTokenFixtureSource(tokenFile: string) {
   return `#!/usr/bin/env node
 const fs = require("node:fs");
 fs.writeFileSync(${JSON.stringify(tokenFile)}, process.env.KITE_MCP_TOKEN || "");
 process.stdin.resume();
-process.stdin.on("end", () => {
-  const line = (event) => process.stdout.write(JSON.stringify(event) + "\\n");
-  line({ type: "thread.started", thread_id: "leak-thread" });
-  line({ type: "turn.started" });
-  line({
-    type: "item.completed",
-    item: { id: "item_0", type: "agent_message", text: "ok" },
-  });
-  line({
-    type: "turn.completed",
-    usage: {
-      input_tokens: 0,
-      cached_input_tokens: 0,
-      cache_write_input_tokens: 0,
-      output_tokens: 0,
-      reasoning_output_tokens: 0,
-    },
-  });
-});
+setInterval(() => {}, 1 << 30);
 `;
 }
 
@@ -221,21 +200,24 @@ test("dropping the client connection while point_on_screen's action is pending a
 
     const screenshots = new ScreenshotRegistry();
     let seenSignal: AbortSignal | undefined;
+    let seenRun: AgentRun | undefined;
     runtime = await runtimeModule.startRuntime(store, {
       statePath: join(root, "agent"),
       binaryPath,
       screenshots,
-      action: async (_action, signal) => {
+      action: async (_action, signal, run) => {
         seenSignal = signal;
+        seenRun = run;
         await new Promise<void>((resolve) => {
           signal.addEventListener("abort", () => resolve(), { once: true });
         });
       },
     });
 
-    // One throwaway chat turn, purely to have the real Codex machinery
-    // spawn the fixture above so it can leak the token /mcp checks.
-    const leakRun = await fetch(runtime.settings.runtimeUrl, {
+    // A chat turn that stays open (see the fixture), purely to have the real
+    // Codex machinery spawn the fixture so it can leak the token /mcp
+    // checks. Closing the runtime in `finally` ends it.
+    const leakRun = fetch(runtime.settings.runtimeUrl, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
@@ -257,13 +239,13 @@ test("dropping the client connection while point_on_screen's action is pending a
       }),
       signal: AbortSignal.timeout(15_000),
     });
-    assert.equal(leakRun.status, 200, await leakRun.text());
-
-    const mcpToken = (await readFile(tokenFile, "utf8")).trim();
-    assert.ok(
-      mcpToken,
-      "expected the fixture Codex process to leak a bearer token",
+    void leakRun.catch(() => {});
+    await waitFor(
+      () =>
+        existsSync(tokenFile) && readFileSync(tokenFile, "utf8").trim() !== "",
+      { timeoutMs: 10_000 },
     );
+    const mcpToken = readFileSync(tokenFile, "utf8").trim();
 
     const shot = screenshots.add({
       displayId: "1",
@@ -300,6 +282,13 @@ test("dropping the client connection while point_on_screen's action is pending a
     req.destroy();
 
     await waitFor(() => seenSignal?.aborted === true, { timeoutMs: 2_000 });
+    // Dropping one call cancels that call, not the run it belongs to.
+    assert.equal(seenRun?.signal.aborted, false);
+    // Closing the runtime stops every run, and each run's signal with it.
+    const closing = runtime;
+    runtime = undefined;
+    closing.close();
+    assert.equal(seenRun?.signal.aborted, true);
   } finally {
     mcpRequest?.destroy();
     for (const key of ENV_KEYS) {

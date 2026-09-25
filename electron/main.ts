@@ -48,7 +48,7 @@ import {
   loadBuddyPosition,
   saveBuddyPosition,
 } from "./buddy-position";
-import { runHelper, helperStatus } from "./helper-result";
+import { runHelper, helperStatus, withInput } from "./helper-result";
 import { performPointAction } from "./point-action";
 import {
   askApproval,
@@ -59,15 +59,25 @@ import {
 } from "./approval";
 import { conceal, markTransparent } from "./window-occlusion";
 import type { Point } from "../src/buddy-drag";
+import { ControlGrants } from "./control-grant";
 import {
-  bundleIdSchema,
-  pointLabelSchema,
-  screenshotIdSchema,
-} from "../server/point-schema";
+  clickOnScreen,
+  openUrl,
+  pressKeys,
+  scrollOnScreen,
+  STOPPED_MESSAGE,
+  takeScreenshot,
+  toActionScreenshot,
+  typeText,
+  type ComputerDeps,
+} from "./computer-action";
+import { desktopActionSchema } from "../server/computer-schema";
+import type { AgentRun } from "../server/run-registry";
 import { startRuntime } from "../server/runtime";
 import { ScreenshotRegistry, resolvePoint } from "../server/screenshots";
 import type {
   CompanionTrayMode,
+  DesktopActionResult,
   Permissions,
   ScreenshotAttachment,
   Settings,
@@ -88,6 +98,9 @@ const helperTimeout = { timeout: 15_000 };
 // A first launch of an app can walk through Gatekeeper's notarization
 // check, which can take longer than every other helper call.
 const appLaunchTimeout = { timeout: 60_000 };
+// Typing sends one key event pair per character, a few milliseconds apart
+// (native/Recorder.swift --type), so it gets longer than other commands.
+const typingTimeout = { timeout: 30_000 };
 const screenshots = new ScreenshotRegistry();
 let workspace: BrowserWindow;
 let buddy: BrowserWindow;
@@ -210,6 +223,20 @@ function openMuseWindows() {
 // ends the sheet on it as a Cancel (NativeWindowMac::Hide), so openWorkspace
 // leaves a companion chat that is hosting one on screen.
 const approvalHosts = new Map<BrowserWindow, number>();
+// How many OpenMuse dialogs of any kind are open: approval sheets, but also
+// the working-folder and export choosers and error alerts. Agent input sent
+// while one is up could answer it - "Open" on the folder chooser would widen
+// what Codex may edit - so promptOpen() counts these too. Every dialog call
+// goes through here (tests/main-sheets.test.ts).
+let sheetsOpen = 0;
+async function showDialog<T>(show: () => T | Promise<T>): Promise<T> {
+  sheetsOpen++;
+  try {
+    return await show();
+  } finally {
+    sheetsOpen--;
+  }
+}
 async function approve(prompt: ApprovalPrompt, signal?: AbortSignal) {
   const { host, mustShow } = approvalHost({ companionChat, workspace });
   // -1, as bounce() itself returns when OpenMuse is already active, means
@@ -251,7 +278,7 @@ async function approve(prompt: ApprovalPrompt, signal?: AbortSignal) {
           // Always the parented form. The async message box attaches a sheet
           // to its parent even while that window is hidden; the parentless
           // form runs a blocking modal loop on macOS.
-          return dialog.showMessageBox(host, { ...options });
+          return showDialog(() => dialog.showMessageBox(host, { ...options }));
         },
         // Hiding a window ends its sheet and orders it out in the same call,
         // and the box resolves on a later task, so a host that is off screen
@@ -275,52 +302,179 @@ async function approve(prompt: ApprovalPrompt, signal?: AbortSignal) {
     else approvalHosts.delete(host);
   }
 }
+// One control grant per agent run (electron/control-grant.ts), asked like
+// every other prompt: as a sheet on an OpenMuse window, through approve().
+const grants = new ControlGrants(approve);
+
+// Takes one screenshot of the main display. The composer's attach button
+// shares captures through singleFlight (in whenReady below); the agent's
+// take_screenshot, and the screenshot after a click or scroll, call this
+// directly, so they never reuse a capture that started before the agent's
+// last action.
+function captureNow(): Promise<ScreenshotAttachment> {
+  return captureScreenshot({
+    screenCaptureAllowed: async () => (await permissions()).screenCapture,
+    primaryDisplay: () => screen.getPrimaryDisplay(),
+    displays: () => screen.getAllDisplays(),
+    conceal: () => conceal(openMuseWindows().filter((win) => win.isVisible())),
+    wait: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+    sources: (target) =>
+      desktopCapturer.getSources({
+        types: ["screen"],
+        thumbnailSize: target,
+      }),
+    // A 2x NativeImage keeps its scale factor through resize(), so its PNG
+    // would stay 2x; rebuilding it from its own pixels makes the target a
+    // pixel size.
+    rebuild: (png, size) =>
+      nativeImage.createFromBuffer(png).resize(size).toPNG(),
+    register: (input) => screenshots.add(input),
+    sourcesTimeoutMs: 10_000,
+  });
+}
+
+// What the computer-use actions (electron/computer-action.ts) run on.
+// openMuseWindows() includes the setup window while it exists, so a click
+// or scroll under it clears it too instead of landing on OpenMuse.
+const computer: ComputerDeps = {
+  grants,
+  resolve: (request) =>
+    resolvePoint(screenshots, screen.getAllDisplays(), request),
+  windows: openMuseWindows,
+  promptOpen: () => approvalHosts.size > 0 || sheetsOpen > 0,
+  confirm: approve,
+  capture: async () => toActionScreenshot(await captureNow()),
+  wait: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+  click: async (point, button, clicks, signal) => {
+    await runHelper(
+      () =>
+        exec(
+          helper,
+          ["--click", String(point.x), String(point.y), button, String(clicks)],
+          { ...helperTimeout, signal },
+        ),
+      helperStatus.clickSent,
+    );
+  },
+  scroll: async (point, direction, amount, signal) => {
+    await runHelper(
+      () =>
+        exec(
+          helper,
+          [
+            "--scroll",
+            String(point.x),
+            String(point.y),
+            direction,
+            String(amount),
+          ],
+          { ...helperTimeout, signal },
+        ),
+      helperStatus.scrollSent,
+    );
+  },
+  // The text goes on stdin: any process on the Mac can read another's
+  // arguments.
+  type: async (text, signal) => {
+    await runHelper(
+      () =>
+        withInput(exec(helper, ["--type"], { ...typingTimeout, signal }), text),
+      helperStatus.textTyped,
+    );
+  },
+  keys: async (key, modifiers, signal) => {
+    await runHelper(
+      () =>
+        exec(helper, ["--keys", key, ...modifiers], {
+          ...helperTimeout,
+          signal,
+        }),
+      helperStatus.keysPressed,
+    );
+  },
+  openUrl: async (url, bundleId, signal) => {
+    await runHelper(
+      () =>
+        exec(helper, ["--open-url", bundleId, url], {
+          ...appLaunchTimeout,
+          signal,
+        }),
+      helperStatus.webPageOpened,
+    );
+  },
+};
+
 // The runtime is the only caller: the kite:action IPC route that used to
 // hand this a renderer's unvalidated input is gone (approvedAction is no
 // longer registered as an IPC handler at all), so this takes the runtime's
-// own AbortSignal directly instead of validating one out of unknown input.
-async function approvedAction(input: unknown, signal?: AbortSignal) {
-  const action = z
-    .discriminatedUnion("type", [
-      z.object({
-        type: z.literal("open-app"),
-        bundleId: bundleIdSchema,
-      }),
-      z.object({
-        type: z.literal("point"),
-        screenshotId: screenshotIdSchema,
-        x: z.number(),
-        y: z.number(),
-        label: pointLabelSchema,
-      }),
-    ])
-    .parse(input);
+// own AbortSignal for the call, and the run the call belongs to
+// (server/tools.ts), directly instead of validating them out of unknown
+// input.
+async function approvedAction(
+  input: unknown,
+  signal: AbortSignal,
+  run: AgentRun,
+): Promise<DesktopActionResult | void> {
+  const action = desktopActionSchema.parse(input);
+  // Computer-use actions stop when their call is cancelled or when their run
+  // ends, whichever comes first, so Stop cancels one that is under way.
+  const cancel = AbortSignal.any([signal, run.signal]);
+  switch (action.type) {
+    case "screenshot":
+      return takeScreenshot(run, cancel, computer);
+    case "click":
+      return clickOnScreen(action, run, cancel, computer);
+    case "scroll":
+      return scrollOnScreen(action, run, cancel, computer);
+    case "type":
+      return typeText(action.text, run, cancel, computer);
+    case "keys":
+      return pressKeys(action, run, cancel, computer);
+    case "open-url":
+      return openUrl(action, run, cancel, computer);
+  }
   if (action.type === "open-app") {
-    // The bundle id comes from the model, so like a pointer label it goes on
-    // its own attributed line in the detail, where it can't rewrite the
-    // message.
+    // Under a control grant the user already let the agent act for this task
+    // (electron/control-grant.ts), so opening an app doesn't ask again. The
+    // bundle id comes from the model, so like a pointer label it goes on its
+    // own attributed line in the detail, where it can't rewrite the message.
     if (
+      !grants.has(run) &&
       !(await approve(
         {
           message: "The agent wants to open an app",
           detail: `The agent says the app is: ${action.bundleId}`,
         },
-        signal,
+        cancel,
       ))
     )
       throw new Error(DECLINED_MESSAGE);
-    throwIfCancelled(signal);
-    await runHelper(
-      () => exec(helper, ["--open-app", action.bundleId], appLaunchTimeout),
-      helperStatus.appOpened,
-    );
+    throwIfCancelled(cancel);
+    grants.acting(run);
+    try {
+      await runHelper(
+        () =>
+          exec(helper, ["--open-app", action.bundleId], {
+            ...appLaunchTimeout,
+            signal: cancel,
+          }),
+        helperStatus.appOpened,
+      );
+    } catch (error) {
+      // Stop kills the launch, which the helper can't report, so say so the
+      // way the other actions do (send() in electron/computer-action.ts).
+      if (cancel.aborted) throw new Error(STOPPED_MESSAGE, { cause: error });
+      throw error;
+    }
     return;
   }
   await performPointAction(
     action.label,
     {
       resolve: () => resolvePoint(screenshots, screen.getAllDisplays(), action),
-      confirm: approve,
+      // Pointing doesn't ask under a control grant either.
+      confirm: (prompt, promptSignal) =>
+        grants.has(run) ? Promise.resolve(true) : approve(prompt, promptSignal),
       windows: openMuseWindows,
       showPointer: async (point) => {
         await runHelper(
@@ -334,7 +488,7 @@ async function approvedAction(input: unknown, signal?: AbortSignal) {
         );
       },
     },
-    signal,
+    cancel,
   );
 }
 
@@ -434,10 +588,13 @@ async function startRecording(title: string) {
           })
           .catch(async () => {
             child.kill();
-            await dialog.showMessageBox({
-              type: "error",
-              message: "Recording stopped because an event could not be saved.",
-            });
+            await showDialog(() =>
+              dialog.showMessageBox({
+                type: "error",
+                message:
+                  "Recording stopped because an event could not be saved.",
+              }),
+            );
           });
       } catch {
         readyReject(new Error("Invalid native recorder event"));
@@ -459,11 +616,13 @@ async function startRecording(title: string) {
           })
           .catch(async () => {
             broadcast();
-            await dialog.showMessageBox({
-              type: "error",
-              message:
-                "Could not finalize the recording. Retry Stop or restart OpenMuse Desktop.",
-            });
+            await showDialog(() =>
+              dialog.showMessageBox({
+                type: "error",
+                message:
+                  "Could not finalize the recording. Retry Stop or restart OpenMuse Desktop.",
+              }),
+            );
           });
       }
     });
@@ -595,9 +754,11 @@ function makeCompanionChatWindow() {
   void loaded.catch((error: unknown) => {
     // Quitting aborts a load that is still running; a dialog then would hold up the quit.
     if ((app as typeof app & { quitting?: boolean }).quitting) return;
-    dialog.showErrorBox(
-      "OpenMuse chat could not load",
-      error instanceof Error ? error.message : "Unknown loading error",
+    void showDialog(() =>
+      dialog.showErrorBox(
+        "OpenMuse chat could not load",
+        error instanceof Error ? error.message : "Unknown loading error",
+      ),
     );
   });
   win.on("close", (event) => {
@@ -655,12 +816,14 @@ function makeOnboardingWindow() {
     console.error("OpenMuse setup could not load", error);
     // The closed handler clears `onboarding`, so the next sync builds a fresh window.
     win.destroy();
-    void dialog.showMessageBox({
-      type: "error",
-      message: "OpenMuse setup could not load",
-      detail:
-        "Choose Replay setup from the OpenMuse menu bar icon to try again.",
-    });
+    void showDialog(() =>
+      dialog.showMessageBox({
+        type: "error",
+        message: "OpenMuse setup could not load",
+        detail:
+          "Choose Replay setup from the OpenMuse menu bar icon to try again.",
+      }),
+    );
   });
   win.once("ready-to-show", () => {
     win.show();
@@ -679,12 +842,14 @@ function makeOnboardingWindow() {
     void skipOnboarding().catch((error: unknown) => {
       console.error("Could not skip setup", error);
       if (win.isDestroyed()) return;
-      void dialog.showMessageBox(win, {
-        type: "error",
-        message: "Could not skip setup",
-        detail:
-          "OpenMuse could not save your settings. Check free disk space and folder permissions, then close this window again.",
-      });
+      void showDialog(() =>
+        dialog.showMessageBox(win, {
+          type: "error",
+          message: "Could not skip setup",
+          detail:
+            "OpenMuse could not save your settings. Check free disk space and folder permissions, then close this window again.",
+        }),
+      );
     });
   });
   return win;
@@ -782,12 +947,14 @@ app
       (_wc, _permission, callback) => callback(false),
     );
     handle("chooseWorkspace", async () => {
-      const result = await dialog.showOpenDialog(workspace, {
-        title: "Choose OpenMuse's working folder",
-        message: "Codex can edit files and run commands in this folder.",
-        properties: ["openDirectory", "createDirectory"],
-        defaultPath: settings.workspace,
-      });
+      const result = await showDialog(() =>
+        dialog.showOpenDialog(workspace, {
+          title: "Choose OpenMuse's working folder",
+          message: "Codex can edit files and run commands in this folder.",
+          properties: ["openDirectory", "createDirectory"],
+          defaultPath: settings.workspace,
+        }),
+      );
       if (result.canceled || !result.filePaths[0]) return;
       await runtime.setWorkspace(result.filePaths[0]);
       broadcast();
@@ -864,11 +1031,13 @@ app
     handle("exportSkill", async (id) => {
       const skill = store.skills.find((s) => s.id === id);
       if (!skill) throw new Error("Skill not found");
-      const result = await dialog.showSaveDialog(workspace, {
-        title: "Export workflow skill",
-        defaultPath: "SKILL.md",
-        filters: [{ name: "Markdown", extensions: ["md"] }],
-      });
+      const result = await showDialog(() =>
+        dialog.showSaveDialog(workspace, {
+          title: "Export workflow skill",
+          defaultPath: "SKILL.md",
+          filters: [{ name: "Markdown", extensions: ["md"] }],
+        }),
+      );
       if (result.canceled || !result.filePath) return false;
       await writeFile(result.filePath, skill.markdown, { mode: 0o600 });
       return true;
@@ -893,30 +1062,9 @@ app
     // needs it, so overlapping captures can't see each other's windows.
     // This guard exists so a burst of quick clicks shares one real capture
     // and adds one registry entry, instead of hitting desktopCapturer and
-    // screenshots.add() once per click.
-    const captureScreenshotOnce = singleFlight(
-      (): Promise<ScreenshotAttachment> =>
-        captureScreenshot({
-          screenCaptureAllowed: async () => (await permissions()).screenCapture,
-          primaryDisplay: () => screen.getPrimaryDisplay(),
-          displays: () => screen.getAllDisplays(),
-          conceal: () =>
-            conceal(openMuseWindows().filter((win) => win.isVisible())),
-          wait: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
-          sources: (target) =>
-            desktopCapturer.getSources({
-              types: ["screen"],
-              thumbnailSize: target,
-            }),
-          // A 2x NativeImage keeps its scale factor through resize(), so its
-          // PNG would stay 2x; rebuilding it from its own pixels makes the
-          // target a pixel size.
-          rebuild: (png, size) =>
-            nativeImage.createFromBuffer(png).resize(size).toPNG(),
-          register: (input) => screenshots.add(input),
-          sourcesTimeoutMs: 10_000,
-        }),
-    );
+    // screenshots.add() once per click. The agent's captures bypass this;
+    // see captureNow.
+    const captureScreenshotOnce = singleFlight(captureNow);
     handle("screenshot", captureScreenshotOnce);
     handle("openWorkspace", openWorkspace);
     ipcMain.handle("kite:toggleCompanionChat", (event) => {
@@ -987,11 +1135,14 @@ app
       buddy.setPosition(position.x, position.y);
       positionCompanionChat();
       void persistBuddyPosition().catch((error: unknown) =>
-        dialog.showMessageBox({
-          type: "error",
-          message: "Could not save companion position",
-          detail: error instanceof Error ? error.message : "Unknown save error",
-        }),
+        showDialog(() =>
+          dialog.showMessageBox({
+            type: "error",
+            message: "Could not save companion position",
+            detail:
+              error instanceof Error ? error.message : "Unknown save error",
+          }),
+        ),
       );
     };
     screen.on("display-removed", restoreVisibleBuddy);
@@ -1014,12 +1165,14 @@ app
               // A sheet on the workspace, not a parentless alert: on macOS that would freeze the
               // main process, and the usual refusal comes while a recording is still sending events.
               openWorkspace();
-              void dialog.showMessageBox(workspace, {
-                type: "error",
-                message: "Could not replay setup",
-                detail:
-                  error instanceof Error ? error.message : "Unknown error",
-              });
+              void showDialog(() =>
+                dialog.showMessageBox(workspace, {
+                  type: "error",
+                  message: "Could not replay setup",
+                  detail:
+                    error instanceof Error ? error.message : "Unknown error",
+                }),
+              );
             });
           },
         },
@@ -1048,11 +1201,14 @@ app
     });
   })
   .catch(async (error) => {
-    await dialog.showMessageBox({
-      type: "error",
-      message: "OpenMuse Desktop could not start",
-      detail: error instanceof Error ? error.message : "Unknown startup error",
-    });
+    await showDialog(() =>
+      dialog.showMessageBox({
+        type: "error",
+        message: "OpenMuse Desktop could not start",
+        detail:
+          error instanceof Error ? error.message : "Unknown startup error",
+      }),
+    );
     app.quit();
   });
 app.on("before-quit", () => {

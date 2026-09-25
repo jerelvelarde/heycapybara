@@ -28,15 +28,32 @@ func axElement(_ element: AXUIElement, _ attribute: CFString) -> AXUIElement? {
     return (value as! AXUIElement)
 }
 
-func isSecure(_ element: AXUIElement) -> Bool {
+enum SecureState { case clear, secure, unknown }
+
+// Whether the element, or one of its eight nearest ancestors, is a secure
+// text field. An element with no subrole is fine; a subrole read that fails
+// on the element itself, a timeout included, is unknown, never clear. A
+// failed read further up, or a failed parent lookup, ends the walk.
+func secureState(_ element: AXUIElement) -> SecureState {
     var current: AXUIElement? = element
-    for _ in 0..<8 {
+    for depth in 0..<8 {
         guard let item = current else { break }
-        if axString(item, kAXSubroleAttribute as CFString) == "AXSecureTextField" { return true }
+        var value: CFTypeRef?
+        switch AXUIElementCopyAttributeValue(item, kAXSubroleAttribute as CFString, &value) {
+        case .success:
+            if value as? String == "AXSecureTextField" { return .secure }
+        case .noValue, .attributeUnsupported: break
+        default:
+            if depth == 0 { return .unknown }
+            return .clear
+        }
         current = axElement(item, kAXParentAttribute as CFString)
     }
-    return false
+    return .clear
 }
+
+// The recorder redacts anything it can't show to be clear.
+func isSecure(_ element: AXUIElement) -> Bool { secureState(element) != .clear }
 
 func primaryTop() -> CGFloat { NSScreen.screens.first?.frame.maxY ?? 0 }
 func quartzPoint(_ cocoa: NSPoint) -> CGPoint { CGPoint(x: cocoa.x, y: primaryTop() - cocoa.y) }
@@ -183,6 +200,229 @@ let args = CommandLine.arguments
 let application = NSApplication.shared
 application.setActivationPolicy(.accessory)
 let recorder = Recorder()
+
+// Must match server/point-schema.ts's bundleIdSchema (guarded by a parity
+// test in tests/tools.test.ts). --open-app and --open-url both check it.
+let bundleIdPattern = "^[A-Za-z0-9][A-Za-z0-9-]*(\\.[A-Za-z0-9][A-Za-z0-9-]*)+$"
+
+// The ring --point shows. --click and --scroll show it at their target just
+// before they send anything, so the user sees where the input will land. It
+// ignores the mouse, so the click passes through it.
+func showRing(at point: CGPoint) -> NSPanel {
+    let cocoaPoint = NSPoint(x: point.x, y: primaryTop() - point.y)
+    let frame = NSRect(x: cocoaPoint.x - 24, y: cocoaPoint.y - 24, width: 48, height: 48)
+    let panel = NSPanel(contentRect: frame, styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
+    panel.isOpaque = false
+    panel.backgroundColor = .clear
+    panel.hasShadow = false
+    panel.ignoresMouseEvents = true
+    panel.level = .screenSaver
+    panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
+    panel.contentView = RingView(frame: NSRect(origin: .zero, size: frame.size))
+    panel.orderFrontRegardless()
+    return panel
+}
+
+// Finite Quartz coordinates that lie on a connected display, as --point
+// accepts them, or nil.
+func connectedPoint(_ xText: String, _ yText: String) -> CGPoint? {
+    guard let x = Double(xText), let y = Double(yText), x.isFinite, y.isFinite else { return nil }
+    // Tested in Quartz coordinates, where a display's bounds hold its top
+    // row, y = 0 on the primary display, and not the row below its bottom.
+    // Flipped to Cocoa's bottom-left origin, NSRect.contains gets both edges
+    // wrong.
+    let point = CGPoint(x: x, y: y)
+    var count: UInt32 = 0
+    guard CGGetDisplaysWithPoint(point, 0, nil, &count) == .success, count > 0 else { return nil }
+    return point
+}
+
+// How long the ring shows before a click or scroll is sent, and how long it
+// stays after. Stop kills this process, so input stopped during the lead is
+// never sent.
+let ringLead = 0.4
+let ringTail = 0.3
+
+// Sending input needs Accessibility, which covers posting events. Both
+// checks are the forms that never prompt: a tool call must not raise the
+// system prompt; only --request-accessibility does, from onboarding or
+// Settings. macOS checks the app responsible for this process: OpenMuse
+// Desktop when it was opened from Finder or the Dock, or the terminal that
+// ran `npm run dev`.
+func eventAccessGranted() -> Bool { AXIsProcessTrusted() && CGPreflightPostEventAccess() }
+let eventAccessError = "OpenMuse needs Accessibility permission to control the Mac. Ask the user to turn on OpenMuse Desktop in System Settings > Privacy & Security > Accessibility, then try again."
+
+// Apps where typed text or a Return can run a command. --type and --keys
+// refuse them whatever the task.
+let refusedTypingApps: Set<String> = [
+    "com.apple.Terminal", "com.googlecode.iterm2", "dev.warp.Warp-Stable", "com.mitchellh.ghostty",
+    "com.apple.ScriptEditor2", "com.apple.Automator",
+]
+
+// The frontmost app, which keys and text will reach, or an error event and
+// exit. macOS not saying which app that is refuses too. The helper's parent
+// is OpenMuse's main process, where keys would reach OpenMuse itself.
+func frontmostTarget(ownAppError: String) -> NSRunningApplication {
+    guard let front = NSWorkspace.shared.frontmostApplication else {
+        recorder.event("error", detail: "OpenMuse couldn't tell which app is frontmost, so it sent nothing. Wait a moment and try again.")
+        exit(EXIT_FAILURE)
+    }
+    guard front.processIdentifier != getppid() else { recorder.event("error", detail: ownAppError); exit(EXIT_FAILURE) }
+    guard !refusedTypingApps.contains(front.bundleIdentifier ?? "") else {
+        recorder.event("error", detail: "OpenMuse doesn't type into terminals or script editors; ask the user to run the command themselves.")
+        exit(EXIT_FAILURE)
+    }
+    return front
+}
+
+// Whether the focused element is a secure text field (secureState). Nothing
+// focused is clear; any other error, a timeout included, is unknown. An app
+// that doesn't report its password fields can't be caught.
+func focusedFieldCheck() -> SecureState {
+    let system = AXUIElementCreateSystemWide()
+    AXUIElementSetMessagingTimeout(system, 0.3)
+    var value: CFTypeRef?
+    switch AXUIElementCopyAttributeValue(system, kAXFocusedUIElementAttribute as CFString, &value) {
+    case .success: break
+    case .noValue: return .clear
+    default: return .unknown
+    }
+    guard let value = value, CFGetTypeID(value) == AXUIElementGetTypeID() else { return .unknown }
+    return secureState(value as! AXUIElement)
+}
+
+// The post functions create every event before sending the first, and return
+// false, having sent nothing, when macOS can't create one.
+let eventsFailedError = "macOS couldn't create the input events, so OpenMuse sent nothing. Try again."
+
+func postClick(at point: CGPoint, button: CGMouseButton, clicks: Int) -> Bool {
+    let source = CGEventSource(stateID: .hidSystemState)
+    let (down, up): (CGEventType, CGEventType) = button == .right ? (.rightMouseDown, .rightMouseUp) : (.leftMouseDown, .leftMouseUp)
+    guard let move = CGEvent(mouseEventSource: source, mouseType: .mouseMoved, mouseCursorPosition: point, mouseButton: button) else { return false }
+    var presses: [CGEvent] = []
+    for click in 1...clicks {
+        for kind in [down, up] {
+            guard let event = CGEvent(mouseEventSource: source, mouseType: kind, mouseCursorPosition: point, mouseButton: button) else { return false }
+            // The count within a double or triple click, which is how apps
+            // tell one from separate clicks.
+            event.setIntegerValueField(.mouseEventClickState, value: Int64(click))
+            presses.append(event)
+        }
+    }
+    move.post(tap: .cghidEventTap)
+    usleep(30_000)
+    presses.forEach { $0.post(tap: .cghidEventTap) }
+    return true
+}
+
+// Lines per wheel notch, about what one notch of a mouse wheel scrolls.
+let linesPerNotch: Int32 = 3
+
+func postScroll(at point: CGPoint, direction: String, notches: Int) -> Bool {
+    let source = CGEventSource(stateID: .hidSystemState)
+    guard let move = CGEvent(mouseEventSource: source, mouseType: .mouseMoved, mouseCursorPosition: point, mouseButton: .left) else { return false }
+    // Wheel 1 is vertical and wheel 2 horizontal. Positive values scroll up
+    // and left, the way a wheel turned away from the user does.
+    let vertical: Int32 = direction == "up" ? linesPerNotch : direction == "down" ? -linesPerNotch : 0
+    let horizontal: Int32 = direction == "left" ? linesPerNotch : direction == "right" ? -linesPerNotch : 0
+    var wheels: [CGEvent] = []
+    for _ in 0..<notches {
+        guard let wheel = CGEvent(scrollWheelEvent2Source: source, units: .line, wheelCount: 2, wheel1: vertical, wheel2: horizontal, wheel3: 0) else { return false }
+        wheels.append(wheel)
+    }
+    move.post(tap: .cghidEventTap)
+    usleep(30_000)
+    for wheel in wheels {
+        wheel.post(tap: .cghidEventTap)
+        usleep(20_000)
+    }
+    return true
+}
+
+func postText(_ text: String) -> Bool {
+    let source = CGEventSource(stateID: .hidSystemState)
+    var pairs: [[CGEvent]] = []
+    for character in text {
+        // One key event pair per character, carrying the character itself,
+        // so it types the same on any keyboard layout. A character made of
+        // several code points, such as an emoji with a skin tone, goes in
+        // one event.
+        let units = Array(String(character).utf16)
+        var pair: [CGEvent] = []
+        for isDown in [true, false] {
+            guard let event = CGEvent(keyboardEventSource: source, virtualKey: 0, keyDown: isDown) else { return false }
+            event.flags = []
+            event.keyboardSetUnicodeString(stringLength: units.count, unicodeString: units)
+            pair.append(event)
+        }
+        pairs.append(pair)
+    }
+    for pair in pairs {
+        pair.forEach { $0.post(tap: .cghidEventTap) }
+        usleep(4_000)
+    }
+    return true
+}
+
+// Must list exactly server/computer-schema.ts's KEY_NAMES (guarded by a
+// parity test in tests/computer-schema.test.ts). Virtual key codes from
+// Carbon's Events.h: key positions on a US ANSI keyboard.
+let keyCodes: [String: CGKeyCode] = [
+    "a": 0x00, "s": 0x01, "d": 0x02, "f": 0x03, "h": 0x04, "g": 0x05, "z": 0x06, "x": 0x07,
+    "c": 0x08, "v": 0x09, "b": 0x0B, "q": 0x0C, "w": 0x0D, "e": 0x0E, "r": 0x0F, "y": 0x10,
+    "t": 0x11, "1": 0x12, "2": 0x13, "3": 0x14, "4": 0x15, "6": 0x16, "5": 0x17, "equal": 0x18,
+    "9": 0x19, "7": 0x1A, "minus": 0x1B, "8": 0x1C, "0": 0x1D, "right_bracket": 0x1E, "o": 0x1F,
+    "u": 0x20, "left_bracket": 0x21, "i": 0x22, "p": 0x23, "return": 0x24, "l": 0x25, "j": 0x26,
+    "quote": 0x27, "k": 0x28, "semicolon": 0x29, "backslash": 0x2A, "comma": 0x2B, "slash": 0x2C,
+    "n": 0x2D, "m": 0x2E, "period": 0x2F, "tab": 0x30, "space": 0x31, "grave": 0x32, "delete": 0x33,
+    "escape": 0x35, "f5": 0x60, "f6": 0x61, "f7": 0x62, "f3": 0x63, "f8": 0x64, "f9": 0x65,
+    "f11": 0x67, "f10": 0x6D, "f12": 0x6F, "home": 0x73, "page_up": 0x74, "forward_delete": 0x75,
+    "f4": 0x76, "end": 0x77, "f2": 0x78, "page_down": 0x79, "f1": 0x7A, "left": 0x7B, "right": 0x7C,
+    "down": 0x7D, "up": 0x7E,
+]
+
+// The keyCodes names that type a character: letters, digits, punctuation
+// and space. --keys won't press one into a password field, where it would
+// type the password a character at a time. Return, tab, delete, escape, the
+// arrows and the other navigation and function keys stay allowed.
+let characterKeys: Set<String> = [
+    "a", "b", "c", "d", "e", "f", "g", "h", "i", "j", "k", "l", "m",
+    "n", "o", "p", "q", "r", "s", "t", "u", "v", "w", "x", "y", "z",
+    "0", "1", "2", "3", "4", "5", "6", "7", "8", "9",
+    "equal", "minus", "left_bracket", "right_bracket", "quote", "semicolon", "backslash",
+    "comma", "slash", "period", "grave", "space",
+]
+
+// Must list exactly server/computer-schema.ts's MODIFIERS.
+let modifierFlags: [String: CGEventFlags] = [
+    "command": .maskCommand, "shift": .maskShift, "option": .maskAlternate, "control": .maskControl,
+]
+
+// Must list exactly server/computer-schema.ts's BLOCKED_CHORDS (guarded by a
+// parity test in tests/recorder-source.test.ts): log out, lock the screen and
+// Force Quit. --keys refuses these, and any chord that holds every modifier
+// of one and more, whatever the main process already checked.
+let blockedChords: [(key: String, modifiers: [String])] = [
+    (key: "q", modifiers: ["command", "shift"]),
+    (key: "q", modifiers: ["command", "control"]),
+    (key: "escape", modifiers: ["command", "option"]),
+]
+
+func postKeys(_ code: CGKeyCode, flags: CGEventFlags) -> Bool {
+    let source = CGEventSource(stateID: .hidSystemState)
+    var events: [CGEvent] = []
+    for isDown in [true, false] {
+        guard let event = CGEvent(keyboardEventSource: source, virtualKey: code, keyDown: isDown) else { return false }
+        // Exactly these modifiers, whatever keys the user is holding. No
+        // separate modifier key events are sent, so none can be left held
+        // down if Stop kills this process halfway.
+        event.flags = flags
+        events.append(event)
+    }
+    events.forEach { $0.post(tap: .cghidEventTap) }
+    return true
+}
+
 if args.count > 1 {
     switch args[1] {
     case "--permissions": emit(permissions()); exit(EXIT_SUCCESS)
@@ -194,7 +434,7 @@ if args.count > 1 {
         _ = CGRequestScreenCaptureAccess()
         emit(permissions()); exit(EXIT_SUCCESS)
     case "--open-app":
-        guard args.count == 3, args[2].range(of: "^[A-Za-z0-9][A-Za-z0-9-]*(\\.[A-Za-z0-9][A-Za-z0-9-]*)+$", options: .regularExpression) != nil,
+        guard args.count == 3, args[2].range(of: bundleIdPattern, options: .regularExpression) != nil,
               let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: args[2]) else {
             recorder.event("error", detail: "Invalid or unavailable application bundle identifier")
             exit(EXIT_FAILURE)
@@ -212,24 +452,141 @@ if args.count > 1 {
             recorder.event("error", detail: "Point requires finite Quartz screen coordinates")
             exit(EXIT_FAILURE)
         }
-        let cocoaPoint = NSPoint(x: x, y: Double(primaryTop()) - y)
-        guard NSScreen.screens.contains(where: { $0.frame.contains(cocoaPoint) }) else {
+        guard let point = connectedPoint(args[2], args[3]) else {
             recorder.event("error", detail: "Point lies outside connected displays")
             exit(EXIT_FAILURE)
         }
-        let frame = NSRect(x: cocoaPoint.x - 24, y: cocoaPoint.y - 24, width: 48, height: 48)
-        let panel = NSPanel(contentRect: frame, styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
-        panel.isOpaque = false
-        panel.backgroundColor = .clear
-        panel.hasShadow = false
-        panel.ignoresMouseEvents = true
-        panel.level = .screenSaver
-        panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
-        panel.contentView = RingView(frame: NSRect(origin: .zero, size: frame.size))
-        panel.orderFrontRegardless()
-        recorder.event("status", detail: "Point displayed", point: CGPoint(x: x, y: y))
+        let panel = showRing(at: point)
+        recorder.event("status", detail: "Point displayed", point: point)
         DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) { panel.orderOut(nil); exit(EXIT_SUCCESS) }
         application.run()
+    case "--open-url":
+        guard args.count == 4, args[2].range(of: bundleIdPattern, options: .regularExpression) != nil,
+              let appURL = NSWorkspace.shared.urlForApplication(withBundleIdentifier: args[2]) else {
+            recorder.event("error", detail: "Invalid or unavailable application bundle identifier")
+            exit(EXIT_FAILURE)
+        }
+        guard let url = URL(string: args[3]), url.scheme == "https", let host = url.host, !host.isEmpty else {
+            recorder.event("error", detail: "Only https web addresses with a host can be opened")
+            exit(EXIT_FAILURE)
+        }
+        // As server/computer-schema.ts checks: an address can hide where it
+        // goes behind a user name, or carry a password.
+        guard url.user == nil, url.password == nil else {
+            recorder.event("error", detail: "Use a web address without a user name or password")
+            exit(EXIT_FAILURE)
+        }
+        let config = NSWorkspace.OpenConfiguration()
+        config.activates = true
+        NSWorkspace.shared.open([url], withApplicationAt: appURL, configuration: config) { app, error in
+            if let error = error { recorder.event("error", detail: error.localizedDescription); exit(EXIT_FAILURE) }
+            recorder.event("status", detail: "Web page opened", app: app)
+            exit(EXIT_SUCCESS)
+        }
+        application.run()
+    case "--click":
+        guard args.count == 6, let point = connectedPoint(args[2], args[3]),
+              let button = ["left": CGMouseButton.left, "right": CGMouseButton.right][args[4]],
+              let clicks = Int(args[5]), (1...3).contains(clicks) else {
+            recorder.event("error", detail: "Click requires Quartz coordinates on a connected display, left or right, and 1 to 3 clicks")
+            exit(EXIT_FAILURE)
+        }
+        guard eventAccessGranted() else { recorder.event("error", detail: eventAccessError); exit(EXIT_FAILURE) }
+        let panel = showRing(at: point)
+        DispatchQueue.main.asyncAfter(deadline: .now() + ringLead) {
+            guard postClick(at: point, button: button, clicks: clicks) else {
+                panel.orderOut(nil)
+                recorder.event("error", detail: eventsFailedError)
+                exit(EXIT_FAILURE)
+            }
+            recorder.event("status", detail: "Click sent", point: point)
+            DispatchQueue.main.asyncAfter(deadline: .now() + ringTail) { panel.orderOut(nil); exit(EXIT_SUCCESS) }
+        }
+        application.run()
+    case "--scroll":
+        guard args.count == 6, let point = connectedPoint(args[2], args[3]),
+              ["up", "down", "left", "right"].contains(args[4]),
+              let notches = Int(args[5]), (1...10).contains(notches) else {
+            recorder.event("error", detail: "Scroll requires Quartz coordinates on a connected display, up, down, left or right, and 1 to 10 notches")
+            exit(EXIT_FAILURE)
+        }
+        guard eventAccessGranted() else { recorder.event("error", detail: eventAccessError); exit(EXIT_FAILURE) }
+        let panel = showRing(at: point)
+        DispatchQueue.main.asyncAfter(deadline: .now() + ringLead) {
+            guard postScroll(at: point, direction: args[4], notches: notches) else {
+                panel.orderOut(nil)
+                recorder.event("error", detail: eventsFailedError)
+                exit(EXIT_FAILURE)
+            }
+            recorder.event("status", detail: "Scroll sent", point: point)
+            DispatchQueue.main.asyncAfter(deadline: .now() + ringTail) { panel.orderOut(nil); exit(EXIT_SUCCESS) }
+        }
+        application.run()
+    case "--type":
+        // The text comes on stdin, not argv: any process on the Mac can read
+        // another's arguments. It is read first, so the writer never hits a
+        // closed pipe on the refusals below.
+        let data = FileHandle.standardInput.readDataToEndOfFile()
+        let breaks: [Unicode.GeneralCategory] = [.control, .lineSeparator, .paragraphSeparator]
+        guard args.count == 2, data.count <= 4096, let text = String(data: data, encoding: .utf8), !text.isEmpty,
+              !text.unicodeScalars.contains(where: { breaks.contains($0.properties.generalCategory) }) else {
+            recorder.event("error", detail: "Typing requires 1 to 4096 bytes of UTF-8 text on standard input, without control characters or line breaks")
+            exit(EXIT_FAILURE)
+        }
+        guard eventAccessGranted() else { recorder.event("error", detail: eventAccessError); exit(EXIT_FAILURE) }
+        _ = frontmostTarget(ownAppError: "OpenMuse is the frontmost app, so the text would go to OpenMuse itself. Click the field you want to type into first.")
+        switch focusedFieldCheck() {
+        case .clear: break
+        case .secure:
+            recorder.event("error", detail: "The focused field is a password field. OpenMuse doesn't type into password fields; ask the user to type it themselves.")
+            exit(EXIT_FAILURE)
+        case .unknown:
+            recorder.event("error", detail: "OpenMuse couldn't check whether the focused field is a password field. Wait a moment, click the field and try again.")
+            exit(EXIT_FAILURE)
+        }
+        guard postText(text) else { recorder.event("error", detail: eventsFailedError); exit(EXIT_FAILURE) }
+        recorder.event("status", detail: "Text typed")
+        exit(EXIT_SUCCESS)
+    case "--keys":
+        guard (3...7).contains(args.count), let code = keyCodes[args[2]] else {
+            recorder.event("error", detail: "Keys require one known key name and up to four different modifiers")
+            exit(EXIT_FAILURE)
+        }
+        var flags: CGEventFlags = []
+        for name in args.dropFirst(3) {
+            guard let flag = modifierFlags[name], !flags.contains(flag) else {
+                recorder.event("error", detail: "Keys require one known key name and up to four different modifiers")
+                exit(EXIT_FAILURE)
+            }
+            flags.insert(flag)
+        }
+        guard !blockedChords.contains(where: { chord in
+            chord.key == args[2] && flags.isSuperset(of: CGEventFlags(chord.modifiers.compactMap { modifierFlags[$0] }))
+        }) else {
+            recorder.event("error", detail: "That shortcut logs out, locks the Mac or opens Force Quit, so OpenMuse doesn't send it. Ask the user to do it themselves.")
+            exit(EXIT_FAILURE)
+        }
+        guard eventAccessGranted() else { recorder.event("error", detail: eventAccessError); exit(EXIT_FAILURE) }
+        _ = frontmostTarget(ownAppError: "OpenMuse is the frontmost app, so the keys would go to OpenMuse itself. Click in the app you want, or open it with open_application or open_url, first.")
+        // A character key types its character with no modifiers, Shift or
+        // Option (Option-S types ß); Command or Control makes it a shortcut.
+        // Command-V, with or without more modifiers, pastes.
+        let typesCharacter = characterKeys.contains(args[2]) && flags.isDisjoint(with: [.maskCommand, .maskControl])
+        let pastes = args[2] == "v" && flags.contains(.maskCommand)
+        if typesCharacter || pastes {
+            switch focusedFieldCheck() {
+            case .clear: break
+            case .secure:
+                recorder.event("error", detail: "The focused field is a password field. OpenMuse doesn't type into password fields; ask the user to type it themselves.")
+                exit(EXIT_FAILURE)
+            case .unknown:
+                recorder.event("error", detail: "OpenMuse couldn't check whether the focused field is a password field. Wait a moment, click the field and try again.")
+                exit(EXIT_FAILURE)
+            }
+        }
+        guard postKeys(code, flags: flags) else { recorder.event("error", detail: eventsFailedError); exit(EXIT_FAILURE) }
+        recorder.event("status", detail: "Keys pressed")
+        exit(EXIT_SUCCESS)
     default: recorder.event("error", detail: "Unknown argument"); exit(EXIT_FAILURE)
     }
 } else {

@@ -57,7 +57,15 @@ const calls = existsSync(record)
 if (stdin.includes(HANG_TRIGGER)) {
   // `pid` only appears on a hang-mode call: the test looks for it to learn
   // when this process is up and running, then to confirm it later exits.
-  calls.push({ argv, stdin, images, pid: process.pid });
+  calls.push({
+    argv,
+    stdin,
+    images,
+    pid: process.pid,
+    // Recorded only in hang mode, where the run is still open, so a test can
+    // call the runtime's /mcp route with it (server/run-registry.ts).
+    mcpToken: process.env.KITE_MCP_TOKEN,
+  });
   writeFileSync(record, JSON.stringify(calls, null, 2));
   // Fires forever instead of resolving -- there is no promise here to
   // resolve -- which keeps the event loop alive (a bare pending Promise
