@@ -866,10 +866,18 @@ test("press_keys publishes its key names and modifiers as enums the model can re
     const pressKeys = list.result.tools.find(
       (tool: { name: string }) => tool.name === "press_keys",
     );
-    assert.deepEqual(pressKeys.inputSchema.properties.key.enum, [...KEY_NAMES]);
-    assert.deepEqual(pressKeys.inputSchema.properties.modifiers.items.enum, [
-      ...MODIFIERS,
-    ]);
+    // zod 4's JSON Schema output lists digit keys "0"-"9" first because they
+    // become integer-like object keys, which JS always enumerates before
+    // string keys; the published set is right, only the order differs, so
+    // compare sorted arrays instead of relying on enumeration order.
+    assert.deepEqual(
+      [...pressKeys.inputSchema.properties.key.enum].sort(),
+      [...KEY_NAMES].sort(),
+    );
+    assert.deepEqual(
+      [...pressKeys.inputSchema.properties.modifiers.items.enum].sort(),
+      [...MODIFIERS].sort(),
+    );
   });
 });
 
