@@ -82,7 +82,12 @@ export function App() {
     );
   if (isBuddy)
     return (
-      <Buddy active={!!data.active} error={error} setError={setError}>
+      <Buddy
+        active={!!data.active}
+        error={error}
+        setError={setError}
+        learning={data.learning}
+      >
         <Sprite companion={data.settings.companion} small />
       </Buddy>
     );

@@ -1651,6 +1651,26 @@ button {
   border-radius: 50%;
   box-shadow: 0 0 0 3px #b75b4833;
 }
+.buddy-learning-indicator {
+  position: absolute;
+  top: 10px;
+  left: 59px;
+  width: 9px;
+  height: 9px;
+  border: 2px solid white;
+  border-radius: 50%;
+}
+.buddy-learning-indicator.busy {
+  background: var(--blue-dark);
+  animation: pulse 1.5s infinite;
+}
+.buddy-learning-indicator.attention {
+  background: #d99a2b;
+}
+.buddy-learning-indicator.new {
+  background: #3f9a5b;
+  box-shadow: 0 0 0 3px #3f9a5b33;
+}
 .buddy-error {
   font-size: 9px;
   color: #965446;
