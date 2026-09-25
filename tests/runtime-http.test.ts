@@ -68,6 +68,18 @@ test("real runtime discovers AG-UI agent only after loopback authentication", as
     assert.equal(response.status, 200);
     const info = await response.json();
     assert.ok(info.agents.default);
+    // No Intelligence key here, so there is nothing to learn from or recall.
+    assert.equal(rt.learning, undefined);
+    assert.equal(rt.memory, undefined);
+    // The knowledge-base proxy takes a live run's MCP token, never the runtime's.
+    const deniedKnowledge = await fetch(
+      new URL("/mcp/intelligence", rt.settings.runtimeUrl),
+      {
+        method: "POST",
+        headers: { Authorization: "Bearer " + rt.settings.runtimeToken },
+      },
+    );
+    assert.equal(deniedKnowledge.status, 401);
     alternate = await mkdtemp(join(tmpdir(), "kite-workspace-test-"));
     await rt.setWorkspace(alternate);
     assert.equal(rt.settings.workspace, await realpath(alternate));
