@@ -856,7 +856,7 @@ function Workspace({
                   {
                     n: "02",
                     title: "Intelligence remembers",
-                    body: "New conversations start with what Intelligence recalls for the task. Intelligence can also learn from your conversations on its own.",
+                    body: "New conversations start with what Intelligence Memory recalls for the task.",
                     icon: Sparkles,
                   },
                   {

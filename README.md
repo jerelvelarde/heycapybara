@@ -58,9 +58,9 @@ The runtime routes the `default` agent to this container via `getLearningContain
 
 **Memory (no approval step).**
 
-1. **Teach it once.** Do the task with OpenMuse in chat. When it worked, press **Learn from this**. OpenMuse writes the lesson (the task, the OpenMuse tools it used in order, and its final report) to your Intelligence Memory. It also tells Intelligence the run worked, for Intelligence's own knowledge-base learning.
+1. **Teach it once.** Do the task with OpenMuse in chat. When it worked, press **Learn from this**. OpenMuse shows the exact lesson (the task, the OpenMuse tools it used in order, and its final report), and **Save** writes it to your Intelligence Memory. Secret-shaped text such as passwords, tokens and API keys is replaced with `[redacted]`, and the final report is left out when OpenMuse typed text. It also tells Intelligence the run worked.
 2. **It is recalled.** Every new conversation starts with what Intelligence Memory recalls for the task, and the chat shows `Recalled from Intelligence Memory: …`. The agent can also read Intelligence's knowledge base through OpenMuse's local proxy. The project key never reaches Codex.
-3. **Intelligence learning on its own.** When Intelligence itself writes a memory from your conversations, the chat shows `Intelligence learned from your conversations: …`. When and how often this happens is up to Intelligence; CopilotKit 1.73.3 exposes no schedule or trigger for it.
+3. **Other memories in Intelligence.** Memories that Intelligence adds from your conversations, rather than ones OpenMuse saved, appear as `New in Intelligence Memory: …`. Whether and when Intelligence adds them is up to Intelligence; CopilotKit 1.73.3 exposes no schedule or trigger for it.
 
 **Skills (approved in Intelligence).**
 

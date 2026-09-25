@@ -6,6 +6,7 @@ import {
   lessonMemory,
   teachingAnnotation,
   buddyLearningBadge,
+  redactSecrets,
 } from "../src/learning-view";
 import type { LearningStatus } from "../src/types";
 
@@ -188,4 +189,73 @@ test("the pet shows busy while analyzing, attention when a person is needed, and
   assert.equal(buddyLearningBadge(status({ phase: "learned" })), "new");
   for (const phase of ["off", "idle", "setup", "error"] as const)
     assert.equal(buddyLearningBadge(status({ phase })), null);
+});
+
+test("secret-shaped text is redacted", () => {
+  const cases: [string, string][] = [
+    [
+      "Log in with password: hunter2 then open it",
+      "Log in with password: [redacted] then open it",
+    ],
+    ["passcode=4471", "passcode=[redacted]"],
+    ["My PIN is 8812.", "My PIN is [redacted]."],
+    ["token = abc.def", "token = [redacted]"],
+    ["the secret is 'open sesame'", "the secret is [redacted]"],
+    ['API key: "k-123"', "API key: [redacted]"],
+    ["api_key=xyz", "api_key=[redacted]"],
+    ["use sk-proj-AbC123dEf456 now", "use [redacted] now"],
+    ["ghp_" + "a1".repeat(18), "[redacted]"],
+    ["hash " + "0123456789abcdef".repeat(2), "hash [redacted]"],
+    ["blob QmFzZTY0IGVuY29kZWQgdGV4dCBsb29rcyBsaWtlZQ==", "blob [redacted]"],
+  ];
+  for (const [input, expected] of cases)
+    assert.equal(redactSecrets(input), expected, input);
+});
+
+test("ordinary text is not redacted", () => {
+  for (const text of [
+    "Open Chrome, open Gmail, and label this email",
+    "Reset my password in Settings",
+    "Pin the tab and open the token list",
+    "Supercalifragilisticexpialidociousandthensome",
+    "y".repeat(60),
+  ])
+    assert.equal(redactSecrets(text), text);
+});
+
+test("secrets never reach the saved lesson or the note", () => {
+  const leaky = [
+    { role: "user", content: "Sign in to the portal with password: hunter2" },
+    { role: "assistant", toolCalls: [{ function: { name: "click" } }] },
+    { role: "assistant", content: "Signed in. The token is tok_998877." },
+  ];
+  const lesson = lessonMemory(leaky);
+  assert.ok(!lesson.includes("hunter2"), lesson);
+  assert.ok(!lesson.includes("tok_998877"), lesson);
+  assert.ok(lesson.includes("password: [redacted]"));
+  const note = JSON.stringify(teachingAnnotation(leaky, "t"));
+  assert.ok(!note.includes("hunter2"), note);
+});
+
+test("the final report is left out when OpenMuse typed text", () => {
+  const typed = [
+    { role: "user", content: "Fill in the sign-up form" },
+    {
+      role: "assistant",
+      toolCalls: [
+        { function: { name: "click" } },
+        { function: { name: "type_text" } },
+      ],
+    },
+    { role: "assistant", content: "Done. I typed Jane Doe, 12 Elm St." },
+  ];
+  assert.equal(
+    lessonMemory(typed),
+    [
+      "How to: Fill in the sign-up form",
+      "OpenMuse did this successfully and the user confirmed it worked.",
+      "OpenMuse tools used, in order: click → type_text.",
+      "(final report omitted because text was typed)",
+    ].join("\n"),
+  );
 });

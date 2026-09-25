@@ -72,18 +72,47 @@ function messageText(content: unknown): string {
     .join("\n");
 }
 
+const REDACTED = "[redacted]";
+// A labelled secret: the label and separator stay, the value goes. A quoted
+// value is taken whole; a bare one stops before trailing punctuation.
+const LABELLED_SECRET =
+  /\b(password|passcode|pin|token|secret|api[ _-]?key)(\s*[:=]\s*|\s+is\s+)("[^"]*"|'[^']*'|\S+?(?=[.,;!?]?(?:\s|$)))/gi;
+const KEY_PREFIX =
+  /\b(?:(?:sk|pk|rk)-[A-Za-z0-9_-]{8,}|gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}|xox[abprs]-[A-Za-z0-9-]{10,}|AKIA[0-9A-Z]{16})/g;
+const LONG_HEX = /\b[0-9a-fA-F]{32,}\b/g;
+const LONG_BASE64 = /[A-Za-z0-9+/_-]{40,}={0,2}/g;
+
+/**
+ * Replaces secret-shaped text with "[redacted]" before it is saved anywhere
+ * Intelligence will recall it from. A long run counts as base64 only when it
+ * mixes letters and digits, so a long word is left alone.
+ */
+export function redactSecrets(text: string) {
+  return text
+    .replace(
+      LABELLED_SECRET,
+      (_, label, separator) => label + separator + REDACTED,
+    )
+    .replace(KEY_PREFIX, REDACTED)
+    .replace(LONG_HEX, REDACTED)
+    .replace(LONG_BASE64, (run: string) =>
+      /\d/.test(run) && /[A-Za-z]/.test(run) ? REDACTED : run,
+    );
+}
+
 function taskOf(messages: readonly ChatMessage[]) {
   const first = messages.find((message) => message.role === "user");
   const task = first ? messageText(first.content).trim() : "";
   if (!task) throw new Error("Send OpenMuse a task before teaching it.");
-  return task;
+  return redactSecrets(task);
 }
 
 /**
  * The user's verdict on a run, recorded with useLearnFromUserAction as a
  * `user_action` on the thread Intelligence already stores. Intelligence's
  * knowledge-base writer reads these. Only the first user turn's text (already
- * in that thread) is repeated; attachments are never sent again.
+ * in that thread) is repeated, with secrets redacted; attachments are never
+ * sent again.
  */
 export function teachingAnnotation(
   messages: readonly ChatMessage[],
@@ -106,17 +135,18 @@ export function teachingAnnotation(
  * The lesson "Learn from this" saves to Intelligence Memory: the task, the
  * OpenMuse tools used in order (names only), and what OpenMuse reported when
  * done. Written by OpenMuse from the thread; Intelligence stores it and
- * recalls it by meaning in the next conversation.
+ * recalls it by meaning in the next conversation. Secret-shaped text is
+ * redacted, and the report is left out entirely when OpenMuse typed text,
+ * since it may repeat what was typed.
  */
 export function lessonMemory(messages: readonly ChatMessage[]) {
   const task = taskOf(messages);
-  const steps = messages
-    .flatMap((message) =>
-      message.role === "assistant" && message.toolCalls
-        ? message.toolCalls.map((call) => call.function.name)
-        : [],
-    )
-    .slice(0, 40);
+  const tools = messages.flatMap((message) =>
+    message.role === "assistant" && message.toolCalls
+      ? message.toolCalls.map((call) => call.function.name)
+      : [],
+  );
+  const steps = tools.slice(0, 40);
   const result = [...messages]
     .reverse()
     .find(
@@ -129,9 +159,11 @@ export function lessonMemory(messages: readonly ChatMessage[]) {
   ];
   if (steps.length)
     lines.push(`OpenMuse tools used, in order: ${steps.join(" → ")}.`);
-  if (result)
+  if (tools.includes("type_text"))
+    lines.push("(final report omitted because text was typed)");
+  else if (result)
     lines.push(
-      `What OpenMuse reported when done: ${messageText(result.content).trim().slice(0, 2500)}`,
+      `What OpenMuse reported when done: ${redactSecrets(messageText(result.content).trim()).slice(0, 2500)}`,
     );
   return lines.join("\n").slice(0, 4000);
 }

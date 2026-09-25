@@ -54,9 +54,11 @@ export function Assistant({
   // lesson itself goes to Intelligence Memory through the main process. The
   // Intelligence key stays in the runtime.
   const learnFromUserAction = useLearnFromUserAction();
-  const [lesson, setLesson] = useState<"none" | "offered" | "sending" | "sent">(
-    "none",
-  );
+  const [lesson, setLesson] = useState<
+    "none" | "offered" | "preview" | "sending" | "sent"
+  >("none");
+  // The exact lesson text shown for approval; Save sends this, not a rebuild.
+  const [lessonText, setLessonText] = useState("");
   const [input, setInput] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
@@ -266,15 +268,25 @@ export function Assistant({
       onDone();
     }
   }
+  // "Learn from this" only shows what would be saved; Save sends it.
+  function previewLesson() {
+    try {
+      setLessonText(lessonMemory(agent.messages));
+    } catch (e) {
+      showError(e instanceof Error ? e.message : String(e));
+      return;
+    }
+    setLesson("preview");
+  }
   async function teach() {
     setLesson("sending");
     try {
       await window.kite!.saveLesson({
         threadId: agent.threadId,
-        content: lessonMemory(agent.messages),
+        content: lessonText,
       });
     } catch (e) {
-      setLesson("offered");
+      setLesson("preview");
       showError(
         ipcErrorMessage(e, "Could not save this lesson to Intelligence"),
       );
@@ -291,7 +303,11 @@ export function Assistant({
           (e instanceof Error ? e.message : String(e)),
       );
     }
-    await window.kite!.watchLearning();
+    try {
+      await window.kite!.watchLearning();
+    } catch (e) {
+      showError(ipcErrorMessage(e, "Could not check Intelligence learning"));
+    }
   }
   useEffect(() => {
     if (
@@ -401,19 +417,47 @@ export function Assistant({
           </details>
         )}
         {lesson !== "none" && !busy && (
-          <div className="lesson-offer">
+          <div
+            className={
+              lesson === "preview" || lesson === "sending"
+                ? "lesson-offer lesson-preview"
+                : "lesson-offer"
+            }
+          >
             {lesson === "sent" ? (
               "Saved to Intelligence Memory. New conversations will recall it."
-            ) : (
+            ) : lesson === "offered" ? (
               <>
                 Did that work?
-                <button
-                  type="button"
-                  disabled={lesson === "sending"}
-                  onClick={() => void teach()}
-                >
-                  {lesson === "sending" ? "Saving…" : "Learn from this"}
+                <button type="button" onClick={previewLesson}>
+                  Learn from this
                 </button>
+              </>
+            ) : (
+              <>
+                This is what will be saved to Intelligence Memory:
+                <textarea
+                  readOnly
+                  value={lessonText}
+                  rows={5}
+                  aria-label="Lesson to save"
+                />
+                <div className="lesson-actions">
+                  <button
+                    type="button"
+                    disabled={lesson === "sending"}
+                    onClick={() => void teach()}
+                  >
+                    {lesson === "sending" ? "Saving…" : "Save"}
+                  </button>
+                  <button
+                    type="button"
+                    disabled={lesson === "sending"}
+                    onClick={() => setLesson("offered")}
+                  >
+                    Cancel
+                  </button>
+                </div>
               </>
             )}
           </div>

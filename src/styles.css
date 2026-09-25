@@ -981,6 +981,23 @@ button {
   font-size: 11px;
   color: var(--blue-dark);
 }
+.lesson-preview {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 6px;
+}
+.lesson-preview textarea {
+  width: 100%;
+  box-sizing: border-box;
+  font-size: 11px;
+  font-family: inherit;
+  color: var(--text);
+  resize: vertical;
+}
+.lesson-actions {
+  display: flex;
+  gap: 8px;
+}
 .thinking {
   display: flex;
   align-items: center;
