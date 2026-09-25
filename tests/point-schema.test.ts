@@ -177,6 +177,22 @@ const rows: Row[] = [
     ok: false,
     message: MAX_LENGTH_MESSAGE,
   },
+
+  // --- length limit is counted in code points, not UTF-16 units - each of
+  // these astral-plane letters (U+1D400 MATHEMATICAL BOLD CAPITAL A) is one
+  // code point but two UTF-16 units, so 60 of them is 120 UTF-16 units and
+  // must still pass ---
+  {
+    name: "60 astral-plane letters is at the length limit in code points",
+    label: cp(0x1d400).repeat(60),
+    ok: true,
+  },
+  {
+    name: "61 astral-plane letters is over the length limit in code points",
+    label: cp(0x1d400).repeat(61),
+    ok: false,
+    message: MAX_LENGTH_MESSAGE,
+  },
 ];
 
 // Every known-blank character from BLANK_CHARACTERS, both alone and mixed
