@@ -42,9 +42,11 @@ Be concise and practical. Keep working through recoverable errors, and verify th
 export type CodexRunnerOptions = {
   statePath: string;
   binaryPath?: string;
-  // Required (though its value may be `undefined`) so omitting this wiring at
-  // a call site is a typecheck error, not a silent runtime regression: see
-  // the screenshot lookup used below in `run()`.
+  // Required (though its value may be `undefined`) so omitting this wiring is
+  // a typecheck error at both hops it passes through: startRuntime's own
+  // options (server/runtime.ts), which mirror this same required-but-
+  // possibly-undefined shape, and this constructor's options here. See the
+  // screenshot lookup used below in `run()`.
   screenshots: ScreenshotLookup | undefined;
   createClient?: (options: CodexOptions) => {
     startThread(options: ThreadOptions): Pick<Thread, "runStreamed">;
@@ -215,9 +217,21 @@ export class CodexRunner {
                 ? m.content
                 : Array.isArray(m.content)
                   ? m.content
-                      .map((part) =>
-                        part.type === "text" ? part.text : "[image omitted]",
-                      )
+                      .map((part) => {
+                        if (part.type === "text") return part.text;
+                        // AG-UI 0.0.59's InputContent union also has "audio",
+                        // "video" and "document" parts, and a "binary" part
+                        // of any MIME type: only a "binary" part with an
+                        // image/* MIME type, or an "image" part, is actually
+                        // an image.
+                        const isImage =
+                          part.type === "image" ||
+                          (part.type === "binary" &&
+                            part.mimeType.startsWith("image/"));
+                        return isImage
+                          ? "[image omitted]"
+                          : "[attachment omitted]";
+                      })
                       .join("\n")
                   : "",
           }));

@@ -520,6 +520,257 @@ test("a binary attachment that isn't actually a PNG is rejected even when labell
   }
 });
 
+test("a binary part whose MIME type isn't image/png is rejected before decoding", async () => {
+  const { CodexRunner } = await import("../server/codex-agent");
+  const { mkdtemp, rm } = await import("node:fs/promises");
+  const { tmpdir } = await import("node:os");
+  const { join } = await import("node:path");
+  const root = await mkdtemp(join(tmpdir(), "kite-prompt-mimetype-test-"));
+  const runner = new CodexRunner({
+    statePath: root,
+    screenshots: undefined,
+    getConfig: () => ({
+      apiKey: "fixture-key",
+      model: "gpt-5.4",
+      workspace: "/test/one",
+      mcpUrl: "http://localhost/mcp",
+      mcpToken: "fixture-token",
+    }),
+    createClient: () => ({
+      startThread: () => ({
+        runStreamed: async () => {
+          throw new Error("runStreamed should not be called");
+        },
+      }),
+      resumeThread: () => {
+        throw new Error("Unexpected resume");
+      },
+    }),
+  });
+  const image = Buffer.from(pngHeader(10, 10)).toString("base64");
+  try {
+    await assert.rejects(async () => {
+      for await (const event of runner.run(
+        {
+          threadId: "prompt",
+          runId: "r",
+          messages: [
+            {
+              id: "m",
+              role: "user",
+              content: [
+                { type: "binary", mimeType: "image/jpeg", data: image },
+              ],
+            },
+          ],
+          tools: [],
+          context: [],
+          state: {},
+          forwardedProps: {},
+        },
+        new AbortController().signal,
+      ))
+        assert.equal(event.type, "thread.started");
+    }, /Image 1 is not a PNG screenshot\./);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("a binary image part with no data is rejected", async () => {
+  const { CodexRunner } = await import("../server/codex-agent");
+  const { mkdtemp, rm } = await import("node:fs/promises");
+  const { tmpdir } = await import("node:os");
+  const { join } = await import("node:path");
+  const root = await mkdtemp(join(tmpdir(), "kite-prompt-nodata-test-"));
+  const runner = new CodexRunner({
+    statePath: root,
+    screenshots: undefined,
+    getConfig: () => ({
+      apiKey: "fixture-key",
+      model: "gpt-5.4",
+      workspace: "/test/one",
+      mcpUrl: "http://localhost/mcp",
+      mcpToken: "fixture-token",
+    }),
+    createClient: () => ({
+      startThread: () => ({
+        runStreamed: async () => {
+          throw new Error("runStreamed should not be called");
+        },
+      }),
+      resumeThread: () => {
+        throw new Error("Unexpected resume");
+      },
+    }),
+  });
+  try {
+    await assert.rejects(async () => {
+      for await (const event of runner.run(
+        {
+          threadId: "prompt",
+          runId: "r",
+          messages: [
+            {
+              id: "m",
+              role: "user",
+              content: [{ type: "binary", mimeType: "image/png" }],
+            },
+          ],
+          tools: [],
+          context: [],
+          state: {},
+          forwardedProps: {},
+        },
+        new AbortController().signal,
+      ))
+        assert.equal(event.type, "thread.started");
+    }, /Image 1 has no image data\./);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("an image's data length boundary: 16,000,000 characters passes, 16,000,001 is rejected", async () => {
+  const { CodexRunner } = await import("../server/codex-agent");
+  const { mkdtemp, rm } = await import("node:fs/promises");
+  const { tmpdir } = await import("node:os");
+  const { join } = await import("node:path");
+  const root = await mkdtemp(join(tmpdir(), "kite-prompt-sizelimit-test-"));
+  const makeRunner = () =>
+    new CodexRunner({
+      statePath: root,
+      screenshots: undefined,
+      getConfig: () => ({
+        apiKey: "fixture-key",
+        model: "gpt-5.4",
+        workspace: "/test/one",
+        mcpUrl: "http://localhost/mcp",
+        mcpToken: "fixture-token",
+      }),
+      createClient: () => ({
+        startThread: () => ({
+          runStreamed: async () => ({
+            events: (async function* () {
+              yield {
+                type: "thread.started" as const,
+                thread_id: "native-1",
+              };
+            })(),
+          }),
+        }),
+        resumeThread: () => {
+          throw new Error("Unexpected resume");
+        },
+      }),
+    });
+  const runWith = async (threadId: string, data: string) => {
+    for await (const event of makeRunner().run(
+      {
+        threadId,
+        runId: "r",
+        messages: [
+          {
+            id: "m",
+            role: "user",
+            content: [{ type: "binary", mimeType: "image/png", data }],
+          },
+        ],
+        tools: [],
+        context: [],
+        state: {},
+        forwardedProps: {},
+      },
+      new AbortController().signal,
+    ))
+      assert.equal(event.type, "thread.started");
+  };
+  try {
+    // Base64 has no padding when the byte length is a multiple of 3, and
+    // encodes to exactly 4 characters per 3 bytes, so 12,000,000 PNG-shaped
+    // bytes produce exactly the 16,000,000-character limit, with a valid PNG
+    // header in the first 33 bytes so the run completes past the size check.
+    const atLimitBytes = Buffer.alloc(12_000_000);
+    atLimitBytes.set(pngHeader(10, 10));
+    const atLimit = atLimitBytes.toString("base64");
+    assert.equal(atLimit.length, 16_000_000);
+    // Distinct thread ids: a shared one would make the second run resume the
+    // first run's saved native thread instead of starting fresh.
+    await runWith("at-limit", atLimit);
+
+    const overLimit = "a".repeat(16_000_001);
+    await assert.rejects(
+      runWith("over-limit", overLimit),
+      /Image 1 is larger than 12 MB\./,
+    );
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("a content part that is neither text nor binary is rejected as an unsupported attachment", async () => {
+  const { CodexRunner } = await import("../server/codex-agent");
+  const { mkdtemp, rm } = await import("node:fs/promises");
+  const { tmpdir } = await import("node:os");
+  const { join } = await import("node:path");
+  const root = await mkdtemp(join(tmpdir(), "kite-prompt-unsupported-test-"));
+  const runner = new CodexRunner({
+    statePath: root,
+    screenshots: undefined,
+    getConfig: () => ({
+      apiKey: "fixture-key",
+      model: "gpt-5.4",
+      workspace: "/test/one",
+      mcpUrl: "http://localhost/mcp",
+      mcpToken: "fixture-token",
+    }),
+    createClient: () => ({
+      startThread: () => ({
+        runStreamed: async () => {
+          throw new Error("runStreamed should not be called");
+        },
+      }),
+      resumeThread: () => {
+        throw new Error("Unexpected resume");
+      },
+    }),
+  });
+  try {
+    await assert.rejects(async () => {
+      for await (const event of runner.run(
+        {
+          threadId: "prompt",
+          runId: "r",
+          messages: [
+            {
+              id: "m",
+              role: "user",
+              content: [
+                {
+                  type: "image",
+                  source: {
+                    type: "data",
+                    value: "abc",
+                    mimeType: "image/png",
+                  },
+                },
+              ],
+            },
+          ],
+          tools: [],
+          context: [],
+          state: {},
+          forwardedProps: {},
+        },
+        new AbortController().signal,
+      ))
+        assert.equal(event.type, "thread.started");
+    }, /Unsupported message attachment/);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("a recovered conversation keeps the text a user typed alongside an earlier image", async () => {
   const { CodexRunner } = await import("../server/codex-agent");
   const { mkdtemp, rm } = await import("node:fs/promises");
@@ -592,6 +843,121 @@ test("a recovered conversation keeps the text a user typed alongside an earlier 
     assert.ok(historyPart, "expected a previous-conversation history part");
     assert.match(historyPart?.text ?? "", /Here is where I clicked/);
     assert.match(historyPart?.text ?? "", /\[image omitted\]/);
+    assert.ok(
+      !historyPart?.text?.includes(earlierImage),
+      "the image's base64 data must not leak into the recovered history text",
+    );
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("recovered history labels an image part distinctly from audio, video, document and non-image binary attachments", async () => {
+  const { CodexRunner } = await import("../server/codex-agent");
+  const { mkdtemp, rm } = await import("node:fs/promises");
+  const { tmpdir } = await import("node:os");
+  const { join } = await import("node:path");
+  const root = await mkdtemp(join(tmpdir(), "kite-history-kinds-test-"));
+  let prompt: unknown;
+  const runner = new CodexRunner({
+    statePath: root,
+    screenshots: undefined,
+    getConfig: () => ({
+      apiKey: "fixture-key",
+      model: "gpt-5.4",
+      workspace: "/test/one",
+      mcpUrl: "http://localhost/mcp",
+      mcpToken: "fixture-token",
+    }),
+    createClient: () => ({
+      startThread: () => ({
+        runStreamed: async (input) => {
+          prompt = input;
+          return {
+            events: (async function* () {
+              yield {
+                type: "thread.started" as const,
+                thread_id: "native-1",
+              };
+            })(),
+          };
+        },
+      }),
+      resumeThread: () => {
+        throw new Error("Unexpected resume");
+      },
+    }),
+  });
+  try {
+    // No saved thread mapping exists yet for "recovered-kinds", and there is
+    // more than one message, so the runner rebuilds history from `messages`
+    // instead of resuming a native thread.
+    const events = runner.run(
+      {
+        threadId: "recovered-kinds",
+        runId: "r",
+        messages: [
+          {
+            id: "earlier",
+            role: "user",
+            content: [
+              { type: "text", text: "Mixed attachments" },
+              {
+                type: "binary",
+                mimeType: "image/png",
+                data: Buffer.from(pngHeader(10, 10)).toString("base64"),
+              },
+              {
+                type: "image",
+                source: { type: "data", value: "abc", mimeType: "image/png" },
+              },
+              {
+                type: "audio",
+                source: { type: "data", value: "abc", mimeType: "audio/wav" },
+              },
+              {
+                type: "video",
+                source: { type: "data", value: "abc", mimeType: "video/mp4" },
+              },
+              {
+                type: "document",
+                source: {
+                  type: "data",
+                  value: "abc",
+                  mimeType: "application/pdf",
+                },
+              },
+              {
+                type: "binary",
+                mimeType: "application/pdf",
+                data: "abc",
+              },
+            ],
+          },
+          { id: "latest", role: "user", content: "What did you see?" },
+        ],
+        tools: [],
+        context: [],
+        state: {},
+        forwardedProps: {},
+      },
+      new AbortController().signal,
+    );
+    for await (const event of events)
+      assert.equal(event.type, "thread.started");
+    const parts = prompt as { type: string; text?: string }[];
+    const historyPart = parts.find((part) =>
+      part.text?.startsWith("Previous conversation"),
+    );
+    assert.ok(historyPart, "expected a previous-conversation history part");
+    const text = historyPart?.text ?? "";
+    assert.match(text, /Mixed attachments/);
+    // One "binary" image/png part and one "image" part: exactly two image
+    // labels.
+    assert.equal(text.match(/\[image omitted\]/g)?.length, 2);
+    // audio, video, document, and a non-image "binary" part: exactly four
+    // attachment labels.
+    assert.equal(text.match(/\[attachment omitted\]/g)?.length, 4);
   } finally {
     await rm(root, { recursive: true, force: true });
   }
@@ -699,7 +1065,7 @@ test("the real AG-UI middleware pipeline still carries the screenshot id on a bi
     id: "m",
     role: "user",
     content: userContent("hi", {
-      id: "shot_test",
+      id: "shot_deadbeef",
       label: "Test Display",
       width: 10,
       height: 10,
@@ -712,7 +1078,7 @@ test("the real AG-UI middleware pipeline still carries the screenshot id on a bi
     { type: string; id?: string }[] | undefined;
   const binaryPart = content?.find((part) => part.type === "binary");
   assert.equal(binaryPart?.type, "binary");
-  assert.equal(binaryPart?.id, "shot_test");
+  assert.equal(binaryPart?.id, "shot_deadbeef");
 });
 
 type NoteRow = {
@@ -724,10 +1090,22 @@ type NoteRow = {
   opening: string;
 };
 
-// Shared setup for the note-state matrix below: registers one fresh capture
-// (unless the row omits the registry entirely), attaches a single image
-// referencing it (or not), and returns the first prompt part's text -- the
-// note codex-agent.ts chose for that state.
+// An id that looks like a real registered id but never collides with it:
+// flipping the last hex digit guarantees a mismatch instead of relying on a
+// fixed id staying different from whatever the registry randomly generated.
+function flippedLastHexDigit(id: string) {
+  const last = id.at(-1) ?? "0";
+  const flipped = ((Number.parseInt(last, 16) + 1) % 16).toString(16);
+  return id.slice(0, -1) + flipped;
+}
+
+// Shared setup for the note-state matrix below. `registry.add` always runs,
+// so the capture always exists in the registry -- backdated when the row
+// sets `registryNow`, to land it outside the freshness window. `hasRegistry`
+// decides only whether the runner is given that registry at all, not
+// whether the capture is registered. Attaches a single image referencing the
+// capture (or not), and returns the first prompt part's text -- the note
+// codex-agent.ts chose for that state.
 async function firstNoteFor(row: NoteRow) {
   const { CodexRunner } = await import("../server/codex-agent");
   const { ScreenshotRegistry } = await import("../server/screenshots");
@@ -780,7 +1158,7 @@ async function firstNoteFor(row: NoteRow) {
     row.referenceId === "valid"
       ? shot.id
       : row.referenceId === "unknown"
-        ? "shot_ffffffff"
+        ? flippedLastHexDigit(shot.id)
         : undefined;
   try {
     const events = runner.run(
@@ -846,12 +1224,21 @@ test("screenshot notes cover every state, checked in the documented order", asyn
       opening: "Image 1 in this message doesn't match the screenshot it names",
     },
     {
+      name: "future capture time",
+      hasRegistry: true,
+      registryNow: () => Date.now() + 5 * 60 * 1000,
+      imageSize: { width: 1386, height: 900 },
+      referenceId: "valid",
+      opening:
+        "Image 1 in this message is a screenshot that is too old to point at, or whose capture time is unknown.",
+    },
+    {
       name: "unknown id",
       hasRegistry: true,
       imageSize: { width: 1386, height: 900 },
       referenceId: "unknown",
       opening:
-        "Image 1 in this message names a screenshot OpenMuse no longer has",
+        "Image 1 in this message names a screenshot OpenMuse doesn't have",
     },
     {
       name: "no id",
@@ -866,7 +1253,7 @@ test("screenshot notes cover every state, checked in the documented order", asyn
       imageSize: { width: 1386, height: 900 },
       referenceId: "valid",
       opening:
-        "Image 1 in this message names a screenshot OpenMuse no longer has",
+        "Image 1 in this message names a screenshot OpenMuse doesn't have",
     },
   ];
   for (const row of rows) {

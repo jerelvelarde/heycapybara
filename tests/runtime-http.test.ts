@@ -8,7 +8,7 @@ import { startRuntime } from "../server/runtime";
 test("real runtime discovers AG-UI agent only after loopback authentication", async () => {
   const store = new Store(await mkdtemp(join(tmpdir(), "kite-runtime-test-")));
   await store.load();
-  const runtime = await startRuntime(store);
+  const runtime = await startRuntime(store, { screenshots: undefined });
   try {
     const denied = await fetch(runtime.settings.runtimeUrl, {
       method: "POST",

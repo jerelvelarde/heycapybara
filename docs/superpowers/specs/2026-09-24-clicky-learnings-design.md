@@ -103,7 +103,7 @@ A 1512×982 display is captured at 1512×982, and a 2560×1440 display at 1920×
   - `(<x>, <y>) is outside the <width>×<height> screenshot.`
 - Image notes, in the order they are chosen:
   - `Image <n> in this message has no screen reference, so point_on_screen cannot target it.`
-  - `Image <n> in this message names a screenshot OpenMuse no longer has, so point_on_screen can't target it. Ask the user to attach a new one if you need to point.`
+  - `Image <n> in this message names a screenshot OpenMuse doesn't have, so point_on_screen can't target it. Ask the user to attach a new one if you need to point.`
   - `Image <n> in this message doesn't match the screenshot it names, so point_on_screen can't target it. Ask the user to attach a new screenshot if you need to point.`
   - `Image <n> in this message is a screenshot that is too old to point at, or whose capture time is unknown. Ask the user to attach a new one if you need to point.`
   - `Image <n> in this message is screenshot <id> of <display>, <width>×<height> pixels. To point at something in it, call point_on_screen with screenshotId "<id>", a short label, and x, y in that image's pixels (origin at the top-left, x rightward, y downward).`

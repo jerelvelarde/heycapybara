@@ -59,6 +59,8 @@ test("enforces the image limits copied from Codex 0.156.1", () => {
   assert.equal(fitsPromptBudget({ width: 2049, height: 100 }), false);
   assert.equal(fitsPromptBudget({ width: 2048, height: 1280 }), false);
   assert.equal(fitsPromptBudget({ width: 100, height: 2049 }), false);
+  // At the MAX_DIMENSION edge (2048) with a low enough patch count.
+  assert.equal(fitsPromptBudget({ width: 2048, height: 32 }), true);
 });
 
 test("captures keep the display's shape within the copied Codex limits", () => {
@@ -94,9 +96,10 @@ test("captures keep the display's shape within the copied Codex limits", () => {
 });
 
 test("captureSize is pinned for a 2048×1536 display", () => {
-  // Locks the exact shrink-loop result so a change to the budget or the
-  // loop's step size is caught here instead of surfacing as a subtly
-  // mis-sized capture. Recompute this if either constant changes on
+  // Locks the exact shrink-loop result so a change to any of the four values
+  // it depends on -- CAPTURE_MAX_DIMENSION, MAX_PATCHES, PATCH_SIZE, or the
+  // 0.98 per-iteration shrink step -- is caught here instead of surfacing as
+  // a subtly mis-sized capture. Recompute this if one of them changes on
   // purpose.
   assert.deepEqual(captureSize({ width: 2048, height: 1536 }), {
     width: 1807,
@@ -260,8 +263,16 @@ test("the registry validates screenshot dimensions before storing them", () => {
     { ...validInput, width: 0 },
     { ...validInput, width: -5 },
     { ...validInput, width: Number.NaN },
+    { ...validInput, height: 1.5 },
+    { ...validInput, height: 0 },
     { ...validInput, width: 99999, height: 99999 },
     { ...validInput, bounds: { ...validInput.bounds, width: 0 } },
+    { ...validInput, bounds: { ...validInput.bounds, height: 0 } },
+    { ...validInput, bounds: { ...validInput.bounds, x: Number.NaN } },
+    {
+      ...validInput,
+      bounds: { ...validInput.bounds, y: Number.POSITIVE_INFINITY },
+    },
   ])
     assert.throws(() => registry.add(bad), invalidReason, JSON.stringify(bad));
   assert.ok(registry.add(validInput));
@@ -450,22 +461,35 @@ test("resolvePoint and screenPoint name each refusal cause precisely", () => {
     {
       name: "display moved on x",
       current: { ...display, x: display.x + 100 },
-      expect: /changed position or resolution/,
+      expect:
+        /Built-in Retina Display changed position or resolution since the screenshot\. Ask the user to attach a new one\.$/,
     },
     {
       name: "display moved on y",
       current: { ...display, y: display.y - 50 },
-      expect: /changed position or resolution/,
+      expect:
+        /Built-in Retina Display changed position or resolution since the screenshot\. Ask the user to attach a new one\.$/,
     },
     {
       name: "resized height",
       current: { ...display, height: display.height + 1 },
-      expect: /changed position or resolution/,
+      expect:
+        /Built-in Retina Display changed position or resolution since the screenshot\. Ask the user to attach a new one\.$/,
     },
     {
       name: "point outside",
       point: { x: -1, y: 449 },
       expect: /\(-1, 449\) is outside the 1386×900 screenshot\.$/,
+    },
+    {
+      // Freshness is checked before the display's presence, so a capture
+      // that is both stale and missing its display reports staleness, not
+      // "no longer connected".
+      name: "stale and display gone (staleness is checked first)",
+      now: now + 10 * 60 * 1000 + 1,
+      current: undefined,
+      expect:
+        /That screenshot is more than 10 minutes old\. Ask the user to attach a new one\.$/,
     },
   ];
 
@@ -477,7 +501,7 @@ test("resolvePoint and screenPoint name each refusal cause precisely", () => {
     if (!state.resolvePointOnly) {
       const run = () => screenPoint(shot, point, current, at);
       if (state.expect === "success")
-        assert.equal(typeof run().x, "number", state.name);
+        assert.equal(Number.isFinite(run().x), true, state.name);
       else assert.throws(run, state.expect, state.name);
     }
 
@@ -490,7 +514,7 @@ test("resolvePoint and screenPoint name each refusal cause precisely", () => {
         at,
       );
     if (state.expect === "success")
-      assert.equal(typeof run().point.x, "number", state.name);
+      assert.equal(Number.isFinite(run().point.x), true, state.name);
     else assert.throws(run, state.expect, state.name);
   }
 });

@@ -21,8 +21,12 @@ export async function startRuntime(
     statePath?: string;
     binaryPath?: string;
     action?: (action: DesktopAction) => Promise<void>;
-    screenshots?: ScreenshotLookup;
-  } = {},
+    // Required (though its value may be `undefined`) so a call site that
+    // drops this wiring is a typecheck error here, not just where
+    // CodexRunner is constructed below: see CodexRunnerOptions in
+    // server/codex-agent.ts, which mirrors this same shape.
+    screenshots: ScreenshotLookup | undefined;
+  },
 ) {
   const config = runtimeConfig(process.env);
   const token = randomBytes(32).toString("hex");

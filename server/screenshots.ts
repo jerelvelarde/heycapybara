@@ -54,9 +54,10 @@ export function captureSize(display: Size): Size {
     1,
     CAPTURE_MAX_DIMENSION / Math.max(display.width, display.height),
   );
-  // Shrinks 2% at a time until the image fits the prompt budget, landing
-  // slightly under the largest size within the 1920 px cap that Codex passes
-  // through unchanged.
+  // Shrinks 2% at a time until the image fits the prompt budget. The result
+  // lands within about 2% of the largest size that fits within the 1920 px
+  // cap Codex passes through unchanged, and exactly at it when the first
+  // scale already fits.
   for (;;) {
     const size = {
       width: Math.max(1, Math.floor(display.width * scale)),
@@ -96,7 +97,9 @@ export type Thumbnail = {
 
 // Electron can return a thumbnail larger than requested, for example at 2x.
 // Resizing to the target keeps the image at captureSize's target: one pixel
-// per point when that fits the budget, smaller otherwise.
+// per point when that fits the budget within the 1920 px cap, smaller
+// otherwise. For example, a 2048×1152-point display fits the prompt budget
+// on its own but is still captured at 1920×1080 because of that cap.
 export function fitThumbnail(thumbnail: Thumbnail, target: Size) {
   let png = thumbnail.toPNG();
   if (exceeds(pngSize(png), target)) png = thumbnail.resize(target).toPNG();
@@ -246,7 +249,7 @@ export function unreferencedImageNote(imageNumber: number) {
 }
 
 export function unknownImageNote(imageNumber: number) {
-  return `Image ${imageNumber} in this message names a screenshot OpenMuse no longer has, so point_on_screen can't target it. Ask the user to attach a new one if you need to point.`;
+  return `Image ${imageNumber} in this message names a screenshot OpenMuse doesn't have, so point_on_screen can't target it. Ask the user to attach a new one if you need to point.`;
 }
 
 export function mismatchedImageNote(imageNumber: number) {
