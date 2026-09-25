@@ -937,9 +937,9 @@ git commit -m "docs: record pointer contract verification"
 
 ## Changes after review
 
-Review found five things the code blocks above did not cover. Each was fixed in its own commit:
+Review found gaps that the code blocks above don't cover. Each fix below cites the commit that made it:
 
-- `0aae2a0` — `screenPoint` maps `Math.floor(point.x) + 0.5` (and the same for y), so a fractional point in the last half-pixel stays inside the display. `captureSize` also rejects non-finite sizes instead of looping forever.
-- `7dc5b1c`, `0525dc8` — `approvedAction` calls `runHelper(() => exec(helper, args))` from `electron/helper-result.ts`. It reports the helper's own JSON error, or a cause built from the exit code or signal, and never Node's `Command failed: <path>` message.
-- `f494a92` — both `label` schemas also require `.regex(/^[^\p{C}]+$/u, "Use a short single-line label")`, so control and format characters cannot reshape the approval prompt.
-- `8b4fdbf` — the screenshot handler resizes whenever the measured PNG `exceeds` the target, for example a 2x thumbnail, not only when it is over the Codex budget.
+- `0aae2a0`: `screenPoint` maps `Math.floor(point.x) + 0.5` (and the same for y), so a fractional point in the last half-pixel stays inside the display. The same commit makes `captureSize` reject non-finite sizes instead of looping forever.
+- `7dc5b1c`, `0525dc8`, `5eb8d54`: `approvedAction` calls `runHelper(() => exec(helper, args))` from `electron/helper-result.ts`. It reports the helper's own JSON error, or a cause built from the exit code or signal. It never reports Node's `Command failed: <path>` message, and it skips unreadable output lines so they can't mask the exit reason.
+- `f494a92`, `c0288e2`: both `label` schemas refine the trimmed label to reject control, format, private-use and unassigned characters and line or paragraph separators (`/(?![\u200c\u200d])[\p{C}\p{Zl}\p{Zp}]/u`), while allowing ZWNJ and ZWJ. This means the approval prompt always shows one line. A refine is used instead of `.regex()` because the MCP tool schema would otherwise publish a pattern whose meaning changes without the `u` flag.
+- `8b4fdbf`: the screenshot handler resizes whenever the measured PNG `exceeds` the target, for example a 2x thumbnail, and not only when it is over the Codex budget.
