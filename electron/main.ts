@@ -77,6 +77,7 @@ const helper = app.isPackaged
   ? join(process.resourcesPath, "kite-recorder")
   : join(root, "native/bin/kite-recorder");
 const exec = promisify(execFile);
+const helperTimeout = { timeout: 15_000 };
 const screenshots = new ScreenshotRegistry();
 let workspace: BrowserWindow;
 let buddy: BrowserWindow;
@@ -132,7 +133,9 @@ function positionNotch() {
   notch.setBounds(fittedNotchBounds());
 }
 async function refreshNotchInset() {
-  const { stdout } = await exec(helper, ["--notch-inset"]);
+  const stdout = await runHelper(() =>
+    exec(helper, ["--notch-inset"], helperTimeout),
+  );
   notchTopInset = z
     .object({ topInset: z.number().nonnegative() })
     .parse(JSON.parse(stdout)).topInset;
@@ -253,11 +256,16 @@ async function approvedAction(input: unknown) {
     cancelId: 0,
   });
   if (result.response !== 1) throw new Error("User declined action");
-  await runHelper(() => exec(helper, args));
+  await runHelper(
+    () => exec(helper, args, helperTimeout),
+    action.type === "open-app" ? "Application opened" : "Point displayed",
+  );
 }
 
 async function permissions(): Promise<Permissions> {
-  const { stdout } = await exec(helper, ["--permissions"]);
+  const stdout = await runHelper(() =>
+    exec(helper, ["--permissions"], helperTimeout),
+  );
   return z
     .object({ accessibility: z.boolean(), screenCapture: z.boolean() })
     .parse(JSON.parse(stdout));
@@ -744,11 +752,17 @@ app
     });
     handle("permissions", async (kind) => {
       z.enum(["accessibility", "screenCapture"]).parse(kind);
-      await exec(helper, [
-        kind === "accessibility"
-          ? "--request-accessibility"
-          : "--request-screen",
-      ]);
+      await runHelper(() =>
+        exec(
+          helper,
+          [
+            kind === "accessibility"
+              ? "--request-accessibility"
+              : "--request-screen",
+          ],
+          helperTimeout,
+        ),
+      );
       return permissions();
     });
     handle("screenshot", async (): Promise<ScreenshotAttachment> => {
