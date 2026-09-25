@@ -20,6 +20,7 @@ import {
 } from "@openai/codex-sdk";
 import { Observable } from "rxjs";
 import { codexEvents } from "./codex-events";
+import type { RunRegistry } from "./run-registry";
 import {
   describeScreenshot,
   isFresh,
@@ -48,6 +49,10 @@ export type CodexRunnerOptions = {
   // `run()`. startRuntime's own options (server/runtime.ts) mirror this
   // same required shape.
   screenshots: ScreenshotLookup;
+  // Required, like `screenshots`: each run takes its MCP token from here
+  // (server/run-registry.ts), and the runtime's /mcp route accepts only
+  // tokens from this same registry.
+  runs: RunRegistry;
   createClient?: (options: CodexOptions) => {
     startThread(options: ThreadOptions): Pick<Thread, "runStreamed">;
     resumeThread(
@@ -60,7 +65,6 @@ export type CodexRunnerOptions = {
     model: string;
     workspace: string;
     mcpUrl: string;
-    mcpToken: string;
   };
 };
 export type StreamRunner = (
@@ -116,6 +120,9 @@ export class CodexRunner {
     outerSignal.addEventListener("abort", abort, { once: true });
     if (outerSignal.aborted) controller.abort();
     this.active.set(input.threadId, controller);
+    // Ends with this run: at once on Stop (the controller aborts), and in
+    // `finally` below however else the run ends.
+    const session = this.options.runs.start(controller.signal);
     let temp: string | undefined;
     try {
       const home = join(this.options.statePath, "codex");
@@ -147,7 +154,7 @@ export class CodexRunner {
         );
       const shellHome = join(this.options.statePath, "shell-home");
       await mkdir(shellHome, { recursive: true, mode: 0o700 });
-      const env = codexEnvironment(home, shellHome, config.mcpToken);
+      const env = codexEnvironment(home, shellHome, session.token);
       const codex = (
         this.options.createClient ||
         ((options: CodexOptions) => new Codex(options))
@@ -329,6 +336,7 @@ export class CodexRunner {
         yield event;
       }
     } finally {
+      session.end();
       outerSignal.removeEventListener("abort", abort);
       this.active.delete(input.threadId);
       // A failed cleanup (for example EACCES) must never replace this run's

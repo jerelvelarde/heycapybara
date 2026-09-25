@@ -455,3 +455,92 @@ test("agent/stop ends a run and kills its Codex process, with Intelligence off",
     await rm(root, { recursive: true, force: true });
   }
 });
+
+// The kite MCP route takes only the token of a run that is still going
+// (server/run-registry.ts). The fake CLI's hang mode records the token it
+// was started with, so this calls the real /mcp route with it while the run
+// hangs, Stops the run, and tries the same token again.
+test("a run's MCP token works while the run is going and is refused once Stop ends it", async () => {
+  const root = await mkdtemp(join(tmpdir(), "kite-runtime-e2e-token-"));
+  const restoreEnvironment = applyEnvironment();
+  const network = refuseNetwork();
+  try {
+    const { startRuntime } = await import("../server/runtime");
+    const store = new Store(join(root, "store"));
+    await store.load();
+    const binaryPath = join(root, "codex.mjs");
+    await copyFile(FAKE_CODEX, binaryPath);
+    await chmod(binaryPath, 0o755);
+    const statePath = join(root, "agent");
+    const runtime = await startRuntime(store, {
+      statePath,
+      binaryPath,
+      screenshots: new ScreenshotRegistry(),
+    });
+    try {
+      const threadId = "e2e-token";
+      const runPromise = postRun(runtime, threadId, HANG_TRIGGER);
+      void runPromise.catch(() => {});
+      const recordPath = join(statePath, "codex", "fake-codex-calls.json");
+      let pid: number | undefined;
+      let mcpToken: string | undefined;
+      await waitUntil(
+        async () => {
+          try {
+            const calls = JSON.parse(await readFile(recordPath, "utf8")) as {
+              pid?: number;
+              mcpToken?: string;
+            }[];
+            const hung = calls.find((call) => typeof call.pid === "number");
+            pid = hung?.pid;
+            mcpToken = hung?.mcpToken;
+          } catch {
+            pid = undefined;
+          }
+          return pid !== undefined && !!mcpToken;
+        },
+        { timeoutMs: 10_000 },
+      );
+      assert.ok(pid && mcpToken, "expected the hung fake CLI's pid and token");
+      const hungPid: number = pid;
+      const token: string = mcpToken;
+      const listSkills = () =>
+        fetch(new URL("/mcp", runtime.settings.runtimeUrl), {
+          method: "POST",
+          headers: {
+            Authorization: "Bearer " + token,
+            "Content-Type": "application/json",
+            Accept: "application/json, text/event-stream",
+          },
+          body: JSON.stringify({
+            jsonrpc: "2.0",
+            id: 1,
+            method: "tools/call",
+            params: { name: "list_local_skills", arguments: {} },
+          }),
+          signal: AbortSignal.timeout(10_000),
+        });
+      const live = await listSkills();
+      assert.equal(live.status, 200);
+      assert.equal((await live.json()).result.content[0].text, "[]");
+
+      const stop = await postStop(runtime, threadId, `${threadId}-run`);
+      assert.equal(stop.status, 200, JSON.stringify(stop.body));
+      await waitUntil(() => !isAlive(hungPid), { timeoutMs: 2_000 });
+      await runPromise;
+
+      assert.equal((await listSkills()).status, 401);
+    } finally {
+      await closeRuntime(runtime);
+    }
+    assert.deepEqual(
+      network.refused,
+      [],
+      "the run tried to connect to something other than the runtime",
+    );
+  } finally {
+    network.restore();
+    restoreEnvironment();
+    await rm(root, { recursive: true, force: true });
+  }
+});

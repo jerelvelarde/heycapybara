@@ -1,6 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { codexEvents } from "../server/codex-events";
+import { RunRegistry, type AgentRun } from "../server/run-registry";
 import { pngHeader } from "./png-fixture";
 import { otherId } from "./test-ids";
 
@@ -286,6 +287,7 @@ test("a Stop that lands during prompt preparation never starts the native run", 
   const root = await mkdtemp(join(tmpdir(), "kite-prepare-abort-test-"));
   let runStreamedCalls = 0;
   const runner = new CodexRunner({
+    runs: new RunRegistry(),
     statePath: root,
     screenshots: new ScreenshotRegistry(),
     getConfig: () => ({
@@ -293,7 +295,6 @@ test("a Stop that lands during prompt preparation never starts the native run", 
       model: "gpt-5.4",
       workspace: "/test/one",
       mcpUrl: "http://localhost/mcp",
-      mcpToken: "fixture-token",
     }),
     createClient: () => ({
       startThread: () => ({
@@ -354,6 +355,7 @@ test("conversations resume their own native thread and reject workspace changes"
     }),
   });
   const runner = new CodexRunner({
+    runs: new RunRegistry(),
     statePath: root,
     screenshots: new ScreenshotRegistry(),
     getConfig: () => ({
@@ -361,7 +363,6 @@ test("conversations resume their own native thread and reject workspace changes"
       model: "gpt-5.4",
       workspace,
       mcpUrl: "http://localhost/mcp",
-      mcpToken: "fixture-token",
     }),
     createClient: (options) => {
       assert.equal(options.config?.allow_login_shell, false);
@@ -442,6 +443,7 @@ test("attached screenshots are introduced with their id, display and pixel size"
   });
   let prompt: unknown;
   const runner = new CodexRunner({
+    runs: new RunRegistry(),
     statePath: root,
     screenshots,
     getConfig: () => ({
@@ -449,7 +451,6 @@ test("attached screenshots are introduced with their id, display and pixel size"
       model: "gpt-5.4",
       workspace: "/test/one",
       mcpUrl: "http://localhost/mcp",
-      mcpToken: "fixture-token",
     }),
     createClient: () => ({
       startThread: () => ({
@@ -536,6 +537,7 @@ test("a screenshot whose attached image doesn't match the registered capture siz
   });
   let prompt: unknown;
   const runner = new CodexRunner({
+    runs: new RunRegistry(),
     statePath: root,
     screenshots,
     getConfig: () => ({
@@ -543,7 +545,6 @@ test("a screenshot whose attached image doesn't match the registered capture siz
       model: "gpt-5.4",
       workspace: "/test/one",
       mcpUrl: "http://localhost/mcp",
-      mcpToken: "fixture-token",
     }),
     createClient: () => ({
       startThread: () => ({
@@ -620,6 +621,7 @@ test("a screenshot capture older than 10 minutes is described as too stale to po
   });
   let prompt: unknown;
   const runner = new CodexRunner({
+    runs: new RunRegistry(),
     statePath: root,
     screenshots,
     getConfig: () => ({
@@ -627,7 +629,6 @@ test("a screenshot capture older than 10 minutes is described as too stale to po
       model: "gpt-5.4",
       workspace: "/test/one",
       mcpUrl: "http://localhost/mcp",
-      mcpToken: "fixture-token",
     }),
     createClient: () => ({
       startThread: () => ({
@@ -692,6 +693,7 @@ test("a binary attachment that isn't actually a PNG is rejected even when labell
   const { join } = await import("node:path");
   const root = await mkdtemp(join(tmpdir(), "kite-prompt-badpng-test-"));
   const runner = new CodexRunner({
+    runs: new RunRegistry(),
     statePath: root,
     screenshots: new ScreenshotRegistry(),
     getConfig: () => ({
@@ -699,7 +701,6 @@ test("a binary attachment that isn't actually a PNG is rejected even when labell
       model: "gpt-5.4",
       workspace: "/test/one",
       mcpUrl: "http://localhost/mcp",
-      mcpToken: "fixture-token",
     }),
     createClient: () => ({
       startThread: () => ({
@@ -750,6 +751,7 @@ test("a binary part whose MIME type isn't image/png is rejected before decoding"
   const { join } = await import("node:path");
   const root = await mkdtemp(join(tmpdir(), "kite-prompt-mimetype-test-"));
   const runner = new CodexRunner({
+    runs: new RunRegistry(),
     statePath: root,
     screenshots: new ScreenshotRegistry(),
     getConfig: () => ({
@@ -757,7 +759,6 @@ test("a binary part whose MIME type isn't image/png is rejected before decoding"
       model: "gpt-5.4",
       workspace: "/test/one",
       mcpUrl: "http://localhost/mcp",
-      mcpToken: "fixture-token",
     }),
     createClient: () => ({
       startThread: () => ({
@@ -808,6 +809,7 @@ test("a binary image part with no data is rejected", async () => {
   const { join } = await import("node:path");
   const root = await mkdtemp(join(tmpdir(), "kite-prompt-nodata-test-"));
   const runner = new CodexRunner({
+    runs: new RunRegistry(),
     statePath: root,
     screenshots: new ScreenshotRegistry(),
     getConfig: () => ({
@@ -815,7 +817,6 @@ test("a binary image part with no data is rejected", async () => {
       model: "gpt-5.4",
       workspace: "/test/one",
       mcpUrl: "http://localhost/mcp",
-      mcpToken: "fixture-token",
     }),
     createClient: () => ({
       startThread: () => ({
@@ -864,6 +865,7 @@ test("an image's data length boundary: 16,000,000 characters passes, 16,000,001 
   const { ScreenshotRegistry } = await import("../server/screenshots");
   const makeRunner = () =>
     new CodexRunner({
+      runs: new RunRegistry(),
       statePath: root,
       screenshots: new ScreenshotRegistry(),
       getConfig: () => ({
@@ -871,7 +873,6 @@ test("an image's data length boundary: 16,000,000 characters passes, 16,000,001 
         model: "gpt-5.4",
         workspace: "/test/one",
         mcpUrl: "http://localhost/mcp",
-        mcpToken: "fixture-token",
       }),
       createClient: () => ({
         startThread: () => ({
@@ -941,6 +942,7 @@ test("a content part that is neither text nor binary is rejected as an unsupport
   const { join } = await import("node:path");
   const root = await mkdtemp(join(tmpdir(), "kite-prompt-unsupported-test-"));
   const runner = new CodexRunner({
+    runs: new RunRegistry(),
     statePath: root,
     screenshots: new ScreenshotRegistry(),
     getConfig: () => ({
@@ -948,7 +950,6 @@ test("a content part that is neither text nor binary is rejected as an unsupport
       model: "gpt-5.4",
       workspace: "/test/one",
       mcpUrl: "http://localhost/mcp",
-      mcpToken: "fixture-token",
     }),
     createClient: () => ({
       startThread: () => ({
@@ -1010,6 +1011,7 @@ test("a recovered conversation keeps the text a user typed alongside an earlier 
   const { ScreenshotRegistry } = await import("../server/screenshots");
   let prompt: unknown;
   const runner = new CodexRunner({
+    runs: new RunRegistry(),
     statePath: root,
     screenshots: new ScreenshotRegistry(),
     getConfig: () => ({
@@ -1017,7 +1019,6 @@ test("a recovered conversation keeps the text a user typed alongside an earlier 
       model: "gpt-5.4",
       workspace: "/test/one",
       mcpUrl: "http://localhost/mcp",
-      mcpToken: "fixture-token",
     }),
     createClient: () => ({
       startThread: () => ({
@@ -1092,6 +1093,7 @@ test("recovered history labels an image part distinctly from audio, video, docum
   const { ScreenshotRegistry } = await import("../server/screenshots");
   let prompt: unknown;
   const runner = new CodexRunner({
+    runs: new RunRegistry(),
     statePath: root,
     screenshots: new ScreenshotRegistry(),
     getConfig: () => ({
@@ -1099,7 +1101,6 @@ test("recovered history labels an image part distinctly from audio, video, docum
       model: "gpt-5.4",
       workspace: "/test/one",
       mcpUrl: "http://localhost/mcp",
-      mcpToken: "fixture-token",
     }),
     createClient: () => ({
       startThread: () => ({
@@ -1233,6 +1234,7 @@ test("a RunAgentInput built with userContent and validated by RunAgentInputSchem
   });
   let prompt: unknown;
   const runner = new CodexRunner({
+    runs: new RunRegistry(),
     statePath: root,
     screenshots,
     getConfig: () => ({
@@ -1240,7 +1242,6 @@ test("a RunAgentInput built with userContent and validated by RunAgentInputSchem
       model: "gpt-5.4",
       workspace: "/test/one",
       mcpUrl: "http://localhost/mcp",
-      mcpToken: "fixture-token",
     }),
     createClient: () => ({
       startThread: () => ({
@@ -1345,6 +1346,7 @@ async function firstNoteFor(row: NoteRow) {
   });
   let prompt: unknown;
   const runner = new CodexRunner({
+    runs: new RunRegistry(),
     statePath: root,
     screenshots: row.runnerHasCapture ? registry : new ScreenshotRegistry(),
     getConfig: () => ({
@@ -1352,7 +1354,6 @@ async function firstNoteFor(row: NoteRow) {
       model: "gpt-5.4",
       workspace: "/test/one",
       mcpUrl: "http://localhost/mcp",
-      mcpToken: "fixture-token",
     }),
     createClient: () => ({
       startThread: () => ({
@@ -1501,6 +1502,7 @@ test("temp screenshot directories are removed after a successful run and after a
   const root = await mkdtemp(join(tmpdir(), "kite-prompt-tempcleanup-test-"));
   const makeRunner = () =>
     new CodexRunner({
+      runs: new RunRegistry(),
       statePath: root,
       screenshots: new ScreenshotRegistry(),
       getConfig: () => ({
@@ -1508,7 +1510,6 @@ test("temp screenshot directories are removed after a successful run and after a
         model: "gpt-5.4",
         workspace: "/test/one",
         mcpUrl: "http://localhost/mcp",
-        mcpToken: "fixture-token",
       }),
       createClient: () => ({
         startThread: () => ({
@@ -1619,6 +1620,7 @@ test("a failed temp cleanup never replaces the run's real outcome", async () => 
     // (`root`, this runner's statePath) blocks the `finally` block's `rm`
     // cleanup below without disturbing anything this run already wrote.
     const successRunner = new CodexRunner({
+      runs: new RunRegistry(),
       statePath: root,
       screenshots: new ScreenshotRegistry(),
       getConfig: () => ({
@@ -1626,7 +1628,6 @@ test("a failed temp cleanup never replaces the run's real outcome", async () => 
         model: "gpt-5.4",
         workspace: "/test/one",
         mcpUrl: "http://localhost/mcp",
-        mcpToken: "fixture-token",
       }),
       createClient: () => ({
         startThread: () => ({
@@ -1667,6 +1668,7 @@ test("a failed temp cleanup never replaces the run's real outcome", async () => 
     // The same failed cleanup must also leave a real, non-abort error
     // exactly as it was, not replace it with an EACCES from the `rm`.
     const failureRunner = new CodexRunner({
+      runs: new RunRegistry(),
       statePath: root,
       screenshots: new ScreenshotRegistry(),
       getConfig: () => ({
@@ -1674,7 +1676,6 @@ test("a failed temp cleanup never replaces the run's real outcome", async () => 
         model: "gpt-5.4",
         workspace: "/test/one",
         mcpUrl: "http://localhost/mcp",
-        mcpToken: "fixture-token",
       }),
       createClient: () => ({
         startThread: () => ({
@@ -1715,6 +1716,148 @@ test("a failed temp cleanup never replaces the run's real outcome", async () => 
     // Restore before this test's own `rm(root, ...)` below, which needs
     // `root` writable to remove what is still inside it.
     await chmod(root, 0o700);
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+const mcpCall = (token: string) =>
+  new Request("http://127.0.0.1/mcp", {
+    method: "POST",
+    headers: { Authorization: "Bearer " + token },
+  });
+
+const runInput = (threadId: string) => ({
+  threadId,
+  runId: "r",
+  messages: [{ id: "m", role: "user" as const, content: "hello" }],
+  tools: [],
+  context: [],
+  state: {},
+  forwardedProps: {},
+});
+
+test("each run gets its own MCP token, which stops working when the run ends", async () => {
+  const { CodexRunner } = await import("../server/codex-agent");
+  const { ScreenshotRegistry } = await import("../server/screenshots");
+  const { mkdtemp, rm } = await import("node:fs/promises");
+  const { tmpdir } = await import("node:os");
+  const { join } = await import("node:path");
+  const root = await mkdtemp(join(tmpdir(), "kite-run-token-test-"));
+  const runs = new RunRegistry();
+  const tokens: string[] = [];
+  const during: { run?: AgentRun; aborted?: boolean }[] = [];
+  const runner = new CodexRunner({
+    runs,
+    statePath: root,
+    screenshots: new ScreenshotRegistry(),
+    getConfig: () => ({
+      apiKey: "fixture-key",
+      model: "gpt-5.4",
+      workspace: "/test/one",
+      mcpUrl: "http://localhost/mcp",
+    }),
+    createClient: (options) => {
+      const token = options.env?.KITE_MCP_TOKEN;
+      assert.ok(token, "Codex must be given its run's MCP token");
+      tokens.push(token);
+      return {
+        startThread: () => ({
+          runStreamed: async () => ({
+            events: (async function* () {
+              const run = runs.authorize(mcpCall(token));
+              during.push({ run, aborted: run?.signal.aborted });
+              yield {
+                type: "thread.started" as const,
+                thread_id: "native-" + tokens.length,
+              };
+            })(),
+          }),
+        }),
+        resumeThread: () => {
+          throw new Error("Unexpected resume");
+        },
+      };
+    },
+  });
+  try {
+    for (const threadId of ["one", "two"])
+      for await (const event of runner.run(
+        runInput(threadId),
+        new AbortController().signal,
+      ))
+        assert.equal(event.type, "thread.started");
+    assert.equal(tokens.length, 2);
+    assert.notEqual(tokens[0], tokens[1]);
+    const [first, second] = during.map((entry) => entry.run);
+    assert.ok(first && second, "each run's token must authorize while it runs");
+    assert.notEqual(first.id, second.id);
+    assert.deepEqual(
+      during.map((entry) => entry.aborted),
+      [false, false],
+    );
+    assert.equal(first.signal.aborted, true);
+    for (const token of tokens)
+      assert.equal(runs.authorize(mcpCall(token)), undefined);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("Stop ends a run's MCP token at once, before Codex has exited", async () => {
+  const { CodexRunner } = await import("../server/codex-agent");
+  const { ScreenshotRegistry } = await import("../server/screenshots");
+  const { mkdtemp, rm } = await import("node:fs/promises");
+  const { tmpdir } = await import("node:os");
+  const { join } = await import("node:path");
+  const root = await mkdtemp(join(tmpdir(), "kite-run-token-stop-test-"));
+  const runs = new RunRegistry();
+  let token: string | undefined;
+  let release!: () => void;
+  const released = new Promise<void>((resolve) => (release = resolve));
+  const runner = new CodexRunner({
+    runs,
+    statePath: root,
+    screenshots: new ScreenshotRegistry(),
+    getConfig: () => ({
+      apiKey: "fixture-key",
+      model: "gpt-5.4",
+      workspace: "/test/one",
+      mcpUrl: "http://localhost/mcp",
+    }),
+    createClient: (options) => {
+      token = options.env?.KITE_MCP_TOKEN;
+      return {
+        startThread: () => ({
+          runStreamed: async () => ({
+            events: (async function* () {
+              yield { type: "thread.started" as const, thread_id: "native-1" };
+              // Stands in for Codex still running after Stop: the runner
+              // only notices the abort at its next event.
+              await released;
+              yield { type: "turn.started" as const };
+            })(),
+          }),
+        }),
+        resumeThread: () => {
+          throw new Error("Unexpected resume");
+        },
+      };
+    },
+  });
+  const controller = new AbortController();
+  const iterator = runner.run(runInput("stop"), controller.signal);
+  try {
+    assert.equal((await iterator.next()).value?.type, "thread.started");
+    assert.ok(token);
+    const run = runs.authorize(mcpCall(token));
+    assert.ok(run);
+    controller.abort();
+    assert.equal(run.signal.aborted, true);
+    assert.equal(runs.authorize(mcpCall(token)), undefined);
+    release();
+    await assert.rejects(iterator.next(), /Run stopped/);
+  } finally {
+    release();
     await rm(root, { recursive: true, force: true });
   }
 });

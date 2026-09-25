@@ -14,6 +14,7 @@ import type { Store } from "../electron/store";
 import type { ScreenshotLookup } from "./screenshots";
 import { runtimeConfig } from "./config";
 import { authorized } from "./auth";
+import { RunRegistry } from "./run-registry";
 
 export async function startRuntime(
   store: Store,
@@ -54,17 +55,17 @@ export async function startRuntime(
     await mkdir(workspace, { recursive: true, mode: 0o700 });
   }
   let mcpUrl = "";
-  const mcpToken = randomBytes(32).toString("hex");
+  const runs = new RunRegistry();
   const runner = new CodexRunner({
     statePath,
     binaryPath: options.binaryPath,
     screenshots: options.screenshots,
+    runs,
     getConfig: () => ({
       apiKey: sessionKey,
       model: config.model,
       workspace,
       mcpUrl,
-      mcpToken,
     }),
   });
   const agent = new KiteCodexAgent((input, signal) =>
@@ -96,7 +97,9 @@ export async function startRuntime(
     port: 0,
     fetch: async (request) => {
       if (new URL(request.url).pathname === "/mcp") {
-        if (!authorized(request, mcpToken))
+        // Only a token held by a run that is still going passes
+        // (server/run-registry.ts).
+        if (!runs.authorize(request))
           return new Response("Unauthorized", { status: 401 });
         return toolHandler(request);
       }
