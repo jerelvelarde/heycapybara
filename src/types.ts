@@ -51,9 +51,27 @@ export type Snapshot = {
   settings: Settings;
   trayMode: CompanionTrayMode;
 };
+export type ScreenshotAttachment = {
+  id: string;
+  label: string;
+  // Pixel dimensions of the PNG in dataUrl, not points.
+  width: number;
+  height: number;
+  dataUrl: string;
+};
 export type DesktopAction =
   | { type: "open-app"; bundleId: string }
-  | { type: "point"; x: number; y: number };
+  | {
+      type: "point";
+      screenshotId: string;
+      // Pixels within that screenshot (origin top-left), not global screen
+      // points. The main process resolves the pixel against the
+      // screenshot's registered display and converts it to global screen
+      // points before it reaches the native pointer helper.
+      x: number;
+      y: number;
+      label: string;
+    };
 export interface KiteAPI {
   state(): Promise<Snapshot>;
   setCompanion(companion: Companion): Promise<void>;
@@ -84,8 +102,7 @@ export interface KiteAPI {
   deleteSkill(id: string): Promise<void>;
   exportSkill(id: string): Promise<boolean>;
   permissions(kind: "accessibility" | "screenCapture"): Promise<Permissions>;
-  screenshot(): Promise<string>;
-  action(action: DesktopAction): Promise<void>;
+  screenshot(): Promise<ScreenshotAttachment>;
   buddyDrag(
     action: "begin" | "move" | "end",
     point: { x: number; y: number },

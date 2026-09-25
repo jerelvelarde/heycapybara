@@ -11,6 +11,7 @@ import { CodexRunner, KiteCodexAgent } from "./codex-agent";
 import { createToolHandler } from "./tools";
 import type { DesktopAction } from "../src/types";
 import type { Store } from "../electron/store";
+import type { ScreenshotLookup } from "./screenshots";
 import { runtimeConfig } from "./config";
 import { authorized } from "./auth";
 
@@ -19,8 +20,11 @@ export async function startRuntime(
   options: {
     statePath?: string;
     binaryPath?: string;
-    action?: (action: DesktopAction) => Promise<void>;
-  } = {},
+    action?: (action: DesktopAction, signal: AbortSignal) => Promise<void>;
+    // Required: see CodexRunnerOptions in server/codex-agent.ts for why a
+    // real registry must always be supplied here.
+    screenshots: ScreenshotLookup;
+  },
 ) {
   const config = runtimeConfig(process.env);
   const token = randomBytes(32).toString("hex");
@@ -54,6 +58,7 @@ export async function startRuntime(
   const runner = new CodexRunner({
     statePath,
     binaryPath: options.binaryPath,
+    screenshots: options.screenshots,
     getConfig: () => ({
       apiKey: sessionKey,
       model: config.model,

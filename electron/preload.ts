@@ -30,7 +30,6 @@ const api: KiteAPI = {
   exportSkill: (id) => ipcRenderer.invoke("kite:exportSkill", id),
   permissions: (kind) => ipcRenderer.invoke("kite:permissions", kind),
   screenshot: () => ipcRenderer.invoke("kite:screenshot"),
-  action: (action) => ipcRenderer.invoke("kite:action", action),
   buddyDrag: (action, point) =>
     ipcRenderer.invoke("kite:buddyDrag", action, point),
   toggleCompanionChat: () => ipcRenderer.invoke("kite:toggleCompanionChat"),

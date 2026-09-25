@@ -49,9 +49,31 @@ import {
   loadBuddyPosition,
   saveBuddyPosition,
 } from "./buddy-position";
+import { runHelper, helperStatus } from "./helper-result";
+import { performPointAction } from "./point-action";
+import {
+  askApproval,
+  approvalHost,
+  DECLINED_MESSAGE,
+  throwIfCancelled,
+  type ApprovalPrompt,
+} from "./approval";
+import { conceal, markTransparent } from "./window-occlusion";
 import type { Point } from "../src/buddy-drag";
+import {
+  bundleIdSchema,
+  pointLabelSchema,
+  screenshotIdSchema,
+} from "../server/point-schema";
 import { startRuntime } from "../server/runtime";
-import type { CompanionTrayMode, Permissions, Settings } from "../src/types";
+import { ScreenshotRegistry, resolvePoint } from "../server/screenshots";
+import type {
+  CompanionTrayMode,
+  Permissions,
+  ScreenshotAttachment,
+  Settings,
+} from "../src/types";
+import { captureScreenshot, singleFlight } from "./screen-capture";
 
 // Preserve the installed app's data across the display-name rebrand.
 app.setPath("userData", join(app.getPath("appData"), "Kite"));
@@ -63,6 +85,11 @@ const helper = app.isPackaged
   ? join(process.resourcesPath, "kite-recorder")
   : join(root, "native/bin/kite-recorder");
 const exec = promisify(execFile);
+const helperTimeout = { timeout: 15_000 };
+// A first launch of an app can walk through Gatekeeper's notarization
+// check, which can take longer than every other helper call.
+const appLaunchTimeout = { timeout: 60_000 };
+const screenshots = new ScreenshotRegistry();
 let workspace: BrowserWindow;
 let buddy: BrowserWindow;
 let notch: BrowserWindow;
@@ -117,7 +144,9 @@ function positionNotch() {
   notch.setBounds(fittedNotchBounds());
 }
 async function refreshNotchInset() {
-  const { stdout } = await exec(helper, ["--notch-inset"]);
+  const stdout = await runHelper(() =>
+    exec(helper, ["--notch-inset"], helperTimeout),
+  );
   notchTopInset = z
     .object({ topInset: z.number().nonnegative() })
     .parse(JSON.parse(stdout)).topInset;
@@ -186,50 +215,150 @@ const broadcast = () =>
   BrowserWindow.getAllWindows().forEach((w) =>
     w.webContents.send("kite:update"),
   );
-async function approvedAction(input: unknown) {
+// Every window listed here gets concealed for screenshots and the pointer;
+// a window left out of this list still shows up in captures and is never
+// cleared before the pointer ring appears over it.
+function openMuseWindows() {
+  return [workspace, buddy, notch, companionChat].filter(
+    (win) => win && !win.isDestroyed(),
+  );
+}
+// How many approval sheets each window is hosting right now. Hiding a window
+// ends the sheet on it as a Cancel (NativeWindowMac::Hide), so openWorkspace
+// leaves a companion chat that is hosting one on screen.
+const approvalHosts = new Map<BrowserWindow, number>();
+async function approve(prompt: ApprovalPrompt, signal?: AbortSignal) {
+  const { host, mustShow } = approvalHost({ companionChat, workspace });
+  // -1, as bounce() itself returns when OpenMuse is already active, means
+  // there is no bounce to cancel.
+  let bounce = -1;
+  approvalHosts.set(host, (approvalHosts.get(host) ?? 0) + 1);
+  try {
+    return await askApproval(
+      prompt,
+      {
+        activate: () => {
+          app.focus({ steal: true });
+          // The companion chat floats above every app on every Space, so a
+          // sheet on it is in view without activation; only the workspace
+          // can sit behind another app.
+          if (host === workspace) bounce = app.dock?.bounce("critical") ?? -1;
+        },
+        showMessageBox: (options) => {
+          if (mustShow) {
+            // mustShow only ever comes from approvalHost() choosing the
+            // workspace (see its return above), so this is always about the
+            // workspace, never the companion chat.
+            //
+            // app.show() undoes Cmd+H: that hides every OpenMuse window,
+            // including one hosting no sheet at all, and makes each of them
+            // report as not visible, so approvalHost() picks the workspace
+            // and asks for it to be shown even though nothing the user did
+            // targeted it specifically. openWorkspace() must not run here:
+            // it hides a companion chat that isn't hosting this prompt,
+            // which would close whatever chat the user had open just to
+            // unhide the app for an unrelated approval.
+            app.show?.();
+            // focus() does nothing on a window that isn't visible, which a
+            // minimized one isn't, and show() alone doesn't undo minimized.
+            if (workspace.isMinimized()) workspace.restore();
+            workspace.show();
+            workspace.focus();
+          }
+          // Always the parented form. The async message box attaches a sheet
+          // to its parent even while that window is hidden; the parentless
+          // form runs a blocking modal loop on macOS.
+          return dialog.showMessageBox(host, { ...options });
+        },
+        // Hiding a window ends its sheet and orders it out in the same call,
+        // and the box resolves on a later task, so a host that is off screen
+        // by then was dismissed, not answered. Electron's "hide" event can't
+        // tell us this: on macOS it comes from occlusion changes
+        // (windowDidChangeOcclusionState), so it also fires when another
+        // app's window fully covers the host, and it can arrive after the
+        // box has resolved.
+        hostHidden: () => host.isDestroyed() || !host.isVisible(),
+      },
+      signal,
+    );
+  } finally {
+    // A critical bounce lasts until OpenMuse is activated, so a prompt that
+    // ends while it's in the background - Stop does this; whether a bare
+    // tool-call timeout does too is unverified - would leave the icon
+    // bouncing for nothing.
+    if (bounce !== -1) app.dock?.cancelBounce(bounce);
+    const remaining = (approvalHosts.get(host) ?? 1) - 1;
+    if (remaining > 0) approvalHosts.set(host, remaining);
+    else approvalHosts.delete(host);
+  }
+}
+// The runtime is the only caller: the kite:action IPC route that used to
+// hand this a renderer's unvalidated input is gone (approvedAction is no
+// longer registered as an IPC handler at all), so this takes the runtime's
+// own AbortSignal directly instead of validating one out of unknown input.
+async function approvedAction(input: unknown, signal?: AbortSignal) {
   const action = z
     .discriminatedUnion("type", [
       z.object({
         type: z.literal("open-app"),
-        bundleId: z.string().regex(/^[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+$/),
+        bundleId: bundleIdSchema,
       }),
       z.object({
         type: z.literal("point"),
-        x: z.number().finite(),
-        y: z.number().finite(),
+        screenshotId: screenshotIdSchema,
+        x: z.number(),
+        y: z.number(),
+        label: pointLabelSchema,
       }),
     ])
     .parse(input);
-  const detail =
-    action.type === "open-app"
-      ? `Open application ${action.bundleId}`
-      : `Show a pointer at (${action.x}, ${action.y})`;
-  const result = await dialog.showMessageBox(workspace, {
-    type: "question",
-    title: "OpenMuse wants to take an action",
-    message: detail,
-    buttons: ["Cancel", "Allow once"],
-    defaultId: 0,
-    cancelId: 0,
-  });
-  if (result.response !== 1) throw new Error("User declined action");
-  const { stdout } = await exec(
-    helper,
-    action.type === "open-app"
-      ? ["--open-app", action.bundleId]
-      : ["--point", String(action.x), String(action.y)],
+  if (action.type === "open-app") {
+    // The bundle id comes from the model, so like a pointer label it goes on
+    // its own attributed line in the detail, where it can't rewrite the
+    // message.
+    if (
+      !(await approve(
+        {
+          message: "The agent wants to open an app",
+          detail: `The agent says the app is: ${action.bundleId}`,
+        },
+        signal,
+      ))
+    )
+      throw new Error(DECLINED_MESSAGE);
+    throwIfCancelled(signal);
+    await runHelper(
+      () => exec(helper, ["--open-app", action.bundleId], appLaunchTimeout),
+      helperStatus.appOpened,
+    );
+    return;
+  }
+  await performPointAction(
+    action.label,
+    {
+      resolve: () => resolvePoint(screenshots, screen.getAllDisplays(), action),
+      confirm: approve,
+      windows: openMuseWindows,
+      showPointer: async (point) => {
+        await runHelper(
+          () =>
+            exec(
+              helper,
+              ["--point", String(point.x), String(point.y)],
+              helperTimeout,
+            ),
+          helperStatus.pointDisplayed,
+        );
+      },
+    },
+    signal,
   );
-  const events = stdout
-    .trim()
-    .split("\n")
-    .filter(Boolean)
-    .map((line) => JSON.parse(line));
-  const error = events.find((e) => e.kind === "error");
-  if (error) throw new Error(error.detail);
 }
 
 async function permissions(): Promise<Permissions> {
-  const { stdout } = await exec(helper, ["--permissions"]);
+  const stdout = await runHelper(() =>
+    exec(helper, ["--permissions"], helperTimeout),
+  );
   return z
     .object({ accessibility: z.boolean(), screenCapture: z.boolean() })
     .parse(JSON.parse(stdout));
@@ -365,7 +494,15 @@ async function startRecording(title: string) {
 }
 function openWorkspace() {
   if (!workspace || workspace.isDestroyed()) return;
-  if (companionChat && !companionChat.isDestroyed()) companionChat.hide();
+  // Hiding the chat would end an approval sheet on it as a Cancel the user
+  // never gave, so while it hosts one it stays on screen beside the
+  // workspace.
+  if (
+    companionChat &&
+    !companionChat.isDestroyed() &&
+    !approvalHosts.has(companionChat)
+  )
+    companionChat.hide();
   workspace.show();
   workspace.focus();
 }
@@ -380,6 +517,9 @@ function makeWindow(isBuddy: boolean) {
         buddyAreas(),
       )
     : undefined;
+  // The buddy is transparent; the workspace is opaque and keeps ordinary
+  // click handling, so it stays unmarked.
+  const transparent = isBuddy;
   const win = new BrowserWindow({
     width: isBuddy ? BUDDY_SIZE.width : 1240,
     height: isBuddy ? BUDDY_SIZE.height : 820,
@@ -390,7 +530,7 @@ function makeWindow(isBuddy: boolean) {
     show: false,
     title: "OpenMuse Desktop",
     backgroundColor: isBuddy ? "#00000000" : "#fcfcfc",
-    transparent: isBuddy,
+    transparent,
     frame: !isBuddy,
     ...(!isBuddy ? { titleBarStyle: "hiddenInset" as const } : {}),
     resizable: !isBuddy,
@@ -404,6 +544,9 @@ function makeWindow(isBuddy: boolean) {
       sandbox: true,
     },
   });
+  // Marked where it's made, so conceal() never costs a transparent window
+  // its click-through (see markTransparent).
+  if (transparent) markTransparent(win);
   win.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
   win.webContents.on("will-navigate", (event) => event.preventDefault());
   if (isBuddy)
@@ -445,6 +588,8 @@ function makeCompanionChatWindow() {
       sandbox: true,
     },
   });
+  // transparent: true above, so marked where it's made (see markTransparent).
+  markTransparent(win);
   win.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
   win.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
   win.webContents.on("will-navigate", (event) => event.preventDefault());
@@ -486,6 +631,8 @@ function makeNotchWindow() {
       sandbox: true,
     },
   });
+  // transparent: true above, so marked where it's made (see markTransparent).
+  markTransparent(win);
   win.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
   win.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
   win.webContents.on("will-navigate", (event) => event.preventDefault());
@@ -533,6 +680,7 @@ app
         ? join(process.resourcesPath, "codex-runtime/bin/codex")
         : undefined,
       action: approvedAction,
+      screenshots,
     });
     settings = runtime.settings;
     const preferencesPath = join(app.getPath("userData"), "preferences.json");
@@ -715,45 +863,49 @@ app
     });
     handle("permissions", async (kind) => {
       z.enum(["accessibility", "screenCapture"]).parse(kind);
-      await exec(helper, [
-        kind === "accessibility"
-          ? "--request-accessibility"
-          : "--request-screen",
-      ]);
+      await runHelper(() =>
+        exec(
+          helper,
+          [
+            kind === "accessibility"
+              ? "--request-accessibility"
+              : "--request-screen",
+          ],
+          helperTimeout,
+        ),
+      );
       return permissions();
     });
-    handle("screenshot", async () => {
-      if (!(await permissions()).screenCapture)
-        throw new Error("Enable Screen Recording permission in Settings.");
-      const restoreWorkspace = workspace.isVisible();
-      const restoreBuddy = buddy.isVisible();
-      const restoreNotch = notch.isVisible();
-      const restoreChat = companionChat.isVisible();
-      workspace.hide();
-      buddy.hide();
-      notch.hide();
-      companionChat.hide();
-      try {
-        await new Promise((resolve) => setTimeout(resolve, 200));
-        const sources = await desktopCapturer.getSources({
-          types: ["screen"],
-          thumbnailSize: { width: 1440, height: 900 },
-        });
-        const primary =
-          sources.find(
-            (s) => s.display_id === String(screen.getPrimaryDisplay().id),
-          ) ?? sources[0];
-        if (!primary || primary.thumbnail.isEmpty())
-          throw new Error("Screen capture unavailable");
-        return primary.thumbnail.toDataURL();
-      } finally {
-        if (restoreWorkspace) workspace.show();
-        if (restoreBuddy) buddy.showInactive();
-        if (restoreNotch) notch.showInactive();
-        if (restoreChat) companionChat.showInactive();
-      }
-    });
-    handle("action", approvedAction);
+    // Nested fades (conceal() in window-occlusion.ts) already keep every
+    // window concealed for as long as any overlapping capture or pointer
+    // needs it, so overlapping captures can't see each other's windows.
+    // This guard exists so a burst of quick clicks shares one real capture
+    // and adds one registry entry, instead of hitting desktopCapturer and
+    // screenshots.add() once per click.
+    const captureScreenshotOnce = singleFlight(
+      (): Promise<ScreenshotAttachment> =>
+        captureScreenshot({
+          screenCaptureAllowed: async () => (await permissions()).screenCapture,
+          primaryDisplay: () => screen.getPrimaryDisplay(),
+          displays: () => screen.getAllDisplays(),
+          conceal: () =>
+            conceal(openMuseWindows().filter((win) => win.isVisible())),
+          wait: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+          sources: (target) =>
+            desktopCapturer.getSources({
+              types: ["screen"],
+              thumbnailSize: target,
+            }),
+          // A 2x NativeImage keeps its scale factor through resize(), so its
+          // PNG would stay 2x; rebuilding it from its own pixels makes the
+          // target a pixel size.
+          rebuild: (png, size) =>
+            nativeImage.createFromBuffer(png).resize(size).toPNG(),
+          register: (input) => screenshots.add(input),
+          sourcesTimeoutMs: 10_000,
+        }),
+    );
+    handle("screenshot", captureScreenshotOnce);
     handle("openWorkspace", openWorkspace);
     ipcMain.handle("kite:toggleCompanionChat", (event) => {
       if (

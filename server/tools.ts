@@ -11,12 +11,17 @@ import { z } from "zod";
 import type { Store } from "../electron/store";
 import type { DesktopAction } from "../src/types";
 import { safeAgentError } from "./codex-agent";
+import {
+  bundleIdSchema,
+  pointLabelSchema,
+  screenshotIdSchema,
+} from "./point-schema";
 
 export function createToolHandler(options: {
   store: Store;
   intelligence?: CopilotKitIntelligence;
   containerId: string;
-  action?: (action: DesktopAction) => Promise<void>;
+  action?: (action: DesktopAction, signal: AbortSignal) => Promise<void>;
 }) {
   const registry = options.intelligence
     ? new SkillRegistry({
@@ -100,12 +105,12 @@ export function createToolHandler(options: {
         description:
           "Open an installed macOS app after a native user approval dialog",
         inputSchema: {
-          bundleId: z.string().regex(/^[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+$/),
+          bundleId: bundleIdSchema,
         },
       },
       async ({ bundleId }) => {
         if (!options.action) throw new Error("Desktop actions unavailable");
-        await options.action({ type: "open-app", bundleId });
+        await options.action({ type: "open-app", bundleId }, request.signal);
         return result("Application opened after user approval");
       },
     );
@@ -113,12 +118,22 @@ export function createToolHandler(options: {
       "point_on_screen",
       {
         description:
-          "Display a pointer at a verified screen coordinate after native approval. Does not click.",
-        inputSchema: { x: z.number().finite(), y: z.number().finite() },
+          "Show a pointer on something visible in a screenshot the user attached, after native approval. Pass that screenshot's id and x, y in its pixels (origin at the top-left). Does not click.",
+        inputSchema: {
+          screenshotId: screenshotIdSchema,
+          x: z.number(),
+          y: z.number(),
+          label: pointLabelSchema.describe(
+            'What you are pointing at, such as "Export button". The user sees it in the approval dialog: one line of visible text, up to 60 characters, with at least one letter or number.',
+          ),
+        },
       },
-      async ({ x, y }) => {
+      async ({ screenshotId, x, y, label }) => {
         if (!options.action) throw new Error("Desktop actions unavailable");
-        await options.action({ type: "point", x, y });
+        await options.action(
+          { type: "point", screenshotId, x, y, label },
+          request.signal,
+        );
         return result("Pointer displayed after user approval");
       },
     );
