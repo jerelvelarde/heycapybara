@@ -1,34 +1,29 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { helperResult, runHelper } from "../electron/helper-result";
+import { reportedError, runHelper } from "../electron/helper-result";
 
-test("status output with a clean exit does not throw", () => {
-  assert.doesNotThrow(() =>
-    helperResult('{"kind":"status","detail":"Point displayed"}\n', undefined),
+test("a status-only stdout returns undefined", () => {
+  assert.equal(
+    reportedError('{"kind":"status","detail":"Point displayed"}\n'),
+    undefined,
   );
 });
 
-test("a reported error throws its own detail when a failure reason is also given", () => {
+test("an error event returns its detail", () => {
   const stdout =
     '{"kind":"error","detail":"Point lies outside connected displays"}\n';
-  assert.throws(() => helperResult(stdout, "some failure"), {
-    message: "Point lies outside connected displays",
-  });
+  assert.equal(reportedError(stdout), "Point lies outside connected displays");
 });
 
-test("a reported error throws its own detail when there is no failure reason", () => {
-  const stdout =
-    '{"kind":"error","detail":"Point lies outside connected displays"}\n';
-  assert.throws(() => helperResult(stdout, undefined), {
-    message: "Point lies outside connected displays",
-  });
-});
-
-test("empty stdout with a failure reason throws exactly that reason", () => {
-  assert.throws(
-    () => helperResult("", "The desktop helper failed without a reason"),
-    { message: "The desktop helper failed without a reason" },
+test("an error event without a string detail returns a generic message", () => {
+  assert.equal(
+    reportedError('{"kind":"error"}\n'),
+    "The desktop helper reported an error",
   );
+});
+
+test("non-object JSON lines are skipped", () => {
+  assert.equal(reportedError("null\n5\n"), undefined);
 });
 
 test("runHelper reports the helper's own JSON error detail, not the command line", async () => {
@@ -118,4 +113,37 @@ test("runHelper rethrows a non-exec error unchanged", async () => {
     () => runHelper(() => Promise.reject(original)),
     (error: unknown) => error === original,
   );
+});
+
+test("runHelper reports the kill signal when the write is cut off mid-line", async () => {
+  const err = Object.assign(new Error("Command failed: /x/kite-recorder"), {
+    stdout: '{"kind":"status","det',
+    code: null,
+    signal: "SIGKILL",
+  });
+  let caught: unknown;
+  try {
+    await runHelper(() => Promise.reject(err));
+  } catch (error) {
+    caught = error;
+  }
+  assert.ok(caught instanceof Error);
+  assert.match(caught.message, /stopped by SIGKILL/);
+  assert.doesNotMatch(caught.message, /JSON|Unterminated/);
+});
+
+test("runHelper finds the error line even after unparseable garbage", async () => {
+  const err = Object.assign(new Error("Command failed: /x/kite-recorder"), {
+    stdout:
+      'not json\n{"kind":"error","detail":"Point lies outside connected displays"}\n',
+    code: 1,
+  });
+  let caught: unknown;
+  try {
+    await runHelper(() => Promise.reject(err));
+  } catch (error) {
+    caught = error;
+  }
+  assert.ok(caught instanceof Error);
+  assert.equal(caught.message, "Point lies outside connected displays");
 });

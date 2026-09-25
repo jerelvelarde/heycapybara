@@ -1,17 +1,20 @@
-export function helperResult(stdout: string, failure: string | undefined) {
-  const events = stdout
-    .trim()
-    .split("\n")
-    .filter(Boolean)
-    .map((line) => JSON.parse(line) as { kind?: unknown; detail?: unknown });
-  const reported = events.find((event) => event.kind === "error");
-  if (reported)
-    throw new Error(
-      typeof reported.detail === "string"
-        ? reported.detail
-        : "The desktop helper reported an error",
-    );
-  if (failure) throw new Error(failure);
+// The helper prints one JSON object per line and reports failures as an
+// `error` event. Lines that aren't complete JSON (a write cut off by a
+// kill, for example) are skipped so the process's own exit reason wins.
+export function reportedError(stdout: string) {
+  for (const line of stdout.split("\n")) {
+    if (!line.trim()) continue;
+    let event: { kind?: unknown; detail?: unknown };
+    try {
+      event = JSON.parse(line);
+    } catch {
+      continue;
+    }
+    if (event?.kind === "error")
+      return typeof event.detail === "string"
+        ? event.detail
+        : "The desktop helper reported an error";
+  }
 }
 
 type ExecFailure = Error & {
@@ -20,8 +23,9 @@ type ExecFailure = Error & {
   signal?: unknown;
 };
 
-// execFile rejects on a non-zero exit before its output is read, and its
-// message contains the helper's path, so report the helper's own reason.
+// execFile rejects on a non-zero exit with the output attached to the
+// error, and the error's message contains the helper's path, so report the
+// helper's own reason instead.
 export async function runHelper(run: () => Promise<{ stdout: string }>) {
   let stdout: string;
   try {
@@ -29,10 +33,13 @@ export async function runHelper(run: () => Promise<{ stdout: string }>) {
   } catch (error) {
     if (!(error instanceof Error) || !("stdout" in error)) throw error;
     const failure = error as ExecFailure;
-    helperResult(String(failure.stdout ?? ""), failureCause(failure));
-    return;
+    throw new Error(
+      reportedError(String(failure.stdout ?? "")) ?? failureCause(failure),
+      { cause: error },
+    );
   }
-  helperResult(stdout, undefined);
+  const reported = reportedError(stdout);
+  if (reported) throw new Error(reported);
 }
 
 function failureCause(failure: ExecFailure) {
