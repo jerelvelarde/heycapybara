@@ -38,6 +38,10 @@ const api: KiteAPI = {
   closeCompanionChat: () => invoke("kite:closeCompanionChat"),
   openWorkspace: () => invoke("kite:openWorkspace"),
   openIntelligence: () => invoke("kite:openIntelligence"),
+  watchLearning: () => invoke("kite:watchLearning"),
+  dismissLearned: () => invoke("kite:dismissLearned"),
+  openLearningStep: () => invoke("kite:openLearningStep"),
+  saveLesson: (lesson) => invoke("kite:saveLesson", lesson),
   onUpdate: (callback) => {
     const listener = () => callback();
     ipcRenderer.on("kite:update", listener);

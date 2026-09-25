@@ -78,6 +78,7 @@ export type Snapshot = {
   permissions: Permissions;
   settings: Settings;
   trayMode: CompanionTrayMode;
+  learning: LearningStatus;
 };
 export type ScreenshotAttachment = {
   id: string;
@@ -178,6 +179,17 @@ export interface KiteAPI {
   closeCompanionChat(): Promise<void>;
   openWorkspace(): Promise<void>;
   openIntelligence(): Promise<void>;
+  /** Check Intelligence now and keep checking for a while. */
+  watchLearning(): Promise<void>;
+  /** Stop announcing what is newly learned. */
+  dismissLearned(): Promise<void>;
+  /** Open the Intelligence page for the current skills-path step. */
+  openLearningStep(): Promise<void>;
+  /** Save a confirmed lesson to the user's Intelligence Memory. */
+  saveLesson(lesson: {
+    threadId: string;
+    content: string;
+  }): Promise<{ id: string; absorbed: boolean }>;
   onUpdate(callback: () => void): () => void;
 }
 declare global {
