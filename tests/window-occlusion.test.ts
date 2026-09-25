@@ -3,7 +3,9 @@ import assert from "node:assert/strict";
 import {
   coversPoint,
   conceal,
+  markTransparent,
   RING_MARGIN,
+  type ConcealableWindow,
 } from "../electron/window-occlusion";
 
 const workspaceBounds = { x: 100, y: 100, width: 1240, height: 820 };
@@ -40,13 +42,35 @@ test("point at exactly the margin before the left edge is covered, the edge is i
   );
 });
 
+test("point one point beyond the left margin is not covered", () => {
+  // Mirrors the right edge's exclusive-boundary check above, but for the
+  // left edge, so a regression that widens the left margin gets caught too.
+  assert.equal(
+    coversPoint(workspaceBounds, {
+      x: workspaceBounds.x - RING_MARGIN - 1,
+      y: 500,
+    }),
+    false,
+  );
+});
+
 test("point at exactly the margin past the bottom edge is not covered, the edge is exclusive", () => {
-  // The bottom edge is at 100 + 820 = 920, not 952: 952 is the bottom edge
-  // plus the margin (920 + RING_MARGIN), which is where coverage ends.
+  // Coverage ends at the bottom edge plus the margin: a point exactly there
+  // is already outside, matching the right edge's exclusive boundary above.
   const bottomEdge = workspaceBounds.y + workspaceBounds.height;
   assert.equal(
     coversPoint(workspaceBounds, { x: 500, y: bottomEdge + RING_MARGIN }),
     false,
+  );
+});
+
+test("point one point inside the bottom margin is covered", () => {
+  // Mirrors the right edge's inside-the-margin check above, but for the
+  // bottom edge, so a regression that narrows the bottom margin gets caught.
+  const bottomEdge = workspaceBounds.y + workspaceBounds.height;
+  assert.equal(
+    coversPoint(workspaceBounds, { x: 500, y: bottomEdge + RING_MARGIN - 1 }),
+    true,
   );
 });
 
@@ -60,7 +84,7 @@ test("point at exactly the margin before the top edge is covered, the edge is in
   );
 });
 
-test("point one pixel above the top margin is not covered", () => {
+test("point one point above the top margin is not covered", () => {
   assert.equal(
     coversPoint(workspaceBounds, {
       x: 500,
@@ -80,11 +104,14 @@ test("a window at negative coordinates still covers points near it", () => {
 });
 
 // A minimal stand-in for a BrowserWindow: tracks opacity, ignored-mouse-event
-// state and destruction exactly the way conceal() reads and writes them.
+// state and destruction exactly the way conceal() reads and writes them, plus
+// a call count so a test can assert setIgnoreMouseEvents was never invoked
+// rather than only inspecting its final value.
 function fakeConcealable(startOpacity: number) {
   let opacity = startOpacity;
   let destroyed = false;
   let ignoringMouseEvents = false;
+  let ignoreMouseEventsCalls = 0;
   return {
     isDestroyed: () => destroyed,
     getOpacity: () => opacity,
@@ -93,12 +120,14 @@ function fakeConcealable(startOpacity: number) {
     },
     setIgnoreMouseEvents: (ignore: boolean) => {
       ignoringMouseEvents = ignore;
+      ignoreMouseEventsCalls += 1;
     },
     destroy: () => {
       destroyed = true;
     },
     opacity: () => opacity,
     isIgnoringMouseEvents: () => ignoringMouseEvents,
+    ignoreMouseEventsCallCount: () => ignoreMouseEventsCalls,
   };
 }
 
@@ -182,5 +211,64 @@ test("a conceal over two windows, one already concealed elsewhere, only restores
   assert.equal(b.isIgnoringMouseEvents(), false);
   restoreOuter();
   assert.equal(a.opacity(), 0.9);
+  assert.equal(a.isIgnoringMouseEvents(), false);
+});
+
+test("a marked window never gets setIgnoreMouseEvents on conceal or restore, but still fades to opacity 0 and back", () => {
+  const a = fakeConcealable(1);
+  markTransparent(a);
+  const restore = conceal([a]);
+  assert.equal(a.opacity(), 0);
+  assert.equal(a.ignoreMouseEventsCallCount(), 0);
+  restore();
+  assert.equal(a.opacity(), 1);
+  assert.equal(a.ignoreMouseEventsCallCount(), 0);
+});
+
+test("an unmarked window keeps today's behaviour even when concealed alongside a marked one", () => {
+  const marked = fakeConcealable(1);
+  const unmarked = fakeConcealable(0.8);
+  markTransparent(marked);
+  const restore = conceal([marked, unmarked]);
+  assert.equal(unmarked.opacity(), 0);
+  assert.equal(unmarked.isIgnoringMouseEvents(), true);
+  assert.equal(marked.ignoreMouseEventsCallCount(), 0);
+  restore();
+  assert.equal(unmarked.opacity(), 0.8);
+  assert.equal(unmarked.isIgnoringMouseEvents(), false);
+  assert.equal(marked.ignoreMouseEventsCallCount(), 0);
+});
+
+test("if the second window's setOpacity throws during conceal, the first window is restored and the error propagates", () => {
+  const a = fakeConcealable(1);
+  const b: ConcealableWindow = {
+    isDestroyed: () => false,
+    getOpacity: () => 0.8,
+    setOpacity: () => {
+      throw new Error("setOpacity boom");
+    },
+    setIgnoreMouseEvents: () => {},
+  };
+  assert.throws(() => conceal([a, b]), /setOpacity boom/);
+  assert.equal(a.opacity(), 1);
+  assert.equal(a.isIgnoringMouseEvents(), false);
+});
+
+test("if one undo throws during restore, the other windows are still restored and the error is rethrown", () => {
+  const a = fakeConcealable(1);
+  const b: ConcealableWindow = {
+    isDestroyed: () => false,
+    getOpacity: () => 0.8,
+    setOpacity: (next: number) => {
+      // Succeeds while fading out (next is 0); fails while restoring.
+      if (next !== 0) throw new Error("restore boom");
+    },
+    setIgnoreMouseEvents: () => {},
+  };
+  // b is concealed first, so its undo runs first and throws; a's undo must
+  // still run afterwards rather than being skipped.
+  const restore = conceal([b, a]);
+  assert.throws(() => restore(), /restore boom/);
+  assert.equal(a.opacity(), 1);
   assert.equal(a.isIgnoringMouseEvents(), false);
 });

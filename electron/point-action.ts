@@ -23,7 +23,8 @@ export async function performPointAction(label: string, deps: PointActionDeps) {
   const { shot } = deps.resolve();
   if (!(await deps.confirm(pointPrompt(label, shot.label))))
     throw new Error("User declined action");
-  // Resolve again: the display can change, or the screenshot expire, while the dialog is open.
+  // Resolve again: while the dialog is open, the display can change, or the
+  // screenshot can expire or be evicted by newer captures.
   const { point } = deps.resolve();
   // The capture concealed our windows, so the model may be pointing at
   // something one of them now covers. The ring draws above them, so only

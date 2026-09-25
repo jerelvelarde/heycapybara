@@ -52,7 +52,7 @@ import {
 import { runHelper } from "./helper-result";
 import { performPointAction } from "./point-action";
 import { askApproval, approvalHost } from "./approval";
-import { conceal } from "./window-occlusion";
+import { conceal, markTransparent } from "./window-occlusion";
 import type { Point } from "../src/buddy-drag";
 import { pointLabelSchema, screenshotIdSchema } from "../server/point-schema";
 import { startRuntime } from "../server/runtime";
@@ -211,7 +211,9 @@ const broadcast = () =>
   BrowserWindow.getAllWindows().forEach((w) =>
     w.webContents.send("kite:update"),
   );
-// The windows OpenMuse owns.
+// Every window listed here gets concealed for screenshots and the pointer;
+// a window left out of this list still shows up in captures and is never
+// cleared before the pointer ring appears over it.
 function openMuseWindows() {
   return [workspace, buddy, notch, companionChat].filter(
     (win) => win && !win.isDestroyed(),
@@ -787,8 +789,12 @@ app
       return permissions();
     });
     handle("screenshot", (): Promise<ScreenshotAttachment> => {
-      // Two quick clicks would otherwise start overlapping captures, and the
-      // second could capture the windows the first is still restoring.
+      // Nested fades (conceal() in window-occlusion.ts) already keep every
+      // window concealed for as long as any overlapping capture or pointer
+      // needs it, so overlapping captures can't see each other's windows.
+      // This guard exists so a burst of quick clicks shares one real capture
+      // and adds one registry entry, instead of hitting desktopCapturer and
+      // screenshots.add() once per click.
       if (captureInFlight) return captureInFlight;
       const capture = (async (): Promise<ScreenshotAttachment> => {
         if (!(await permissions()).screenCapture)
@@ -799,13 +805,32 @@ app
           openMuseWindows().filter((win) => win.isVisible()),
         );
         try {
-          // The compositor needs a frame to actually drop the concealed
-          // windows before we capture.
+          // 200ms is about 12 frames: several frames of margin for the
+          // compositor to actually drop the concealed windows before we
+          // capture, not just the one frame a bare wait would guarantee.
+          // Do not shorten this to one frame.
           await new Promise((resolve) => setTimeout(resolve, 200));
-          const sources = await desktopCapturer.getSources({
-            types: ["screen"],
-            thumbnailSize: target,
-          });
+          const sources = await new Promise<Electron.DesktopCapturerSource[]>(
+            (resolveSources, rejectSources) => {
+              const timer = setTimeout(() => {
+                rejectSources(
+                  new Error(
+                    "Screen capture didn't respond. Try again, or quit and reopen OpenMuse Desktop.",
+                  ),
+                );
+              }, 10_000);
+              desktopCapturer
+                .getSources({ types: ["screen"], thumbnailSize: target })
+                .then((result) => {
+                  clearTimeout(timer);
+                  resolveSources(result);
+                })
+                .catch((error: unknown) => {
+                  clearTimeout(timer);
+                  rejectSources(error);
+                });
+            },
+          );
           // A capture of another display would put the pointer in the wrong place.
           const source = sources.find(
             (candidate) => candidate.display_id === String(display.id),
@@ -929,6 +954,11 @@ app
     buddy = makeWindow(true);
     notch = makeNotchWindow();
     companionChat = makeCompanionChatWindow();
+    // buddy, notch and companionChat are transparent: true; workspace is
+    // opaque and keeps ordinary click handling, so it stays unmarked.
+    markTransparent(buddy);
+    markTransparent(notch);
+    markTransparent(companionChat);
     const restoreVisibleBuddy = () => {
       buddyGesture = undefined;
       const [x, y] = buddy.getPosition();

@@ -9,8 +9,8 @@ import type { Rect } from "../server/screenshots";
 
 // Bounds and visibility are real inputs: coversPoint and conceal (both from
 // window-occlusion) decide what counts as covering and do the actual
-// concealing, exactly as they do in main.ts. Concealment is observed through
-// opacity, not through a hide()/showInactive() call the fake no longer has.
+// concealing, exactly as in production. Concealment is observed through
+// opacity, not visibility.
 function fakeWindow(
   bounds: Rect,
   visible: boolean,
@@ -36,7 +36,11 @@ function fakeWindow(
 
 test("happy path: resolve, confirm, resolve, conceal, showPointer, restore run in order for every covering window", async () => {
   const events: string[] = [];
-  const point = { x: 500, y: 500 };
+  // The two resolves return different points so a bug that shows the
+  // pre-approval point, instead of re-resolving after confirm, can't hide
+  // behind both calls happening to return equal values.
+  const preApprovalPoint = { x: 500, y: 500 };
+  const postApprovalPoint = { x: 520, y: 480 };
   const coveringA = fakeWindow(
     { x: 400, y: 400, width: 200, height: 200 },
     true,
@@ -49,10 +53,15 @@ test("happy path: resolve, confirm, resolve, conceal, showPointer, restore run i
     events,
     "coveringB",
   );
+  let resolveCount = 0;
   const deps: PointActionDeps = {
     resolve: () => {
       events.push("resolve");
-      return { shot: { label: "Display A" }, point };
+      resolveCount += 1;
+      return {
+        shot: { label: "Display A" },
+        point: resolveCount === 1 ? preApprovalPoint : postApprovalPoint,
+      };
     },
     confirm: async () => {
       events.push("confirm");
@@ -60,7 +69,7 @@ test("happy path: resolve, confirm, resolve, conceal, showPointer, restore run i
     },
     windows: () => [coveringA, coveringB],
     showPointer: async (received) => {
-      assert.deepEqual(received, point);
+      assert.deepEqual(received, postApprovalPoint);
       events.push("showPointer");
     },
   };
@@ -268,8 +277,9 @@ test("a window destroyed while the pointer is showing is skipped on restore, wit
     confirm: async () => true,
     windows: () => [covering],
     showPointer: async () => {
-      // Something else (a placement change, the user quitting) destroys the
-      // window while the ring is up, before restore runs.
+      // Only quitting destroys a window outright (a placement change just
+      // hides and recreates it); either way, restore must not throw on a
+      // window that's gone by the time it runs.
       state.destroyed = true;
       events.push("showPointer");
     },
