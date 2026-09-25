@@ -110,6 +110,81 @@ test("unsubscribing AG-UI aborts the native run", async () => {
   assert.equal(runSignal?.aborted, true);
 });
 
+test('abortRun() stops the active run: it aborts the run\'s signal and ends with RUN_ERROR "Run stopped"', async () => {
+  const { KiteCodexAgent } = await import("../server/codex-agent");
+  let runSignal: AbortSignal | undefined;
+  const agent = new KiteCodexAgent(async function* (_input, signal) {
+    runSignal = signal;
+    yield { type: "turn.started" };
+    // Mirrors CodexRunner.run's own defensive check just below (`if
+    // (outerSignal.aborted) controller.abort();`): a signal can already be
+    // aborted by the time we get here, since `abortRun()` below runs
+    // synchronously right after `subscribe()`, before this generator is
+    // resumed past its first `yield`. Without this check, an
+    // already-fired "abort" event would have no listener left to catch it.
+    if (!signal.aborted)
+      await new Promise<void>((resolve) =>
+        signal.addEventListener("abort", () => resolve(), { once: true }),
+      );
+  });
+  const events: { type: string; message?: string }[] = [];
+  const done = new Promise<void>((resolve) =>
+    agent
+      .run({
+        threadId: "t",
+        runId: "r",
+        messages: [],
+        tools: [],
+        context: [],
+        state: {},
+        forwardedProps: {},
+      })
+      .subscribe({ next: (e) => events.push(e), complete: resolve }),
+  );
+  // Mirrors what the runtime's in-memory runner does on `agent/stop`: call
+  // `abortRun()` on the same agent instance that is running (see
+  // InMemoryAgentRunner.stop in @copilotkit/runtime), without unsubscribing.
+  agent.abortRun();
+  await done;
+  assert.equal(runSignal?.aborted, true);
+  assert.deepEqual(
+    events.map((e) => e.type),
+    ["RUN_STARTED", "RUN_ERROR"],
+  );
+  assert.equal(events[1]?.message, "Run stopped");
+});
+
+test("abortRun() before any run, or after one finishes, is a safe no-op", async () => {
+  const { KiteCodexAgent } = await import("../server/codex-agent");
+  const agent = new KiteCodexAgent(async function* () {
+    yield {
+      type: "turn.completed",
+      usage: {
+        input_tokens: 0,
+        cached_input_tokens: 0,
+        cache_write_input_tokens: 0,
+        output_tokens: 0,
+        reasoning_output_tokens: 0,
+      },
+    };
+  });
+  assert.doesNotThrow(() => agent.abortRun());
+  await new Promise<void>((resolve) =>
+    agent
+      .run({
+        threadId: "t",
+        runId: "r",
+        messages: [],
+        tools: [],
+        context: [],
+        state: {},
+        forwardedProps: {},
+      })
+      .subscribe({ complete: resolve }),
+  );
+  assert.doesNotThrow(() => agent.abortRun());
+});
+
 test("Codex receives only allowlisted environment and isolated shell home", async () => {
   const { codexEnvironment } = await import("../server/codex-agent");
   process.env.KITE_TEST_UNRELATED_SECRET = "fixture-secret";

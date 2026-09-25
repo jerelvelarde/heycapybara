@@ -5,6 +5,7 @@ import { chmod, copyFile, mkdtemp, readFile, rm } from "node:fs/promises";
 import { Socket } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { setTimeout as sleep } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
 import type { UserMessage } from "@ag-ui/core";
 import { Store } from "../electron/store";
@@ -27,6 +28,11 @@ const FAKE_CODEX = fileURLToPath(
 );
 // What the fake CLI answers every prompt with.
 const FAKE_REPLY = "Fake Codex finished the turn.";
+// Kept identical to tests/fixtures/fake-codex.mjs's own copy of this
+// constant: that file is spawned as a separate process by the Codex SDK, so
+// it can't import this, and duplicates it instead (the same way FAKE_REPLY's
+// text is duplicated there).
+const HANG_TRIGGER = "__FAKE_CODEX_HANG_UNTIL_KILLED__";
 
 const CAPTURE = {
   displayId: "1",
@@ -143,6 +149,50 @@ async function postRun(
     signal: AbortSignal.timeout(30_000),
   });
   return { status: response.status, body: await response.text() };
+}
+
+// Sends `agent/stop` the way the renderer does: the single-route envelope
+// @copilotkit/core's ProxiedCopilotRuntimeAgent.abortRun posts when it has no
+// known `runId` for the thread (node_modules/@copilotkit/core/dist/index.mjs)
+// -- a thread-scoped stop, with no `body` key.
+async function postStop(runtime: Runtime, threadId: string) {
+  const response = await fetch(runtime.settings.runtimeUrl, {
+    method: "POST",
+    headers: {
+      Authorization: "Bearer " + runtime.settings.runtimeToken,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      method: "agent/stop",
+      params: { agentId: "default", threadId },
+    }),
+    signal: AbortSignal.timeout(10_000),
+  });
+  return { status: response.status, body: await response.json() };
+}
+
+// `process.kill(pid, 0)` sends no signal; it only checks whether `pid` is a
+// process we could signal, throwing ESRCH once it is gone.
+function isAlive(pid: number) {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function waitUntil(
+  condition: () => boolean | Promise<boolean>,
+  { timeoutMs, intervalMs = 25 }: { timeoutMs: number; intervalMs?: number },
+) {
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    if (await condition()) return;
+    if (Date.now() > deadline)
+      throw new Error(`waitUntil: condition not met within ${timeoutMs}ms`);
+    await sleep(intervalMs);
+  }
 }
 
 // Posts one user message to a fresh runtime and, once the run has finished
@@ -285,4 +335,97 @@ test("two attached images keep their order, so each note names the --image it de
     `expected image 1's note before image 2's, got ${JSON.stringify(call.stdin)}`,
   );
   assert.deepEqual(call.images, [identify(referenced), identify(unreferenced)]);
+});
+
+// Reproduces the Stop button with Intelligence off: the renderer's Stop
+// sends `agent/stop`, and the runtime's in-memory runner handles that by
+// calling `agent.abortRun()` on the same (per-request) KiteCodexAgent
+// instance that is running (@copilotkit/runtime's InMemoryAgentRunner.stop).
+// Before this fixture's fake CLI had a hang mode, and before
+// KiteCodexAgent.abortRun existed, `agent/stop` would report `stopped: true`
+// while the Codex process kept running forever.
+test("agent/stop ends a run and kills its Codex process, with Intelligence off", async () => {
+  const root = await mkdtemp(join(tmpdir(), "kite-runtime-e2e-stop-"));
+  const restoreEnvironment = applyEnvironment();
+  const network = refuseNetwork();
+  try {
+    const { startRuntime } = await import("../server/runtime");
+    const store = new Store(join(root, "store"));
+    await store.load();
+    const binaryPath = join(root, "codex");
+    await copyFile(FAKE_CODEX, binaryPath);
+    await chmod(binaryPath, 0o755);
+    const statePath = join(root, "agent");
+    const runtime = await startRuntime(store, {
+      statePath,
+      binaryPath,
+      screenshots: new ScreenshotRegistry(),
+    });
+    try {
+      assert.equal(runtime.settings.intelligenceConfigured, false);
+      const threadId = "e2e-stop";
+      // Not awaited yet: the fake CLI hangs, so this run doesn't finish
+      // until Stop ends it, below.
+      const runPromise = postRun(runtime, threadId, HANG_TRIGGER);
+
+      const recordPath = join(statePath, "codex", "fake-codex-calls.json");
+      let pid: number | undefined;
+      await waitUntil(
+        async () => {
+          try {
+            const calls = JSON.parse(await readFile(recordPath, "utf8")) as {
+              pid?: number;
+            }[];
+            pid = calls.find((call) => typeof call.pid === "number")?.pid;
+          } catch {
+            pid = undefined;
+          }
+          return pid !== undefined;
+        },
+        { timeoutMs: 10_000 },
+      );
+      assert.ok(pid, "expected the fake Codex CLI to record its pid");
+      // Narrows to `number` for the closure below: a control-flow narrowing
+      // from `assert.ok` above doesn't survive into a callback defined
+      // afterwards.
+      const activePid: number = pid;
+      assert.ok(
+        isAlive(activePid),
+        "expected the fake Codex process to still be running before Stop",
+      );
+
+      const stop = await postStop(runtime, threadId);
+      assert.equal(stop.status, 200, JSON.stringify(stop.body));
+      assert.equal(stop.body.stopped, true);
+
+      // The load-bearing assertion: before KiteCodexAgent implemented
+      // abortRun, this timed out because the process never exited.
+      await waitUntil(() => !isAlive(activePid), { timeoutMs: 2_000 });
+
+      // Stop must also end the run itself, not just the process: the
+      // renderer's fetch for `agent/run` has to resolve.
+      const response = await runPromise;
+      assert.equal(response.status, 200, response.body);
+      const events = response.body
+        .split("\n")
+        .filter((line) => line.startsWith("data: "))
+        .map((line) => JSON.parse(line.slice("data: ".length)) as RunEvent);
+      assert.equal(events[0]?.type, "RUN_STARTED");
+      assert.ok(
+        events.some((event) => event.type === "RUN_ERROR"),
+        `expected a RUN_ERROR event once Stop ended the run, got ${JSON.stringify(events)}`,
+      );
+    } finally {
+      await closeRuntime(runtime);
+    }
+    assert.deepEqual(
+      network.refused,
+      [],
+      "the run tried to connect to something other than the runtime",
+    );
+  } finally {
+    network.restore();
+    restoreEnvironment();
+    await rm(root, { recursive: true, force: true });
+  }
 });

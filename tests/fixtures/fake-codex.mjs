@@ -4,9 +4,22 @@
 // the prompt to its stdin. It records that call, then prints the shortest
 // JSONL event stream the SDK accepts as one finished turn with one assistant
 // message.
+//
+// A prompt containing HANG_TRIGGER switches it into hang mode instead: it
+// records its own pid, then blocks forever, printing nothing, until an
+// external signal (SIGTERM, via Node's spawn({signal}) integration -- see
+// CodexRunner.run and KiteCodexAgent.abortRun in server/codex-agent.ts) kills
+// it. tests/runtime-e2e.test.ts uses this to confirm that `agent/stop`
+// actually ends the Codex process instead of leaving it running.
 import { randomUUID } from "node:crypto";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+
+// Kept identical to tests/runtime-e2e.test.ts's own copy of this constant.
+// This file runs as a separate process the Codex SDK spawns, so it can't
+// import from the test file; the trigger text is duplicated instead, the
+// same way FAKE_REPLY's text is duplicated there.
+const HANG_TRIGGER = "__FAKE_CODEX_HANG_UNTIL_KILLED__";
 
 // The runtime hands Codex only an allowlisted environment (codexEnvironment
 // in server/codex-agent.ts), so a variable the test sets never reaches this
@@ -38,29 +51,42 @@ const record = join(home, "fake-codex-calls.json");
 const calls = existsSync(record)
   ? JSON.parse(readFileSync(record, "utf8"))
   : [];
-calls.push({ argv, stdin, images });
-writeFileSync(record, JSON.stringify(calls, null, 2));
 
-const events = [
-  { type: "thread.started", thread_id: randomUUID() },
-  { type: "turn.started" },
-  {
-    type: "item.completed",
-    item: {
-      id: "item_0",
-      type: "agent_message",
-      text: "Fake Codex finished the turn.",
+if (stdin.includes(HANG_TRIGGER)) {
+  // `pid` only appears on a hang-mode call: the test looks for it to learn
+  // when this process is up and running, then to confirm it later exits.
+  calls.push({ argv, stdin, images, pid: process.pid });
+  writeFileSync(record, JSON.stringify(calls, null, 2));
+  // Never resolves on its own; keeps the event loop alive (a bare pending
+  // Promise would not) so the process waits for an external kill instead of
+  // exiting once there is nothing left to do.
+  setInterval(() => {}, 1 << 30);
+} else {
+  calls.push({ argv, stdin, images });
+  writeFileSync(record, JSON.stringify(calls, null, 2));
+
+  const events = [
+    { type: "thread.started", thread_id: randomUUID() },
+    { type: "turn.started" },
+    {
+      type: "item.completed",
+      item: {
+        id: "item_0",
+        type: "agent_message",
+        text: "Fake Codex finished the turn.",
+      },
     },
-  },
-  {
-    type: "turn.completed",
-    usage: {
-      input_tokens: 0,
-      cached_input_tokens: 0,
-      cache_write_input_tokens: 0,
-      output_tokens: 0,
-      reasoning_output_tokens: 0,
+    {
+      type: "turn.completed",
+      usage: {
+        input_tokens: 0,
+        cached_input_tokens: 0,
+        cache_write_input_tokens: 0,
+        output_tokens: 0,
+        reasoning_output_tokens: 0,
+      },
     },
-  },
-];
-for (const event of events) process.stdout.write(JSON.stringify(event) + "\n");
+  ];
+  for (const event of events)
+    process.stdout.write(JSON.stringify(event) + "\n");
+}

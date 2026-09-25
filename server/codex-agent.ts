@@ -324,6 +324,13 @@ export class CodexRunner {
 }
 
 export class KiteCodexAgent extends AbstractAgent {
+  // Set for the duration of the active run (see `run()`), so `abortRun()` --
+  // called on this same instance by the runtime's agent runner when the user
+  // presses Stop -- has a controller to abort. `AbstractAgent.abortRun()`
+  // itself is an empty no-op; agents that can actually cancel a run override
+  // it (see @ag-ui/client's HttpAgent.abortRun, which aborts its own stored
+  // AbortController the same way).
+  private controller?: AbortController;
   constructor(private readonly stream: StreamRunner) {
     super({
       agentId: "default",
@@ -333,9 +340,18 @@ export class KiteCodexAgent extends AbstractAgent {
   clone() {
     return new KiteCodexAgent(this.stream);
   }
+  // Aborting the controller propagates through `this.stream` (CodexRunner.run
+  // in this file) as the outer signal, which aborts CodexRunner's own signal
+  // passed to the Codex SDK's `runStreamed`, which kills the spawned Codex
+  // process the same way `CodexRunner.stop()` does.
+  abortRun() {
+    this.controller?.abort();
+    super.abortRun();
+  }
   run(input: RunAgentInput): Observable<BaseEvent> {
     return new Observable((subscriber) => {
       const controller = new AbortController();
+      this.controller = controller;
       const emit = (event: BaseEvent) => subscriber.next(event);
       emit({
         type: EventType.RUN_STARTED,
@@ -360,6 +376,9 @@ export class KiteCodexAgent extends AbstractAgent {
         } catch (error) {
           emit({ type: EventType.RUN_ERROR, message: safeAgentError(error) });
         } finally {
+          // Only clear our own run's controller: if a new run has already
+          // started (and so already replaced it), leave that one alone.
+          if (this.controller === controller) this.controller = undefined;
           subscriber.complete();
         }
       })();
