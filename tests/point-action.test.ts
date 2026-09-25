@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import type { ApprovalPrompt } from "../electron/approval";
+import { DECLINED_MESSAGE, type ApprovalPrompt } from "../electron/approval";
 import {
   performPointAction,
   type PointActionDeps,
@@ -214,7 +214,7 @@ test("a decline rejects with the exact error, with no second resolve, no conceal
     caught = error;
   }
   assert.ok(caught instanceof Error);
-  assert.equal(caught.message, "User declined action");
+  assert.equal(caught.message, DECLINED_MESSAGE);
   assert.equal(resolveCount, 1);
   assert.deepEqual(events, []);
 });

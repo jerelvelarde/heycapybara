@@ -354,11 +354,20 @@ export class KiteCodexAgent extends AbstractAgent {
   // HttpAgent.abortRun, which aborts its own stored AbortController the same
   // way).
   private controller?: AbortController;
-  // Latches an `abortRun()` that arrives before `run()` has subscribed and
-  // created a controller for it to abort -- otherwise that abort would just
-  // be dropped. `run()`'s subscribe callback consumes this immediately after
-  // creating its own controller, so the run it is about to start still ends
-  // as stopped.
+  // Latches an `abortRun()` that arrives after a run has started but before
+  // `run()` has subscribed and created a controller for it to abort --
+  // otherwise that abort would just be dropped. `run()`'s subscribe callback
+  // consumes this immediately after creating its own controller, so the run
+  // it is about to start still ends as stopped.
+  //
+  // Gated on `isRunning` (inherited from AbstractAgent, set true at the top
+  // of `runAgent()`/`connectAgent()` before either awaits its way to
+  // subscribing us, and set back false once that run settles) so this only
+  // covers an abort that actually precedes an already-started run. Without
+  // that gate, an `abortRun()` with no controller yet -- including one that
+  // arrives after a previous run on this instance already finished -- would
+  // latch regardless, and silently stop the next, unrelated run before it
+  // even begins.
   private pendingAbort = false;
   constructor(private readonly stream: StreamRunner) {
     super({
@@ -375,7 +384,7 @@ export class KiteCodexAgent extends AbstractAgent {
   // process the same way `CodexRunner.stop()` does.
   abortRun() {
     if (this.controller) this.controller.abort();
-    else this.pendingAbort = true;
+    else if (this.isRunning) this.pendingAbort = true;
     super.abortRun();
   }
   run(input: RunAgentInput): Observable<BaseEvent> {

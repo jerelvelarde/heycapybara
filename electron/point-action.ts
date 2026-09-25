@@ -1,6 +1,10 @@
 import type { Rect } from "../server/screenshots";
 import { pointPrompt } from "../server/point-schema";
-import { throwIfCancelled, type ApprovalPrompt } from "./approval";
+import {
+  DECLINED_MESSAGE,
+  throwIfCancelled,
+  type ApprovalPrompt,
+} from "./approval";
 import {
   coversPoint,
   conceal,
@@ -29,7 +33,7 @@ export async function performPointAction(
   // Resolve before asking so the user isn't asked to approve a point that already can't land.
   const approved = deps.resolve();
   if (!(await deps.confirm(pointPrompt(label, approved.shot.label), signal)))
-    throw new Error("User declined action");
+    throw new Error(DECLINED_MESSAGE);
   throwIfCancelled(signal);
   // Resolve again: while the dialog is open, the display can change, or the
   // screenshot can expire or be evicted by newer captures.

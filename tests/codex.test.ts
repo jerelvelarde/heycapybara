@@ -171,10 +171,15 @@ test("abortRun() called before run() has subscribed still stops the run it prece
     runSignal = signal;
     yield { type: "turn.started" };
   });
-  // No run has started yet, so `this.controller` doesn't exist for
-  // `abortRun()` to reach. Without latching this request, it would be
-  // dropped on the floor, and the run started right below would complete
-  // normally instead of ending as stopped.
+  // In production, `runAgent()` (@ag-ui/client's AbstractAgent) sets
+  // `isRunning` true before it awaits its way to subscribing this agent's
+  // `run()`, so a `Stop` can race in during that gap with `this.controller`
+  // still unset. This test drives `run()` directly rather than through
+  // `runAgent()`, so it sets `isRunning` itself to reproduce that same gap.
+  // Without latching this request, it would be dropped on the floor, and
+  // the run started right below would complete normally instead of ending
+  // as stopped.
+  agent.isRunning = true;
   agent.abortRun();
   const events: { type: string; message?: string }[] = [];
   await new Promise<void>((resolve) =>
@@ -198,7 +203,7 @@ test("abortRun() called before run() has subscribed still stops the run it prece
   assert.equal(events[1]?.message, "Run stopped");
 });
 
-test("abortRun() before any run, or after one finishes, is a safe no-op", async () => {
+test("abortRun() before any run is a no-op, and after a run finishes doesn't stop a later run on the same instance", async () => {
   const { KiteCodexAgent } = await import("../server/codex-agent");
   const agent = new KiteCodexAgent(async function* () {
     yield {
@@ -212,6 +217,8 @@ test("abortRun() before any run, or after one finishes, is a safe no-op", async 
       },
     };
   });
+  // No run has ever started on this instance, so `isRunning` is still false
+  // and there's no controller either: nothing to latch.
   assert.doesNotThrow(() => agent.abortRun());
   await new Promise<void>((resolve) =>
     agent
@@ -226,7 +233,30 @@ test("abortRun() before any run, or after one finishes, is a safe no-op", async 
       })
       .subscribe({ complete: resolve }),
   );
+  // The bug this guards: an `abortRun()` that arrives after a run has
+  // already finished must not latch and silently stop the NEXT run on this
+  // same instance. Production clones a fresh agent per request, so this
+  // exact sequence is harmless today, but the semantics shouldn't depend on
+  // that.
   assert.doesNotThrow(() => agent.abortRun());
+  const events: { type: string; message?: string }[] = [];
+  await new Promise<void>((resolve) =>
+    agent
+      .run({
+        threadId: "t",
+        runId: "r",
+        messages: [],
+        tools: [],
+        context: [],
+        state: {},
+        forwardedProps: {},
+      })
+      .subscribe({ next: (e) => events.push(e), complete: resolve }),
+  );
+  assert.deepEqual(
+    events.map((e) => e.type),
+    ["RUN_STARTED", "RUN_FINISHED"],
+  );
 });
 
 test("Codex receives only allowlisted environment and isolated shell home", async () => {

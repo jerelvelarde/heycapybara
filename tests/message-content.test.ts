@@ -119,11 +119,11 @@ test("ipcErrorMessage strips Electron's remote-method prefix and the nested Erro
 
 test("ipcErrorMessage strips the prefix even without a nested Error label", () => {
   const error = new Error(
-    "Error invoking remote method 'kite:screenshot': Enable Screen Recording permission in Settings.",
+    "Error invoking remote method 'kite:screenshot': Allow Screen Recording for OpenMuse Desktop in System Settings > Privacy & Security > Screen & System Audio Recording, then quit and reopen OpenMuse Desktop.",
   );
   assert.equal(
     ipcErrorMessage(error, "Screenshot failed"),
-    "Enable Screen Recording permission in Settings.",
+    "Allow Screen Recording for OpenMuse Desktop in System Settings > Privacy & Security > Screen & System Audio Recording, then quit and reopen OpenMuse Desktop.",
   );
 });
 
