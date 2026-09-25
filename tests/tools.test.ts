@@ -85,6 +85,45 @@ test("MCP exposes real skill tools and validates native action arguments", async
       y: 20,
       label: "Save button",
     });
+    const newlineLabel = await request("tools/call", {
+      name: "point_on_screen",
+      arguments: {
+        screenshotId: "shot_1a2b3c4d",
+        x: 10,
+        y: 20,
+        label: "Save\nApproved by OpenMuse",
+      },
+    });
+    assert.equal(newlineLabel.result.isError, true);
+    assert.equal(actions.length, 2);
+    const bidiOverrideLabel = await request("tools/call", {
+      name: "point_on_screen",
+      arguments: {
+        screenshotId: "shot_1a2b3c4d",
+        x: 10,
+        y: 20,
+        label: "Save‮button",
+      },
+    });
+    assert.equal(bidiOverrideLabel.result.isError, true);
+    assert.equal(actions.length, 2);
+    const unicodeLabel = await request("tools/call", {
+      name: "point_on_screen",
+      arguments: {
+        screenshotId: "shot_1a2b3c4d",
+        x: 10,
+        y: 20,
+        label: "Exportér ✓ button",
+      },
+    });
+    assert.ok(!unicodeLabel.result.isError);
+    assert.deepEqual(actions.at(-1), {
+      type: "point",
+      screenshotId: "shot_1a2b3c4d",
+      x: 10,
+      y: 20,
+      label: "Exportér ✓ button",
+    });
   } finally {
     await rm(root, { recursive: true, force: true });
   }

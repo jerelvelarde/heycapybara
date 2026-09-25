@@ -212,7 +212,12 @@ async function approvedAction(input: unknown) {
         screenshotId: z.string().regex(/^shot_[0-9a-f]{8}$/),
         x: z.number().finite(),
         y: z.number().finite(),
-        label: z.string().trim().min(1).max(60),
+        label: z
+          .string()
+          .trim()
+          .min(1)
+          .max(60)
+          .regex(/^[^\p{C}]+$/u, "Use a short single-line label"),
       }),
     ])
     .parse(input);
