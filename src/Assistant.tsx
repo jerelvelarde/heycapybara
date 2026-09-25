@@ -10,6 +10,7 @@ import {
   X,
 } from "lucide-react";
 import { validateSkillMarkdown } from "./skill-format";
+import { userContent } from "./message-content";
 import type { ScreenshotAttachment, Settings } from "./types";
 export type AgentRequest = {
   id: string;
@@ -116,17 +117,7 @@ export function Assistant({
     agent.addMessage({
       id: messageId,
       role: "user",
-      content: image
-        ? [
-            { type: "text", text: prompt },
-            {
-              type: "binary",
-              mimeType: "image/png",
-              data: image.dataUrl.split(",")[1],
-              id: image.id,
-            },
-          ]
-        : prompt,
+      content: userContent(prompt, image),
     });
     setInput("");
     setImage(null);
@@ -233,6 +224,7 @@ export function Assistant({
           onClick={() => {
             agent.threadId = crypto.randomUUID();
             agent.setMessages([]);
+            setImage(null);
             setError("");
             setActivities([]);
           }}
