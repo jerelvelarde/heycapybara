@@ -9,7 +9,8 @@ import {
 import type { CopilotKitIntelligence } from "@copilotkit/runtime/v2";
 import { z } from "zod";
 import type { Store } from "../electron/store";
-import type { DesktopAction } from "../src/types";
+import type { DesktopAction, DesktopActionResult } from "../src/types";
+import type { AgentRun } from "./run-registry";
 import { safeAgentError } from "./codex-agent";
 import {
   bundleIdSchema,
@@ -17,11 +18,20 @@ import {
   screenshotIdSchema,
 } from "./point-schema";
 
+// `signal` aborts when this one tool call is cancelled (Codex dropped its
+// request); `run.signal` when the whole run ends. A control grant lasts for
+// the run (electron/control-grant.ts).
+export type DesktopActionHandler = (
+  action: DesktopAction,
+  signal: AbortSignal,
+  run: AgentRun,
+) => Promise<DesktopActionResult | void>;
+
 export function createToolHandler(options: {
   store: Store;
   intelligence?: CopilotKitIntelligence;
   containerId: string;
-  action?: (action: DesktopAction, signal: AbortSignal) => Promise<void>;
+  action?: DesktopActionHandler;
 }) {
   const registry = options.intelligence
     ? new SkillRegistry({
@@ -30,7 +40,7 @@ export function createToolHandler(options: {
         requestTimeoutMs: 15000,
       })
     : undefined;
-  return async (request: Request) => {
+  return async (request: Request, run: AgentRun) => {
     const server = new McpServer({ name: "kite", version: "0.2.0" });
     const result = (text: string) => ({
       content: [{ type: "text" as const, text }],
@@ -110,7 +120,11 @@ export function createToolHandler(options: {
       },
       async ({ bundleId }) => {
         if (!options.action) throw new Error("Desktop actions unavailable");
-        await options.action({ type: "open-app", bundleId }, request.signal);
+        await options.action(
+          { type: "open-app", bundleId },
+          request.signal,
+          run,
+        );
         return result("Application opened after user approval");
       },
     );
@@ -133,6 +147,7 @@ export function createToolHandler(options: {
         await options.action(
           { type: "point", screenshotId, x, y, label },
           request.signal,
+          run,
         );
         return result("Pointer displayed after user approval");
       },

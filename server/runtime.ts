@@ -8,8 +8,7 @@ import {
 import { mkdir, readFile, writeFile, realpath, stat } from "node:fs/promises";
 import { join } from "node:path";
 import { CodexRunner, KiteCodexAgent } from "./codex-agent";
-import { createToolHandler } from "./tools";
-import type { DesktopAction } from "../src/types";
+import { createToolHandler, type DesktopActionHandler } from "./tools";
 import type { Store } from "../electron/store";
 import type { ScreenshotLookup } from "./screenshots";
 import { runtimeConfig } from "./config";
@@ -21,7 +20,7 @@ export async function startRuntime(
   options: {
     statePath?: string;
     binaryPath?: string;
-    action?: (action: DesktopAction, signal: AbortSignal) => Promise<void>;
+    action?: DesktopActionHandler;
     // Required: see CodexRunnerOptions in server/codex-agent.ts for why a
     // real registry must always be supplied here.
     screenshots: ScreenshotLookup;
@@ -99,9 +98,9 @@ export async function startRuntime(
       if (new URL(request.url).pathname === "/mcp") {
         // Only a token held by a run that is still going passes
         // (server/run-registry.ts).
-        if (!runs.authorize(request))
-          return new Response("Unauthorized", { status: 401 });
-        return toolHandler(request);
+        const run = runs.authorize(request);
+        if (!run) return new Response("Unauthorized", { status: 401 });
+        return toolHandler(request, run);
       }
       const origin = request.headers.get("origin");
       const cors = {

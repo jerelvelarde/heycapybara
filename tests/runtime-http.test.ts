@@ -9,6 +9,7 @@ import { setTimeout as sleep } from "node:timers/promises";
 import { Store } from "../electron/store";
 import type { startRuntime } from "../server/runtime";
 import { ScreenshotRegistry } from "../server/screenshots";
+import type { AgentRun } from "../server/run-registry";
 
 // Isolates this test from whatever the shell environment happens to export:
 // a stray KITE_MODEL or CPK_INTELLIGENCE_* value would otherwise change
@@ -199,12 +200,14 @@ test("dropping the client connection while point_on_screen's action is pending a
 
     const screenshots = new ScreenshotRegistry();
     let seenSignal: AbortSignal | undefined;
+    let seenRun: AgentRun | undefined;
     runtime = await runtimeModule.startRuntime(store, {
       statePath: join(root, "agent"),
       binaryPath,
       screenshots,
-      action: async (_action, signal) => {
+      action: async (_action, signal, run) => {
         seenSignal = signal;
+        seenRun = run;
         await new Promise<void>((resolve) => {
           signal.addEventListener("abort", () => resolve(), { once: true });
         });
@@ -279,6 +282,13 @@ test("dropping the client connection while point_on_screen's action is pending a
     req.destroy();
 
     await waitFor(() => seenSignal?.aborted === true, { timeoutMs: 2_000 });
+    // Dropping one call cancels that call, not the run it belongs to.
+    assert.equal(seenRun?.signal.aborted, false);
+    // Closing the runtime stops every run, and each run's signal with it.
+    const closing = runtime;
+    runtime = undefined;
+    closing.close();
+    assert.equal(seenRun?.signal.aborted, true);
   } finally {
     mcpRequest?.destroy();
     for (const key of ENV_KEYS) {

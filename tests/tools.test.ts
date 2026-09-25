@@ -4,10 +4,15 @@ import { mkdtemp, rm, readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Store } from "../electron/store";
-import { createToolHandler } from "../server/tools";
+import { createToolHandler, type DesktopActionHandler } from "../server/tools";
+import type { AgentRun } from "../server/run-registry";
 import type { DesktopAction } from "../src/types";
 
-type Handler = (request: Request) => Promise<Response>;
+type Handler = (request: Request, run: AgentRun) => Promise<Response>;
+
+// A run that never ends, for calls whose run doesn't matter to the test.
+const liveRun = (id = "run-test"): AgentRun =>
+  Object.freeze({ id, signal: new AbortController().signal });
 
 // A promise this test controls the settling of, so an action fake can pause
 // mid-call until the test says to continue - used to keep a tool call
@@ -26,7 +31,7 @@ function deferred(): { promise: Promise<void>; resolve: () => void } {
 // pollutes another.
 async function withHandler(
   options: {
-    action?: (action: DesktopAction, signal: AbortSignal) => Promise<void>;
+    action?: DesktopActionHandler;
   },
   run: (handler: Handler) => Promise<void>,
 ): Promise<void> {
@@ -52,8 +57,9 @@ async function requestTo(
   handler: Handler,
   method: string,
   params: unknown,
-  init: { signal?: AbortSignal } = {},
+  init: { signal?: AbortSignal; run?: AgentRun } = {},
 ) {
+  const { run = liveRun(), ...requestInit } = init;
   const response = await handler(
     new Request("http://127.0.0.1/mcp", {
       method: "POST",
@@ -62,8 +68,9 @@ async function requestTo(
         Accept: "application/json, text/event-stream",
       },
       body: JSON.stringify({ jsonrpc: "2.0", id: 1, method, params }),
-      ...init,
+      ...requestInit,
     }),
+    run,
   );
   assert.equal(response.status, 200);
   return response.json();
@@ -597,6 +604,41 @@ test("open_application's bundle-id length boundary: 255 characters passes, 256 i
       });
       assert.equal(rejected.result.isError, true);
       assert.equal(actions.length, 1);
+    },
+  );
+});
+
+test("open_application and point_on_screen hand the action the run the call came from", async () => {
+  const seen: AgentRun[] = [];
+  await withHandler(
+    {
+      action: async (_action, _signal, run) => {
+        seen.push(run);
+      },
+    },
+    async (handler) => {
+      const run = liveRun("run-a");
+      await requestTo(
+        handler,
+        "tools/call",
+        {
+          name: "open_application",
+          arguments: { bundleId: "com.apple.TextEdit" },
+        },
+        { run },
+      );
+      await requestTo(
+        handler,
+        "tools/call",
+        {
+          name: "point_on_screen",
+          arguments: { ...validPoint, label: "Save button" },
+        },
+        { run },
+      );
+      assert.equal(seen.length, 2);
+      assert.equal(seen[0], run);
+      assert.equal(seen[1], run);
     },
   );
 });
