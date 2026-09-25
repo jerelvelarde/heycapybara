@@ -1,6 +1,6 @@
 # Notch onboarding proposal
 
-Status: proposed; new flow awaiting user approval. Original tan mascot replacement is explicitly requested and independent.
+Status: superseded on September 24, 2026 by `2026-09-24-clean-onboarding-design.md`. An opt-in version of this flow was implemented on `jerel/kite-os-learning` (PR #1) and is removed by the clean onboarding change. Kept for history.
 
 ## Observations
 
