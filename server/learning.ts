@@ -277,3 +277,20 @@ export function settleAfter(
     }
   };
 }
+
+/**
+ * The page to open for the current skills-path step. The link came from
+ * Intelligence and was already checked against its web-app origin by
+ * parseInspectorLearningSnapshotV1, which allows plain HTTP only on
+ * loopback. The desktop app opens HTTPS only.
+ */
+export function safeLearningUrl(status: LearningStatus): string {
+  if (!status.link)
+    throw new Error("There is no Intelligence page to open for this step.");
+  const url = new URL(status.link.url);
+  if (url.protocol !== "https:")
+    throw new Error(
+      `Refusing to open ${url.origin}: Intelligence links must use HTTPS.`,
+    );
+  return url.toString();
+}

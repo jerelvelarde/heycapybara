@@ -6,6 +6,7 @@ import {
   createLearningReader,
   describeLearning,
   learningError,
+  safeLearningUrl,
   settleAfter,
 } from "../server/learning";
 import {
@@ -360,4 +361,25 @@ test("a throwing settle callback never replaces the run's own outcome", async ()
   ))
     events.push(event);
   assert.equal(events.length, 1);
+});
+
+test("only an HTTPS link in the current status can be opened", () => {
+  const base = describeLearning(
+    learningRead({ pendingThreadCount: 1 }),
+    none,
+    now,
+  );
+  assert.equal(safeLearningUrl(base), `${WEB}/learning/runs`);
+  assert.throws(
+    () => safeLearningUrl({ ...base, link: null }),
+    /There is no Intelligence page to open for this step\./,
+  );
+  assert.throws(
+    () =>
+      safeLearningUrl({
+        ...base,
+        link: { kind: "runs", url: "http://localhost:3000/learning/runs" },
+      }),
+    /Refusing to open http:\/\/localhost:3000: Intelligence links must use HTTPS\./,
+  );
 });
