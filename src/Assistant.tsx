@@ -10,7 +10,7 @@ import {
   X,
 } from "lucide-react";
 import { validateSkillMarkdown } from "./skill-format";
-import { userContent } from "./message-content";
+import { ipcErrorMessage, userContent } from "./message-content";
 import type { ScreenshotAttachment, Settings } from "./types";
 export type AgentRequest = {
   id: string;
@@ -46,6 +46,10 @@ export function Assistant({
   const handled = useRef("");
   const bottom = useRef<HTMLDivElement>(null);
   const busyRef = useRef(false);
+  // Bumped whenever the composer moves on from the attachment a capture was
+  // started for (new conversation, or a message sent) so a screenshot that
+  // resolves late never lands on the wrong message.
+  const attachmentEpoch = useRef(0);
   useEffect(() => {
     if (!newConversationSignal) return;
     agent.threadId = crypto.randomUUID();
@@ -55,6 +59,7 @@ export function Assistant({
     setError("");
     setActivities([]);
     setPhase("");
+    attachmentEpoch.current += 1;
   }, [newConversationSignal]);
   useEffect(() => {
     const subscription = agent.subscribe({
@@ -129,6 +134,7 @@ export function Assistant({
       role: "user",
       content,
     });
+    attachmentEpoch.current += 1;
     setInput("");
     setImage(null);
     let finished = false;
@@ -237,6 +243,7 @@ export function Assistant({
             setImage(null);
             setError("");
             setActivities([]);
+            attachmentEpoch.current += 1;
           }}
         >
           <Plus size={18} />
@@ -353,15 +360,20 @@ export function Assistant({
             type="button"
             title="Attach a screenshot of your primary screen"
             disabled={busy}
-            onClick={() =>
+            onClick={() => {
+              const epoch = attachmentEpoch.current;
               void window
                 .kite!.screenshot()
                 .then((shot) => {
+                  if (attachmentEpoch.current !== epoch) return;
                   setError("");
                   setImage(shot);
                 })
-                .catch((e) => setError(e.message))
-            }
+                .catch((e) => {
+                  if (attachmentEpoch.current !== epoch) return;
+                  setError(ipcErrorMessage(e, "Screenshot failed"));
+                });
+            }}
           >
             <Camera size={17} />
           </button>

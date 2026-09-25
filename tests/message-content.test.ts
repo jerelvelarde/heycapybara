@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { RunAgentInputSchema } from "@ag-ui/core";
-import { userContent } from "../src/message-content";
+import { ipcErrorMessage, userContent } from "../src/message-content";
 import type { ScreenshotAttachment } from "../src/types";
 
 const image: ScreenshotAttachment = {
@@ -66,4 +66,43 @@ test("AG-UI's own schema keeps the screenshot id on the parsed binary part", () 
   assert.ok(Array.isArray(message.content));
   const content = message.content as Array<{ id?: string }>;
   assert.equal(content[1].id, "shot_1a2b3c4d");
+});
+
+test("ipcErrorMessage strips Electron's remote-method prefix and the nested Error label", () => {
+  const error = new Error(
+    "Error invoking remote method 'kite:screenshot': Error: Couldn't find a screen source for Main display. Try again, or reconnect the display.",
+  );
+  assert.equal(
+    ipcErrorMessage(error, "Screenshot failed"),
+    "Couldn't find a screen source for Main display. Try again, or reconnect the display.",
+  );
+});
+
+test("ipcErrorMessage strips the prefix even without a nested Error label", () => {
+  const error = new Error(
+    "Error invoking remote method 'kite:screenshot': Enable Screen Recording permission in Settings.",
+  );
+  assert.equal(
+    ipcErrorMessage(error, "Screenshot failed"),
+    "Enable Screen Recording permission in Settings.",
+  );
+});
+
+test("ipcErrorMessage leaves an unprefixed message unchanged", () => {
+  const error = new Error("The display changed during the capture. Try again.");
+  assert.equal(
+    ipcErrorMessage(error, "Screenshot failed"),
+    "The display changed during the capture. Try again.",
+  );
+});
+
+test("ipcErrorMessage falls back for a non-Error value", () => {
+  assert.equal(
+    ipcErrorMessage("boom", "Screenshot failed"),
+    "Screenshot failed",
+  );
+  assert.equal(
+    ipcErrorMessage(undefined, "Screenshot failed"),
+    "Screenshot failed",
+  );
 });
