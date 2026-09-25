@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { EventType, type BaseEvent } from "@ag-ui/core";
-import type { ThreadEvent } from "@openai/codex-sdk";
+import type { McpToolCallItem, ThreadEvent } from "@openai/codex-sdk";
 
 /**
  * An event OpenMuse's own runner emits next to Codex's, before a turn starts
@@ -11,6 +11,53 @@ export type KiteNotice = {
   name: string;
   value: Record<string, unknown>;
 };
+
+// MCP servers whose calls are OpenMuse's own steps: the kite tools, and
+// Intelligence's knowledge-base tool through OpenMuse's proxy.
+const OPENMUSE_SERVERS = new Set(["kite", "intelligence"]);
+
+// A finished call to one of those servers becomes an AG-UI tool call. The
+// step then persists in the Intelligence thread that learning reads, and it
+// shows as a chip in chat. Only the tool's name and status are kept: MCP
+// arguments and results never reach the thread (the Rich Threads rule on
+// jerel/kite-os-learning). The result is included so CopilotKit never tries
+// to run it as a frontend tool.
+function openMuseToolCall(item: McpToolCallItem): BaseEvent[] {
+  const toolCallId = randomUUID();
+  return [
+    { type: EventType.TOOL_CALL_START, toolCallId, toolCallName: item.tool },
+    { type: EventType.TOOL_CALL_ARGS, toolCallId, delta: "{}" },
+    { type: EventType.TOOL_CALL_END, toolCallId },
+    {
+      type: EventType.TOOL_CALL_RESULT,
+      messageId: randomUUID(),
+      toolCallId,
+      role: "tool",
+      content: JSON.stringify({ status: item.status }),
+    },
+  ] as BaseEvent[];
+}
+
+// The one argument read back out of a call: which learned skill the agent
+// loaded, so chat can say so. The name is Intelligence's own, not user data.
+function learnedSkillLoaded(item: McpToolCallItem): BaseEvent[] {
+  const args = item.arguments as { name?: unknown } | null | undefined;
+  const name = typeof args?.name === "string" ? args.name : undefined;
+  if (
+    item.server !== "kite" ||
+    item.tool !== "load_learned_skill" ||
+    item.status !== "completed" ||
+    !name
+  )
+    return [];
+  return [
+    {
+      type: EventType.CUSTOM,
+      name: "kite.learned-skill",
+      value: { name: name.slice(0, 128) },
+    } as BaseEvent,
+  ];
+}
 
 export function codexEvents(event: ThreadEvent | KiteNotice): BaseEvent[] {
   if (event.type === "kite.notice")
@@ -58,15 +105,20 @@ export function codexEvents(event: ThreadEvent | KiteNotice): BaseEvent[] {
                   .map((i) => `${i.completed ? "✓" : "○"} ${i.text}`)
                   .join("\n")
               : item.message;
-  return [
-    {
-      type: EventType.CUSTOM,
-      name: "kite.activity",
-      value: {
-        id: item.id,
-        summary: summary.slice(0, 2000),
-        status: event.type,
-      },
+  const activity = {
+    type: EventType.CUSTOM,
+    name: "kite.activity",
+    value: {
+      id: item.id,
+      summary: summary.slice(0, 2000),
+      status: event.type,
     },
-  ];
+  } as BaseEvent;
+  if (
+    item.type === "mcp_tool_call" &&
+    OPENMUSE_SERVERS.has(item.server) &&
+    event.type === "item.completed"
+  )
+    return [...openMuseToolCall(item), ...learnedSkillLoaded(item), activity];
+  return [activity];
 }

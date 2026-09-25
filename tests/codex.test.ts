@@ -2233,3 +2233,128 @@ test("Codex reaches Intelligence's knowledge base only through OpenMuse's proxy"
     await rm(root, { recursive: true, force: true });
   }
 });
+
+// A finished call to an MCP tool Codex reached through OpenMuse.
+function mcpToolCall(
+  tool: string,
+  args: unknown,
+  status: "completed" | "failed" = "completed",
+  server = "kite",
+) {
+  return {
+    type: "item.completed" as const,
+    item: {
+      id: "call-1",
+      type: "mcp_tool_call" as const,
+      server,
+      tool,
+      arguments: args,
+      status,
+    },
+  };
+}
+
+test("a finished kite tool call is kept as an AG-UI tool call with no arguments", () => {
+  const events = codexEvents(
+    mcpToolCall("open_application", {
+      bundleId: "com.google.Chrome",
+      note: "private text",
+    }),
+  );
+  assert.deepEqual(
+    events.map((e) => e.type),
+    [
+      "TOOL_CALL_START",
+      "TOOL_CALL_ARGS",
+      "TOOL_CALL_END",
+      "TOOL_CALL_RESULT",
+      "CUSTOM",
+    ],
+  );
+  const [start, args, , result] = events as {
+    toolCallName?: string;
+    delta?: string;
+    content?: string;
+  }[];
+  assert.equal(start.toolCallName, "open_application");
+  assert.equal(args.delta, "{}");
+  assert.equal(result.content, '{"status":"completed"}');
+  assert.ok(!JSON.stringify(events).includes("com.google.Chrome"));
+  assert.ok(!JSON.stringify(events).includes("private text"));
+});
+
+test("a knowledge-base read is kept by name only; other servers and unfinished calls are not", () => {
+  const read = codexEvents(
+    mcpToolCall(
+      "copilotkit_knowledge_base_shell",
+      { command: "cat /project/gmail-spam.md" },
+      "completed",
+      "intelligence",
+    ),
+  );
+  assert.equal(
+    (read[0] as { toolCallName?: string }).toolCallName,
+    "copilotkit_knowledge_base_shell",
+  );
+  assert.ok(!JSON.stringify(read).includes("gmail-spam.md"));
+  assert.deepEqual(
+    codexEvents(mcpToolCall("search", { q: "x" }, "completed", "other")).map(
+      (e) => e.type,
+    ),
+    ["CUSTOM"],
+  );
+  assert.deepEqual(
+    codexEvents({
+      ...mcpToolCall("open_application", {}),
+      type: "item.started" as const,
+    }).map((e) => e.type),
+    ["CUSTOM"],
+  );
+});
+
+test("loading a learned skill announces its name; a failed load does not", () => {
+  const loaded = codexEvents(
+    mcpToolCall("load_learned_skill", { name: "gmail-spam-triage" }),
+  );
+  const announced = loaded.find(
+    (e) => (e as { name?: string }).name === "kite.learned-skill",
+  ) as { value?: { name?: string } } | undefined;
+  assert.equal(announced?.value?.name, "gmail-spam-triage");
+  const failed = codexEvents(
+    mcpToolCall("load_learned_skill", { name: "gmail-spam-triage" }, "failed"),
+  );
+  assert.ok(
+    !failed.some((e) => (e as { name?: string }).name === "kite.learned-skill"),
+  );
+  assert.equal(
+    (failed[3] as { content?: string }).content,
+    '{"status":"failed"}',
+  );
+});
+
+test("a kite tool call passes the AG-UI pipeline as a tool call with its result", async () => {
+  const { KiteCodexAgent } = await import("../server/codex-agent");
+  const agent = new KiteCodexAgent(async function* () {
+    yield mcpToolCall("open_application", { bundleId: "com.google.Chrome" });
+    yield {
+      type: "turn.completed",
+      usage: {
+        input_tokens: 0,
+        cached_input_tokens: 0,
+        cache_write_input_tokens: 0,
+        output_tokens: 0,
+        reasoning_output_tokens: 0,
+      },
+    };
+  });
+  agent.addMessage({ id: "m", role: "user", content: "Open Chrome" });
+  await agent.runAgent();
+  const call = agent.messages
+    .flatMap((m) => ("toolCalls" in m && m.toolCalls ? m.toolCalls : []))
+    .find((c) => c.function.name === "open_application");
+  assert.ok(call, "the assistant message carries the tool call");
+  assert.ok(
+    agent.messages.some((m) => m.role === "tool" && m.toolCallId === call.id),
+    "the tool call has its result",
+  );
+});
