@@ -5,6 +5,7 @@ import {
   openLabel,
   lessonMemory,
   teachingAnnotation,
+  buddyLearningBadge,
 } from "../src/learning-view";
 import type { LearningStatus } from "../src/types";
 
@@ -178,4 +179,13 @@ test("the saved lesson says how the task was done, in order, and what came of it
     { role: "assistant", content: "r".repeat(9000) },
   ]);
   assert.ok(long.length <= 4000);
+});
+
+test("the pet shows busy while analyzing, attention when a person is needed, and anything new", () => {
+  assert.equal(buddyLearningBadge(status({ phase: "analyzing" })), "busy");
+  assert.equal(buddyLearningBadge(status({ phase: "waiting" })), "attention");
+  assert.equal(buddyLearningBadge(status({ phase: "review" })), "attention");
+  assert.equal(buddyLearningBadge(status({ phase: "learned" })), "new");
+  for (const phase of ["off", "idle", "setup", "error"] as const)
+    assert.equal(buddyLearningBadge(status({ phase })), null);
 });

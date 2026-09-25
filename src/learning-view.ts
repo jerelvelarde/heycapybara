@@ -135,3 +135,14 @@ export function lessonMemory(messages: readonly ChatMessage[]) {
     );
   return lines.join("\n").slice(0, 4000);
 }
+
+/** The dot on the floating pet: learning, needs you, or something new. */
+export function buddyLearningBadge(
+  status: LearningStatus,
+): "busy" | "attention" | "new" | null {
+  if (status.phase === "analyzing") return "busy";
+  if (status.phase === "waiting" || status.phase === "review")
+    return "attention";
+  if (status.phase === "learned") return "new";
+  return null;
+}
