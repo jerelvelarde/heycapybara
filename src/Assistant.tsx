@@ -1,7 +1,12 @@
 import { useEffect, useRef, useState } from "react";
-import { useAgent, useCopilotKit } from "@copilotkit/react-core/v2";
+import {
+  useAgent,
+  useCopilotKit,
+  useLearnFromUserAction,
+} from "@copilotkit/react-core/v2";
 import {
   ArrowUp,
+  BookOpen,
   Camera,
   LoaderCircle,
   Plus,
@@ -12,11 +17,14 @@ import {
 import { validateSkillMarkdown } from "./skill-format";
 import {
   createEpoch,
+  displayText,
   ipcErrorMessage,
   requestAttachment,
   userContent,
 } from "./message-content";
-import type { ScreenshotAttachment, Settings } from "./types";
+import { LearningStrip } from "./LearningStrip";
+import { lessonMemory, teachingAnnotation } from "./learning-view";
+import type { LearningStatus, ScreenshotAttachment, Settings } from "./types";
 export type AgentRequest = {
   id: string;
   prompt: string;
@@ -29,6 +37,7 @@ export function Assistant({
   onDone,
   onBusy,
   newConversationSignal = 0,
+  learning,
 }: {
   settings: Settings;
   request: AgentRequest | null;
@@ -36,9 +45,20 @@ export function Assistant({
   onDone: () => void;
   onBusy: (busy: boolean) => void;
   newConversationSignal?: number;
+  learning?: LearningStatus;
 }) {
   const { agent, isReady } = useAgent();
   const { copilotkit } = useCopilotKit();
+  // The user's "that worked" goes to Intelligence as a user_action
+  // (POST {runtimeUrl}/annotate -> PUT /connector/annotate/:id), and the
+  // lesson itself goes to Intelligence Memory through the main process. The
+  // Intelligence key stays in the runtime.
+  const learnFromUserAction = useLearnFromUserAction();
+  const [lesson, setLesson] = useState<
+    "none" | "offered" | "preview" | "sending" | "sent"
+  >("none");
+  // The exact lesson text shown for approval; Save sends this, not a rebuild.
+  const [lessonText, setLessonText] = useState("");
   const [input, setInput] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
@@ -47,6 +67,9 @@ export function Assistant({
   const [activities, setActivities] = useState<
     { id: string; summary: string }[]
   >([]);
+  // What the agent used from Intelligence in this conversation.
+  const [usedSkills, setUsedSkills] = useState<string[]>([]);
+  const [recalled, setRecalled] = useState<string[]>([]);
   const cancelled = useRef(false);
   const handled = useRef("");
   const bottom = useRef<HTMLDivElement>(null);
@@ -64,20 +87,44 @@ export function Assistant({
   // resolves late never lands on the wrong message - and its error is
   // dropped too.
   const attachmentEpoch = useRef(createEpoch());
-  useEffect(() => {
-    if (!newConversationSignal) return;
+  function resetConversation() {
     agent.threadId = crypto.randomUUID();
     agent.setMessages([]);
-    setInput("");
     setImage(null);
     showError("");
     setActivities([]);
-    setPhase("");
+    setUsedSkills([]);
+    setRecalled([]);
+    setLesson("none");
     attachmentEpoch.current.advance();
+  }
+  useEffect(() => {
+    if (!newConversationSignal) return;
+    resetConversation();
+    setInput("");
+    setPhase("");
   }, [newConversationSignal]);
   useEffect(() => {
     const subscription = agent.subscribe({
       onCustomEvent: ({ event }) => {
+        if (event.name === "kite.learned-skill") {
+          const name = event.value?.name;
+          if (typeof name === "string")
+            setUsedSkills((previous) =>
+              previous.includes(name) ? previous : [...previous, name],
+            );
+          return;
+        }
+        if (event.name === "kite.memory-recalled") {
+          const previews = event.value?.previews;
+          if (Array.isArray(previews))
+            setRecalled(
+              previews.filter(
+                (preview): preview is string => typeof preview === "string",
+              ),
+            );
+          return;
+        }
         if (
           event.name !== "kite.activity" ||
           typeof event.value?.summary !== "string"
@@ -137,6 +184,7 @@ export function Assistant({
     onBusy(true);
     showError("");
     setActivities([]);
+    setLesson("none");
     if (fresh) {
       agent.threadId = crypto.randomUUID();
       agent.setMessages([]);
@@ -208,7 +256,7 @@ export function Assistant({
           .replace(/\n```\s*$/, "");
         validateSkillMarkdown(markdown);
         onDraft(markdown);
-      }
+      } else if (settings.intelligenceConfigured) setLesson("offered");
     } catch (e) {
       showError(e instanceof Error ? e.message : "Agent request failed");
     } finally {
@@ -218,6 +266,47 @@ export function Assistant({
       onBusy(false);
       setPhase("");
       onDone();
+    }
+  }
+  // "Learn from this" only shows what would be saved; Save sends it.
+  function previewLesson() {
+    try {
+      setLessonText(lessonMemory(agent.messages));
+    } catch (e) {
+      showError(e instanceof Error ? e.message : String(e));
+      return;
+    }
+    setLesson("preview");
+  }
+  async function teach() {
+    setLesson("sending");
+    try {
+      await window.kite!.saveLesson({
+        threadId: agent.threadId,
+        content: lessonText,
+      });
+    } catch (e) {
+      setLesson("preview");
+      showError(
+        ipcErrorMessage(e, "Could not save this lesson to Intelligence"),
+      );
+      return;
+    }
+    setLesson("sent");
+    try {
+      await learnFromUserAction(
+        teachingAnnotation(agent.messages, agent.threadId),
+      );
+    } catch (e) {
+      showError(
+        "Saved to Intelligence Memory, but the note for Intelligence's own learning failed: " +
+          (e instanceof Error ? e.message : String(e)),
+      );
+    }
+    try {
+      await window.kite!.watchLearning();
+    } catch (e) {
+      showError(ipcErrorMessage(e, "Could not check Intelligence learning"));
     }
   }
   useEffect(() => {
@@ -251,14 +340,7 @@ export function Assistant({
           title="New conversation"
           className="icon-button"
           disabled={busy}
-          onClick={() => {
-            agent.threadId = crypto.randomUUID();
-            agent.setMessages([]);
-            setImage(null);
-            showError("");
-            setActivities([]);
-            attachmentEpoch.current.advance();
-          }}
+          onClick={resetConversation}
         >
           <Plus size={18} />
         </button>
@@ -296,27 +378,36 @@ export function Assistant({
         ) : (
           agent.messages
             .filter((m) => m.role === "user" || m.role === "assistant")
-            .map((m) => (
-              <div key={m.id} className={"message " + m.role}>
-                <small>{m.role === "user" ? "YOU" : "OPENMUSE"}</small>
-                <p>
-                  {typeof m.content === "string"
-                    ? m.content.length > 2400 && m.role === "user"
-                      ? m.content.slice(0, 240) +
-                        "\n[Reviewed recording attached]"
-                      : m.content
-                    : "Screen context attached"}
-                </p>
-                {m.role === "assistant" &&
-                  "toolCalls" in m &&
-                  m.toolCalls?.map((t) => (
-                    <span className="tool-chip" key={t.id}>
-                      {t.function.name}
-                    </span>
-                  ))}
-              </div>
-            ))
+            .map((m) => {
+              const text = displayText(m);
+              return (
+                <div key={m.id} className={"message " + m.role}>
+                  <small>{m.role === "user" ? "YOU" : "OPENMUSE"}</small>
+                  {text !== null && <p>{text}</p>}
+                  {m.role === "assistant" &&
+                    "toolCalls" in m &&
+                    m.toolCalls?.map((t) => (
+                      <span className="tool-chip" key={t.id}>
+                        {t.function.name}
+                      </span>
+                    ))}
+                </div>
+              );
+            })
         )}
+        {learning && recalled.length > 0 && (
+          <div className="learned-skill-chip">
+            <Sparkles size={12} /> Recalled from Intelligence Memory:{" "}
+            {recalled[0]}
+            {recalled.length > 1 ? ` (+${recalled.length - 1} more)` : ""}
+          </div>
+        )}
+        {learning &&
+          usedSkills.map((name) => (
+            <div className="learned-skill-chip" key={name}>
+              <BookOpen size={12} /> Using learned skill: {name}
+            </div>
+          ))}
         {activities.length > 0 && (
           <details className="agent-activity" open={busy}>
             <summary>Agent activity · {activities.length}</summary>
@@ -324,6 +415,52 @@ export function Assistant({
               <p key={item.id}>{item.summary}</p>
             ))}
           </details>
+        )}
+        {lesson !== "none" && !busy && (
+          <div
+            className={
+              lesson === "preview" || lesson === "sending"
+                ? "lesson-offer lesson-preview"
+                : "lesson-offer"
+            }
+          >
+            {lesson === "sent" ? (
+              "Saved to Intelligence Memory. New conversations will recall it."
+            ) : lesson === "offered" ? (
+              <>
+                Did that work?
+                <button type="button" onClick={previewLesson}>
+                  Learn from this
+                </button>
+              </>
+            ) : (
+              <>
+                This is what will be saved to Intelligence Memory:
+                <textarea
+                  readOnly
+                  value={lessonText}
+                  rows={5}
+                  aria-label="Lesson to save"
+                />
+                <div className="lesson-actions">
+                  <button
+                    type="button"
+                    disabled={lesson === "sending"}
+                    onClick={() => void teach()}
+                  >
+                    {lesson === "sending" ? "Saving…" : "Save"}
+                  </button>
+                  <button
+                    type="button"
+                    disabled={lesson === "sending"}
+                    onClick={() => setLesson("offered")}
+                  >
+                    Cancel
+                  </button>
+                </div>
+              </>
+            )}
+          </div>
         )}
         {busy && (
           <div className="thinking">
@@ -334,6 +471,13 @@ export function Assistant({
         {error && <div className="inline-error">{error}</div>}
         <div ref={bottom} />
       </div>
+      {learning && (
+        <LearningStrip
+          status={learning}
+          onTry={resetConversation}
+          onError={(message) => showError(message)}
+        />
+      )}
       <form
         className="composer"
         onSubmit={(e) => {

@@ -74,6 +74,8 @@ import {
 import { desktopActionSchema } from "../server/computer-schema";
 import type { AgentRun } from "../server/run-registry";
 import { startRuntime } from "../server/runtime";
+import { safeLearningUrl } from "../server/learning";
+import { LearningWatcher } from "./learning-watcher";
 import { ScreenshotRegistry, resolvePoint } from "../server/screenshots";
 import type {
   CompanionTrayMode,
@@ -203,14 +205,16 @@ let recorder: ChildProcessWithoutNullStreams | null = null;
 let store: Store;
 let settings: Settings;
 let runtime: Awaited<ReturnType<typeof startRuntime>>;
+let learning: LearningWatcher | undefined;
 let recordingQueue = Promise.resolve();
 let transitioning = false;
 // Setup replays that passed their guard and are still saving; a counter so overlapping replays cannot clear each other.
 let setupReopenings = 0;
 const broadcast = () =>
-  BrowserWindow.getAllWindows().forEach((w) =>
-    w.webContents.send("kite:update"),
-  );
+  BrowserWindow.getAllWindows().forEach((w) => {
+    if (!w.isDestroyed() && !w.webContents.isDestroyed())
+      w.webContents.send("kite:update");
+  });
 // Every window listed here gets concealed for screenshots and the pointer;
 // a window left out of this list still shows up in captures and is never
 // cleared before the pointer ring appears over it.
@@ -891,8 +895,14 @@ app
         : undefined,
       action: approvedAction,
       screenshots,
+      onRunSettled: () => void learning?.watch(),
     });
     settings = runtime.settings;
+    learning = new LearningWatcher({
+      source: () => runtime.learning,
+      onChange: broadcast,
+    });
+    void learning.watch();
     settings.companion = savedPreferences.companion;
     settings.onboardingComplete = savedPreferences.onboardingComplete;
     let preferenceQueue = Promise.resolve();
@@ -974,6 +984,7 @@ app
       permissions: await permissions(),
       settings,
       trayMode,
+      learning: learning!.status,
     }));
     handle("reviewedRecording", async (id) => {
       await store.flush();
@@ -1094,6 +1105,37 @@ app
     handle("openIntelligence", () =>
       shell.openExternal("https://dashboard.operations.copilotkit.ai"),
     );
+    // The same thread id rule CodexRunner enforces.
+    const lessonSchema = z.object({
+      threadId: z.string().regex(/^[a-zA-Z0-9_-]{1,100}$/),
+      content: z.string().min(1).max(4000),
+    });
+    handle("watchLearning", () => learning!.watch());
+    handle("dismissLearned", () => learning!.acknowledge());
+    handle("openLearningStep", async () => {
+      const url = safeLearningUrl(learning!.status);
+      // The person is about to act in Intelligence: keep checking.
+      void learning!.watch();
+      await shell.openExternal(url);
+    });
+    handle("saveLesson", async (input) => {
+      if (!runtime.memory)
+        throw new Error(
+          "Connect CopilotKit Intelligence to save what OpenMuse learned.",
+        );
+      const parsed = lessonSchema.safeParse(input);
+      if (!parsed.success)
+        throw new Error(
+          "The lesson to save is invalid: " +
+            parsed.error.issues.map((issue) => issue.message).join("; "),
+        );
+      // Before the save: a poll can list the lesson before its id comes back.
+      learning!.expectLesson(parsed.data.threadId);
+      const saved = await runtime.memory.saveLesson(parsed.data);
+      learning!.remember(saved.id);
+      void learning!.watch();
+      return saved;
+    });
     buddyPosition = await loadBuddyPosition(buddyPositionPath());
     ipcMain.handle(
       "kite:buddyDrag",
@@ -1215,6 +1257,7 @@ app.on("before-quit", () => {
   (app as typeof app & { quitting?: boolean }).quitting = true;
   recorder?.stdin.end();
   recorder?.kill();
+  learning?.stop();
   runtime?.close();
   globalShortcut.unregisterAll();
 });

@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { RunAgentInputSchema } from "@ag-ui/core";
 import {
   createEpoch,
+  displayText,
   ipcErrorMessage,
   requestAttachment,
   userContent,
@@ -175,5 +176,19 @@ test("ipcErrorMessage falls back for a non-Error value", () => {
   assert.equal(
     ipcErrorMessage(undefined, "Screenshot failed"),
     "Screenshot failed",
+  );
+});
+
+test("displayText shows text, abridges recording prompts and hides tool-call-only replies", () => {
+  assert.equal(displayText({ role: "assistant", content: "Done" }), "Done");
+  assert.equal(displayText({ role: "assistant", content: "" }), null);
+  assert.equal(displayText({ role: "assistant" }), null);
+  assert.equal(
+    displayText({ role: "user", content: [{ type: "text", text: "hi" }] }),
+    "Screen context attached",
+  );
+  assert.equal(
+    displayText({ role: "user", content: "x".repeat(2401) }),
+    "x".repeat(240) + "\n[Reviewed recording attached]",
   );
 });

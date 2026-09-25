@@ -42,6 +42,35 @@ export type Settings = {
   runtimeUrl: string;
   runtimeToken: string;
 };
+export type LearningPhase =
+  | "off"
+  | "setup"
+  | "error"
+  | "idle"
+  | "waiting"
+  | "analyzing"
+  | "review"
+  | "learned";
+export type LearningStatus = {
+  phase: LearningPhase;
+  // One line for the user, written by server/learning.ts.
+  message: string;
+  // The Intelligence web-app page for the skills-path step a person takes.
+  link: { kind: "learning" | "runs" | "candidates"; url: string } | null;
+  // Learned skills Intelligence delivers to the agent now, by name.
+  skills: string[];
+  // Delivered skills that arrived since OpenMuse started or was last told.
+  newSkills: string[];
+  // Live Intelligence Memory notes for this user; null when unreadable.
+  memories: number | null;
+  // Previews of memories Intelligence wrote itself since OpenMuse started or
+  // was last told (lessons OpenMuse saved are not counted).
+  newMemories: string[];
+  memoryError: string | null;
+  // The newest Insight's statement, when Intelligence has one.
+  insight: string | null;
+  checkedAt: string | null;
+};
 export type Snapshot = {
   recordings: Recording[];
   skills: Skill[];
@@ -49,6 +78,7 @@ export type Snapshot = {
   permissions: Permissions;
   settings: Settings;
   trayMode: CompanionTrayMode;
+  learning: LearningStatus;
 };
 export type ScreenshotAttachment = {
   id: string;
@@ -149,6 +179,17 @@ export interface KiteAPI {
   closeCompanionChat(): Promise<void>;
   openWorkspace(): Promise<void>;
   openIntelligence(): Promise<void>;
+  /** Check Intelligence now and keep checking for a while. */
+  watchLearning(): Promise<void>;
+  /** Stop announcing what is newly learned. */
+  dismissLearned(): Promise<void>;
+  /** Open the Intelligence page for the current skills-path step. */
+  openLearningStep(): Promise<void>;
+  /** Save a confirmed lesson to the user's Intelligence Memory. */
+  saveLesson(lesson: {
+    threadId: string;
+    content: string;
+  }): Promise<{ id: string; absorbed: boolean }>;
   onUpdate(callback: () => void): () => void;
 }
 declare global {

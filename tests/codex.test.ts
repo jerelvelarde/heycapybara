@@ -1967,3 +1967,524 @@ test("the instructions never let the agent enter passwords, even where typing is
   assert.match(instructions, /never type, paste or otherwise enter passwords/);
   assert.match(instructions, /Never type commands into a terminal/);
 });
+
+test("codexEvents turns an OpenMuse notice into one AG-UI custom event", () => {
+  assert.deepEqual(
+    codexEvents({
+      type: "kite.notice",
+      name: "kite.memory-recalled",
+      value: { count: 1, previews: ["How to label spam"] },
+    }),
+    [
+      {
+        type: "CUSTOM",
+        name: "kite.memory-recalled",
+        value: { count: 1, previews: ["How to label spam"] },
+      },
+    ],
+  );
+});
+
+// One user turn, as the renderer sends it.
+function contextInput(threadId: string, text: string) {
+  return {
+    threadId,
+    runId: "r",
+    messages: [{ id: "m", role: "user" as const, content: text }],
+    tools: [],
+    context: [],
+    state: {},
+    forwardedProps: {},
+  };
+}
+
+const contextConfig = () => ({
+  apiKey: "fixture-key",
+  model: "gpt-5.4",
+  workspace: "/test/one",
+  mcpUrl: "http://localhost/mcp",
+});
+
+// A Codex client that records the prompt and the config it was given.
+function recordingClient(record: {
+  prompt?: unknown;
+  config?: unknown;
+  env?: Record<string, string>;
+}) {
+  return (options: import("@openai/codex-sdk").CodexOptions) => {
+    record.config = options.config;
+    record.env = options.env;
+    const thread = {
+      runStreamed: async (input: unknown) => {
+        record.prompt = input;
+        return {
+          events: (async function* () {
+            yield { type: "thread.started" as const, thread_id: "native-1" };
+          })(),
+        };
+      },
+    };
+    return { startThread: () => thread, resumeThread: () => thread };
+  };
+}
+
+test("a new Codex thread starts with the learned skills and what Memory recalls", async () => {
+  const { CodexRunner } = await import("../server/codex-agent");
+  const { ScreenshotRegistry } = await import("../server/screenshots");
+  const { mkdtemp, rm } = await import("node:fs/promises");
+  const { tmpdir } = await import("node:os");
+  const { join } = await import("node:path");
+  const root = await mkdtemp(join(tmpdir(), "kite-context-test-"));
+  const record: { prompt?: unknown } = {};
+  const queries: string[] = [];
+  const runner = new CodexRunner({
+    runs: new RunRegistry(),
+    statePath: root,
+    screenshots: new ScreenshotRegistry(),
+    learnedSkills: async () => [
+      {
+        name: "gmail-spam-triage",
+        description: "Label a Gmail message as spam or not spam",
+      },
+    ],
+    recallMemories: async (query) => {
+      queries.push(query);
+      return [
+        { kind: "operational", content: "How to label Gmail spam\nSteps" },
+      ];
+    },
+    getConfig: contextConfig,
+    createClient: recordingClient(record),
+  });
+  try {
+    const events = [];
+    for await (const event of runner.run(
+      contextInput("context", "Label this email"),
+      new AbortController().signal,
+    ))
+      events.push(event);
+    assert.deepEqual(
+      events.map((event) =>
+        event.type === "kite.notice" ? event.name : event.type,
+      ),
+      ["kite.memory-recalled", "thread.started"],
+    );
+    assert.deepEqual(events[0], {
+      type: "kite.notice",
+      name: "kite.memory-recalled",
+      value: { count: 1, previews: ["How to label Gmail spam"] },
+    });
+    assert.deepEqual(queries, ["Label this email"]);
+    const parts = record.prompt as { text?: string }[];
+    assert.match(parts[0].text ?? "", /gmail-spam-triage/);
+    assert.match(parts[0].text ?? "", /load_learned_skill/);
+    assert.match(
+      parts[1].text ?? "",
+      /^What CopilotKit Intelligence remembers/,
+    );
+    assert.match(parts[1].text ?? "", /How to label Gmail spam/);
+    assert.equal(parts.at(-1)?.text, "Label this email");
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("a resumed Codex thread fetches neither skills nor memories again", async () => {
+  const { CodexRunner } = await import("../server/codex-agent");
+  const { ScreenshotRegistry } = await import("../server/screenshots");
+  const { mkdtemp, mkdir, rm, writeFile } = await import("node:fs/promises");
+  const { tmpdir } = await import("node:os");
+  const { join } = await import("node:path");
+  const root = await mkdtemp(join(tmpdir(), "kite-context-resume-test-"));
+  await mkdir(join(root, "threads"), { recursive: true });
+  await writeFile(
+    join(root, "threads", "resumed.json"),
+    JSON.stringify({ id: "native-9", workspace: "/test/one" }),
+  );
+  let fetched = 0;
+  const record: { prompt?: unknown } = {};
+  const runner = new CodexRunner({
+    runs: new RunRegistry(),
+    statePath: root,
+    screenshots: new ScreenshotRegistry(),
+    learnedSkills: async () => {
+      fetched += 1;
+      return [];
+    },
+    recallMemories: async () => {
+      fetched += 1;
+      return [];
+    },
+    getConfig: contextConfig,
+    createClient: recordingClient(record),
+  });
+  try {
+    for await (const event of runner.run(
+      contextInput("resumed", "Again please"),
+      new AbortController().signal,
+    ))
+      assert.equal(event.type, "thread.started");
+    assert.equal(fetched, 0);
+    assert.deepEqual(record.prompt, [{ type: "text", text: "Again please" }]);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("unavailable skills or memories are reported and the run continues", async () => {
+  const { CodexRunner } = await import("../server/codex-agent");
+  const { ScreenshotRegistry } = await import("../server/screenshots");
+  const { mkdtemp, rm } = await import("node:fs/promises");
+  const { tmpdir } = await import("node:os");
+  const { join } = await import("node:path");
+  const root = await mkdtemp(join(tmpdir(), "kite-context-fail-test-"));
+  const record: { prompt?: unknown } = {};
+  const runner = new CodexRunner({
+    runs: new RunRegistry(),
+    statePath: root,
+    screenshots: new ScreenshotRegistry(),
+    learnedSkills: async () => {
+      throw new Error("Learned-skills delivery is disabled.");
+    },
+    recallMemories: async () => {
+      throw new Error("Intelligence platform error 403: forbidden");
+    },
+    getConfig: contextConfig,
+    createClient: recordingClient(record),
+  });
+  const skillsMessage =
+    "Learned skills are unavailable for this conversation: Learned-skills delivery is disabled.";
+  const memoryMessage =
+    "Intelligence Memory is unavailable for this conversation: Intelligence platform error 403: forbidden";
+  try {
+    const events = [];
+    for await (const event of runner.run(
+      contextInput("unavailable", "Label this email"),
+      new AbortController().signal,
+    ))
+      events.push(event);
+    assert.deepEqual(
+      events
+        .slice(0, 2)
+        .map((event) =>
+          event.type === "kite.notice"
+            ? [event.name, event.value.summary]
+            : [event.type],
+        ),
+      [
+        ["kite.activity", skillsMessage],
+        ["kite.activity", memoryMessage],
+      ],
+    );
+    assert.equal(events[2].type, "thread.started");
+    const texts = (record.prompt as { text?: string }[]).map((p) => p.text);
+    assert.deepEqual(texts.slice(0, 2), [skillsMessage, memoryMessage]);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+// A Memory client whose calls never answer, as a hung bare fetch in
+// @copilotkit/runtime 1.73.3 would not.
+const hungMemory = {
+  listMemories: () => new Promise<never>(() => {}),
+  recallMemories: () => new Promise<never>(() => {}),
+  createMemory: () => new Promise<never>(() => {}),
+};
+
+test("a hung Memory recall times out, is reported, and the thread still starts", async () => {
+  const { CodexRunner } = await import("../server/codex-agent");
+  const { createMemoryAccess } = await import("../server/memory");
+  const { ScreenshotRegistry } = await import("../server/screenshots");
+  const { mkdtemp, rm } = await import("node:fs/promises");
+  const { tmpdir } = await import("node:os");
+  const { join } = await import("node:path");
+  const root = await mkdtemp(join(tmpdir(), "kite-context-hung-test-"));
+  const record: { prompt?: unknown } = {};
+  const memory = createMemoryAccess(hungMemory, "kite-local-owner", {
+    recall: 20,
+    list: 20,
+    save: 20,
+  });
+  // Skills answer only once recall has begun, so reading them one after the
+  // other would report skills as late instead of delivering them.
+  let recallStarted!: () => void;
+  const started = new Promise<void>((resolve) => (recallStarted = resolve));
+  const signals: AbortSignal[] = [];
+  const runner = new CodexRunner({
+    runs: new RunRegistry(),
+    statePath: root,
+    screenshots: new ScreenshotRegistry(),
+    learnedSkills: async () => {
+      const together = await Promise.race([
+        started.then(() => true),
+        new Promise<false>((resolve) => setTimeout(() => resolve(false), 500)),
+      ]);
+      if (!together) throw new Error("skills were read before recall began");
+      return [{ name: "gmail-spam-triage", description: "Label spam" }];
+    },
+    recallMemories: (query, signal) => {
+      signals.push(signal);
+      recallStarted();
+      return memory.recall(query, signal);
+    },
+    getConfig: contextConfig,
+    createClient: recordingClient(record),
+  });
+  const memoryMessage =
+    "Intelligence Memory is unavailable for this conversation: Intelligence Memory did not answer within 0.02 seconds.";
+  try {
+    const events = [];
+    for await (const event of runner.run(
+      contextInput("hung-recall", "Label this email"),
+      new AbortController().signal,
+    ))
+      events.push(event);
+    assert.deepEqual(
+      events.map((event) =>
+        event.type === "kite.notice"
+          ? [event.name, event.value.summary]
+          : [event.type],
+      ),
+      [["kite.activity", memoryMessage], ["thread.started"]],
+    );
+    assert.equal(signals.length, 1);
+    assert.equal(signals[0].aborted, false);
+    const texts = (record.prompt as { text?: string }[]).map((p) => p.text);
+    assert.match(texts[0] ?? "", /gmail-spam-triage/);
+    assert.equal(texts[1], memoryMessage);
+    assert.equal(runner.busy, false);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("Stop ends a run whose Memory recall never answers, even one that ignores the signal", async () => {
+  const { CodexRunner } = await import("../server/codex-agent");
+  const { ScreenshotRegistry } = await import("../server/screenshots");
+  const { mkdtemp, rm } = await import("node:fs/promises");
+  const { tmpdir } = await import("node:os");
+  const { join } = await import("node:path");
+  const root = await mkdtemp(join(tmpdir(), "kite-context-stop-test-"));
+  const record: { prompt?: unknown } = {};
+  let recalled!: () => void;
+  const recalling = new Promise<void>((resolve) => (recalled = resolve));
+  let signal: AbortSignal | undefined;
+  const runner = new CodexRunner({
+    runs: new RunRegistry(),
+    statePath: root,
+    screenshots: new ScreenshotRegistry(),
+    learnedSkills: async () => [],
+    // Hangs on the first run only, so the second can finish.
+    recallMemories: async (_query, runSignal) => {
+      if (signal) return [];
+      signal = runSignal;
+      recalled();
+      return new Promise<never>(() => {});
+    },
+    getConfig: contextConfig,
+    createClient: recordingClient(record),
+  });
+  try {
+    const stop = new AbortController();
+    const events: unknown[] = [];
+    const run = (async () => {
+      for await (const event of runner.run(
+        contextInput("stopped-recall", "Label this email"),
+        stop.signal,
+      ))
+        events.push(event);
+    })();
+    await recalling;
+    assert.equal(runner.busy, true);
+    stop.abort();
+    await assert.rejects(run, { message: "Run stopped" });
+    assert.equal(signal?.aborted, true);
+    assert.deepEqual(events, []);
+    assert.equal(record.prompt, undefined, "Codex never started");
+    assert.equal(runner.busy, false);
+    // The conversation is free again, not "already running".
+    for await (const event of runner.run(
+      contextInput("stopped-recall", "Label this email"),
+      new AbortController().signal,
+    ))
+      assert.equal(event.type, "thread.started");
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("Codex reaches Intelligence's knowledge base only through OpenMuse's proxy", async () => {
+  const { CodexRunner } = await import("../server/codex-agent");
+  const { ScreenshotRegistry } = await import("../server/screenshots");
+  const { mkdtemp, rm } = await import("node:fs/promises");
+  const { tmpdir } = await import("node:os");
+  const { join } = await import("node:path");
+  const root = await mkdtemp(join(tmpdir(), "kite-knowledge-config-test-"));
+  const record: { config?: unknown; env?: Record<string, string> } = {};
+  let intelligenceMcp: { url: string; tools: readonly string[] } | undefined = {
+    url: "http://127.0.0.1:4000/mcp/intelligence",
+    tools: ["copilotkit_knowledge_base_shell"],
+  };
+  const runner = new CodexRunner({
+    runs: new RunRegistry(),
+    statePath: root,
+    screenshots: new ScreenshotRegistry(),
+    getConfig: () => ({ ...contextConfig(), intelligenceMcp }),
+    createClient: recordingClient(record),
+  });
+  const servers = () =>
+    (record.config as { mcp_servers: Record<string, unknown> }).mcp_servers;
+  try {
+    for await (const event of runner.run(
+      contextInput("with-knowledge", "hi"),
+      new AbortController().signal,
+    ))
+      assert.equal(event.type, "thread.started");
+    assert.deepEqual(servers().intelligence, {
+      url: "http://127.0.0.1:4000/mcp/intelligence",
+      bearer_token_env_var: "KITE_MCP_TOKEN",
+      required: false,
+      tool_timeout_sec: 60,
+      tools: { copilotkit_knowledge_base_shell: { approval_mode: "approve" } },
+    });
+    assert.ok(
+      !Object.keys(record.env ?? {}).some((name) => name.startsWith("CPK_")),
+      "no Intelligence key reaches the Codex process",
+    );
+    intelligenceMcp = undefined;
+    for await (const event of runner.run(
+      contextInput("without-knowledge", "hi"),
+      new AbortController().signal,
+    ))
+      assert.equal(event.type, "thread.started");
+    assert.equal(servers().intelligence, undefined);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+// A finished call to an MCP tool Codex reached through OpenMuse.
+function mcpToolCall(
+  tool: string,
+  args: unknown,
+  status: "completed" | "failed" = "completed",
+  server = "kite",
+) {
+  return {
+    type: "item.completed" as const,
+    item: {
+      id: "call-1",
+      type: "mcp_tool_call" as const,
+      server,
+      tool,
+      arguments: args,
+      status,
+    },
+  };
+}
+
+test("a finished kite tool call is kept as an AG-UI tool call with no arguments", () => {
+  const events = codexEvents(
+    mcpToolCall("open_application", {
+      bundleId: "com.google.Chrome",
+      note: "private text",
+    }),
+  );
+  assert.deepEqual(
+    events.map((e) => e.type),
+    [
+      "TOOL_CALL_START",
+      "TOOL_CALL_ARGS",
+      "TOOL_CALL_END",
+      "TOOL_CALL_RESULT",
+      "CUSTOM",
+    ],
+  );
+  const [start, args, , result] = events as {
+    toolCallName?: string;
+    delta?: string;
+    content?: string;
+  }[];
+  assert.equal(start.toolCallName, "open_application");
+  assert.equal(args.delta, "{}");
+  assert.equal(result.content, '{"status":"completed"}');
+  assert.ok(!JSON.stringify(events).includes("com.google.Chrome"));
+  assert.ok(!JSON.stringify(events).includes("private text"));
+});
+
+test("a knowledge-base read is kept by name only; other servers and unfinished calls are not", () => {
+  const read = codexEvents(
+    mcpToolCall(
+      "copilotkit_knowledge_base_shell",
+      { command: "cat /project/gmail-spam.md" },
+      "completed",
+      "intelligence",
+    ),
+  );
+  assert.equal(
+    (read[0] as { toolCallName?: string }).toolCallName,
+    "copilotkit_knowledge_base_shell",
+  );
+  assert.ok(!JSON.stringify(read).includes("gmail-spam.md"));
+  assert.deepEqual(
+    codexEvents(mcpToolCall("search", { q: "x" }, "completed", "other")).map(
+      (e) => e.type,
+    ),
+    ["CUSTOM"],
+  );
+  assert.deepEqual(
+    codexEvents({
+      ...mcpToolCall("open_application", {}),
+      type: "item.started" as const,
+    }).map((e) => e.type),
+    ["CUSTOM"],
+  );
+});
+
+test("loading a learned skill announces its name; a failed load does not", () => {
+  const loaded = codexEvents(
+    mcpToolCall("load_learned_skill", { name: "gmail-spam-triage" }),
+  );
+  const announced = loaded.find(
+    (e) => (e as { name?: string }).name === "kite.learned-skill",
+  ) as { value?: { name?: string } } | undefined;
+  assert.equal(announced?.value?.name, "gmail-spam-triage");
+  const failed = codexEvents(
+    mcpToolCall("load_learned_skill", { name: "gmail-spam-triage" }, "failed"),
+  );
+  assert.ok(
+    !failed.some((e) => (e as { name?: string }).name === "kite.learned-skill"),
+  );
+  assert.equal(
+    (failed[3] as { content?: string }).content,
+    '{"status":"failed"}',
+  );
+});
+
+test("a kite tool call passes the AG-UI pipeline as a tool call with its result", async () => {
+  const { KiteCodexAgent } = await import("../server/codex-agent");
+  const agent = new KiteCodexAgent(async function* () {
+    yield mcpToolCall("open_application", { bundleId: "com.google.Chrome" });
+    yield {
+      type: "turn.completed",
+      usage: {
+        input_tokens: 0,
+        cached_input_tokens: 0,
+        cache_write_input_tokens: 0,
+        output_tokens: 0,
+        reasoning_output_tokens: 0,
+      },
+    };
+  });
+  agent.addMessage({ id: "m", role: "user", content: "Open Chrome" });
+  await agent.runAgent();
+  const call = agent.messages
+    .flatMap((m) => ("toolCalls" in m && m.toolCalls ? m.toolCalls : []))
+    .find((c) => c.function.name === "open_application");
+  assert.ok(call, "the assistant message carries the tool call");
+  assert.ok(
+    agent.messages.some((m) => m.role === "tool" && m.toolCallId === call.id),
+    "the tool call has its result",
+  );
+});

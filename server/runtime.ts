@@ -14,6 +14,10 @@ import type { ScreenshotLookup } from "./screenshots";
 import { runtimeConfig } from "./config";
 import { authorized } from "./auth";
 import { RunRegistry } from "./run-registry";
+import { SkillRegistry } from "@copilotkit/runtime/internal/learned-skills";
+import { createLearningReader, settleAfter } from "./learning";
+import { createMemoryAccess } from "./memory";
+import { KNOWLEDGE_TOOLS, createIntelligenceProxy } from "./intelligence-proxy";
 
 export async function startRuntime(
   store: Store,
@@ -24,15 +28,50 @@ export async function startRuntime(
     // Required: see CodexRunnerOptions in server/codex-agent.ts for why a
     // real registry must always be supplied here.
     screenshots: ScreenshotLookup;
+    // Called after every agent run ends, however it ended, with its thread id.
+    onRunSettled?: (threadId: string) => void;
   },
 ) {
   const config = runtimeConfig(process.env);
   const token = randomBytes(32).toString("hex");
+  // Generated once per install and persisted in the store (electron/store.ts
+  // installUserId), so every run, memory and knowledge-base call in this
+  // install shares one Intelligence user id without colliding with anyone
+  // else who has the same project key.
+  const localUser = { id: store.installUserId, name: "Kite desktop user" };
   const intelligence = config.intelligenceConfigured
     ? new CopilotKitIntelligence({
         apiKey: process.env.CPK_INTELLIGENCE_API_KEY!,
         getLearningContainerId: ({ agentId }) =>
           agentId === "default" ? config.containerId : undefined,
+      })
+    : undefined;
+  // One registry for the MCP tools, the Codex catalog and learning status,
+  // so all three see the same snapshot (5 s freshness, then a conditional
+  // GET; SkillRegistry in @copilotkit/runtime/internal/learned-skills).
+  const registry = intelligence
+    ? new SkillRegistry({
+        client: intelligence,
+        containerId: config.containerId,
+        requestTimeoutMs: 15000,
+      })
+    : undefined;
+  const deliveredSkills = registry
+    ? async () =>
+        (await registry.acquireSnapshot()).skills.map(
+          ({ name, description }) => ({ name, description }),
+        )
+    : undefined;
+  const memory = intelligence
+    ? createMemoryAccess(intelligence, localUser.id)
+    : undefined;
+  // ɵgetApiUrl is CopilotKit's own accessor for the endpoint its middleware
+  // uses; recheck it on upgrade.
+  const knowledge = intelligence
+    ? createIntelligenceProxy({
+        url: `${intelligence.ɵgetApiUrl()}/mcp`,
+        apiKey: process.env.CPK_INTELLIGENCE_API_KEY!,
+        userId: localUser.id,
       })
     : undefined;
   let sessionKey = process.env.OPENAI_API_KEY;
@@ -60,19 +99,31 @@ export async function startRuntime(
     binaryPath: options.binaryPath,
     screenshots: options.screenshots,
     runs,
+    learnedSkills: deliveredSkills,
+    recallMemories: memory
+      ? (query, signal) => memory.recall(query, signal)
+      : undefined,
     getConfig: () => ({
       apiKey: sessionKey,
       model: config.model,
       workspace,
       mcpUrl,
+      intelligenceMcp:
+        knowledge && mcpUrl
+          ? { url: `${mcpUrl}/intelligence`, tools: KNOWLEDGE_TOOLS }
+          : undefined,
     }),
   });
-  const agent = new KiteCodexAgent((input, signal) =>
-    runner.run(input, signal),
+  const agent = new KiteCodexAgent(
+    settleAfter(
+      (input, signal) => runner.run(input, signal),
+      (threadId) => options.onRunSettled?.(threadId),
+    ),
   );
   const toolHandler = createToolHandler({
     store,
     intelligence,
+    registry,
     containerId: config.containerId,
     action: options.action,
   });
@@ -80,10 +131,7 @@ export async function startRuntime(
     ? new CopilotRuntime({
         agents: () => ({ default: agent }),
         intelligence,
-        identifyUser: async () => ({
-          id: "kite-local-owner",
-          name: "Kite desktop user",
-        }),
+        identifyUser: async () => localUser,
       })
     : new CopilotRuntime({ agents: () => ({ default: agent }) });
   const handler = createCopilotRuntimeHandler({
@@ -95,7 +143,19 @@ export async function startRuntime(
     hostname: "127.0.0.1",
     port: 0,
     fetch: async (request) => {
-      if (new URL(request.url).pathname === "/mcp") {
+      const pathname = new URL(request.url).pathname;
+      if (pathname === "/mcp/intelligence") {
+        // The same live-run tokens as /mcp, so the project key never leaves
+        // this process (server/intelligence-proxy.ts).
+        if (!runs.authorize(request))
+          return new Response("Unauthorized", { status: 401 });
+        if (!knowledge)
+          return new Response("Intelligence is not configured", {
+            status: 404,
+          });
+        return knowledge(request);
+      }
+      if (pathname === "/mcp") {
         // Only a token held by a run that is still going passes
         // (server/run-registry.ts).
         const run = runs.authorize(request);
@@ -202,5 +262,23 @@ export async function startRuntime(
       settings.modelConfigured = true;
     },
     settings,
+    // Everything the Electron main process polls to show learning progress.
+    // The container is passed explicitly: the runtime's own
+    // inspector/learning route only forwards it for the deprecated
+    // `ɵlearning` option, not for getLearningContainerId.
+    learning: intelligence
+      ? createLearningReader({
+          containerId: config.containerId,
+          inspect: () =>
+            intelligence.getInspectorLearning({
+              agentId: "default",
+              runtimeContainerId: config.containerId,
+            }),
+          skills: deliveredSkills,
+          memories: memory ? () => memory.list() : undefined,
+        })
+      : undefined,
+    // For "Learn from this" (electron/main.ts saveLesson).
+    memory,
   };
 }

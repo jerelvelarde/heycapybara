@@ -1,17 +1,22 @@
 import { useRef, useState, type ReactNode } from "react";
 import { Circle, MessageCircle, Square } from "lucide-react";
 import { crossedDragThreshold, type Point } from "./buddy-drag";
+import { buddyLearningBadge } from "./learning-view";
+import type { LearningStatus } from "./types";
 export function Buddy({
   active,
   error,
   setError,
+  learning,
   children,
 }: {
   active: boolean;
   error: string;
   setError: (error: string) => void;
+  learning: LearningStatus;
   children: ReactNode;
 }) {
+  const badge = buddyLearningBadge(learning);
   const gesture = useRef<{
     pointerId: number;
     start: Point;
@@ -157,6 +162,12 @@ export function Buddy({
         <span
           className="buddy-recording-indicator"
           title="Recording in progress"
+        />
+      )}
+      {badge && (
+        <span
+          className={"buddy-learning-indicator " + badge}
+          title={learning.message}
         />
       )}
       {error && <span className="buddy-error">{error}</span>}
