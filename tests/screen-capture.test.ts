@@ -167,6 +167,56 @@ test("a sources call that never settles is refused once the timeout elapses, and
   assert.equal(events.filter((e) => e === "restore").length, 1);
 });
 
+test("when sources rejects and the restore also throws, the capture rejects with the sources error, not the restore error, and register is never called", async () => {
+  const events: string[] = [];
+  const deps = makeDeps(events, {
+    sources: async () => {
+      throw new Error("desktopCapturer boom");
+    },
+    conceal: () => {
+      events.push("conceal");
+      return () => {
+        events.push("restore");
+        throw new Error("restore boom");
+      };
+    },
+  });
+  let caught: unknown;
+  try {
+    await captureScreenshot(deps);
+  } catch (error) {
+    caught = error;
+  }
+  assert.ok(caught instanceof Error);
+  assert.equal(caught.message, "desktopCapturer boom");
+  // The restore was still attempted (and swallowed) on the way out.
+  assert.equal(events.filter((e) => e === "restore").length, 1);
+  assert.equal(events.filter((e) => e === "register").length, 0);
+});
+
+test("when a capture would otherwise succeed but the restore throws, the promise rejects with the restore error and register is never called, because restore now runs before register", async () => {
+  const events: string[] = [];
+  const deps = makeDeps(events, {
+    conceal: () => {
+      events.push("conceal");
+      return () => {
+        events.push("restore");
+        throw new Error("restore boom");
+      };
+    },
+  });
+  let caught: unknown;
+  try {
+    await captureScreenshot(deps);
+  } catch (error) {
+    caught = error;
+  }
+  assert.ok(caught instanceof Error);
+  assert.equal(caught.message, "restore boom");
+  assert.equal(events.filter((e) => e === "restore").length, 1);
+  assert.equal(events.filter((e) => e === "register").length, 0);
+});
+
 test("sources for other displays only fail the capture without touching their images or registering anything", async () => {
   const events: string[] = [];
   const poisonThumbnail = {

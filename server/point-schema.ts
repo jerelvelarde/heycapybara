@@ -36,8 +36,8 @@ const BLANK_CHARACTERS = new RegExp(
 // marks, not five), because real Latin-script words never stack that many
 // diacritics on one letter. Real words in other scripts, such as Hindi,
 // Burmese, Tibetan and pointed Hebrew, do put three or four marks in a row,
-// so ANY_SCRIPT_STACK below gives every script the same five-mark cap
-// instead of reusing this block list.
+// so ANY_SCRIPT_STACK below gives every script the same four-mark cap
+// (five or more rejected) instead of reusing this block list.
 const ACCENT_BLOCKS: readonly [number, number][] = [
   [0x0300, 0x036f], // Combining Diacritical Marks
   [0x1ab0, 0x1aff], // Combining Diacritical Marks Extended

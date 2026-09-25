@@ -72,15 +72,23 @@ const fades = new WeakMap<
 // original opacity back only when the last fade covering it ends.
 function fadeOut(win: ConcealableWindow): void {
   const existing = fades.get(win);
-  if (existing) {
+  if (existing && existing.count > 0) {
     existing.count += 1;
     return;
   }
-  const opacity = win.getOpacity();
-  // Decided once, here, from transparentWindows' membership at the moment
-  // this window starts fading. Recorded in the fade entry so undoFade later
-  // undoes exactly this decision rather than re-reading membership that can
-  // change (via markTransparent) while the window is still faded.
+  // Either no record yet, or undoFade left one behind with count 0 after a
+  // failed restore: the window is still stuck at opacity 0 but no longer
+  // ignoring mouse events (see undoFade below), so this is a retry, not a
+  // no-op. Re-fade exactly as a fresh fade would, reusing the record's
+  // opacity when there is one -- it is the window's TRUE original opacity
+  // from before it was ever faded, not the stuck 0 that win.getOpacity()
+  // would read back right now.
+  const opacity = existing ? existing.opacity : win.getOpacity();
+  // Decided fresh, from transparentWindows' membership at the moment this
+  // fade starts, whether this is a brand new fade or a retry. Recorded in
+  // the fade entry so undoFade later undoes exactly this decision rather
+  // than re-reading membership that can change (via markTransparent) while
+  // the window is still faded.
   const ignoredMouse = !transparentWindows.has(win);
   fades.set(win, { count: 1, opacity, ignoredMouse });
   let opacityChanged = false;

@@ -519,9 +519,11 @@ test("a window destroyed while the pointer is showing is skipped on restore, wit
     confirm: async () => true,
     windows: () => [covering],
     showPointer: async () => {
-      // Only quitting destroys a window outright (a placement change just
-      // hides and recreates it); either way, restore must not throw on a
-      // window that's gone by the time it runs.
+      // Windows are created once and only ever hidden or shown again; a
+      // placement change never destroys and recreates one. This simulates
+      // the one case that does: the app quitting destroys the window while
+      // the ring is up. Either way, restore must not throw on a window
+      // that's gone by the time it runs.
       state.destroyed = true;
       events.push("showPointer");
     },

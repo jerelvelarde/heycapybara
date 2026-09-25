@@ -367,6 +367,44 @@ test("a failing restore still un-ignores mouse events, and a later successful cy
   assert.equal(opacity, 0.85);
 });
 
+test("conceal() after a failed restore re-fades the window instead of just bumping the stale count", () => {
+  let opacity = 0.85;
+  let ignoring = false;
+  let failRestore = true;
+  const win: ConcealableWindow = {
+    isDestroyed: () => false,
+    getOpacity: () => opacity,
+    setOpacity: (next: number) => {
+      if (next !== 0 && failRestore) throw new Error("restore boom");
+      opacity = next;
+    },
+    setIgnoreMouseEvents: (ignore: boolean) => {
+      ignoring = ignore;
+    },
+  };
+
+  const restore = conceal([win]);
+  assert.throws(() => restore(), /restore boom/);
+  // The retry state left behind by the failed restore: still invisible, but
+  // no longer ignoring mouse events, so it would catch clicks if left here.
+  assert.equal(opacity, 0);
+  assert.equal(ignoring, false);
+
+  // A fresh conceal() on this window must re-apply the fade -- not just
+  // increment a stale count -- so it goes back to ignoring mouse events
+  // (it's unmarked) instead of staying invisible and clickable.
+  const restoreAgain = conceal([win]);
+  assert.equal(opacity, 0);
+  assert.equal(ignoring, true);
+
+  // A successful restore from there returns the TRUE original opacity, not
+  // the stuck 0, with ignore back to false.
+  failRestore = false;
+  restoreAgain();
+  assert.equal(opacity, 0.85);
+  assert.equal(ignoring, false);
+});
+
 test("marking a window transparent while it is still faded does not stop restore from un-ignoring it", () => {
   const win = fakeConcealable(1);
   const restore = conceal([win]);
