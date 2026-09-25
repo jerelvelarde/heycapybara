@@ -103,6 +103,15 @@ export function Assistant({
       onDone();
       return;
     }
+    const attachment = fresh ? null : image;
+    let content: ReturnType<typeof userContent>;
+    try {
+      content = userContent(prompt, attachment);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Agent request failed");
+      setImage(null);
+      return;
+    }
     cancelled.current = false;
     busyRef.current = true;
     setBusy(true);
@@ -112,12 +121,13 @@ export function Assistant({
     if (fresh) {
       agent.threadId = crypto.randomUUID();
       agent.setMessages([]);
+      setImage(null);
     }
     const messageId = crypto.randomUUID();
     agent.addMessage({
       id: messageId,
       role: "user",
-      content: userContent(prompt, image),
+      content,
     });
     setInput("");
     setImage(null);
@@ -346,7 +356,10 @@ export function Assistant({
             onClick={() =>
               void window
                 .kite!.screenshot()
-                .then(setImage)
+                .then((shot) => {
+                  setError("");
+                  setImage(shot);
+                })
                 .catch((e) => setError(e.message))
             }
           >
@@ -382,7 +395,7 @@ export function Assistant({
       </form>
       <footer title={settings.workspace}>
         Workspace: {settings.workspace.split("/").at(-1)} · Screenshots shared
-        when attached
+        when sent
       </footer>
     </aside>
   );

@@ -41,6 +41,17 @@ test("a non-PNG or malformed data URL is rejected rather than sent as undefined 
   );
 });
 
+test("a data URL with an extra comma is rejected instead of silently truncated", () => {
+  assert.throws(
+    () =>
+      userContent("hi", {
+        ...image,
+        dataUrl: "data:image/png;base64,AAAA,BBBB",
+      }),
+    /not a PNG data URL/,
+  );
+});
+
 test("AG-UI's own schema keeps the screenshot id on the parsed binary part", () => {
   const parsed = RunAgentInputSchema.parse({
     threadId: "t",
