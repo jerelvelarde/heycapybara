@@ -54,6 +54,7 @@ export type Snapshot = {
 export type ScreenshotAttachment = {
   id: string;
   label: string;
+  // Pixel dimensions of the PNG in dataUrl, not points.
   width: number;
   height: number;
   dataUrl: string;
@@ -63,6 +64,8 @@ export type DesktopAction =
   | {
       type: "point";
       screenshotId: string;
+      // Pixels within that screenshot (origin top-left), not global screen
+      // points - they were global screen points before this branch.
       x: number;
       y: number;
       label: string;

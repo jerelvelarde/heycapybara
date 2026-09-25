@@ -2,10 +2,40 @@ import type { ScreenshotAttachment } from "./types";
 
 const PNG_DATA_URL = "data:image/png;base64";
 
+// Only a request that continues the composer's own thread may carry its
+// pending screenshot. "Record to skill" and "Use this skill" start a fresh
+// thread (fresh=true) and must never attach one - that would leak a screen
+// capture into an Intelligence cloud thread the user never meant to send it
+// to.
+export function requestAttachment(
+  fresh: boolean,
+  image: ScreenshotAttachment | null,
+): ScreenshotAttachment | null {
+  return fresh ? null : image;
+}
+
+// Tags an in-flight screenshot capture with the epoch it started in, so a
+// capture that resolves after the composer has moved on to something else -
+// a send, a new conversation - can tell it's stale and drop both its result
+// and its error instead of landing on the wrong message.
+export function createEpoch() {
+  let n = 0;
+  return {
+    advance() {
+      n += 1;
+    },
+    capture() {
+      const at = n;
+      return () => at === n;
+    },
+  };
+}
+
 // The model never sees the id on the image part - it rides along for the
-// Codex adapter, which looks the capture up by this id and writes the id
-// and pixel size into the image's note. Without it, the image gets the
-// "no screen reference" note instead.
+// Codex adapter, which looks the capture up by this id. The id and pixel
+// size are written into the note only when that capture is known, matches
+// this image, and is still fresh; otherwise the model gets the unknown,
+// mismatched, or stale note instead.
 export function userContent(
   prompt: string,
   image: ScreenshotAttachment | null,
@@ -24,18 +54,19 @@ export function userContent(
 }
 
 // Electron's ipcRenderer.invoke wraps a rejected handler's error as
-// `Error invoking remote method '<channel>': Error: <message>`; this peels
-// both layers off so the carefully worded capture errors reach the user
-// unmangled.
+// `Error invoking remote method '<channel>': <error.toString()>`, and
+// `toString()` itself leads with the error's own constructor name (for
+// example `TypeError: `). Each prefix is stripped only when present - the
+// invoke wrapper, then any leading `<Name>Error: ` label - so the
+// carefully worded capture errors reach the user unmangled no matter which
+// of the two prefixes showed up.
 const IPC_INVOKE_PREFIX = /^Error invoking remote method '[^']*':\s*/;
-const NESTED_ERROR_PREFIX = /^Error:\s*/;
+const ERROR_LABEL_PREFIX = /^(?:[A-Z][A-Za-z]*)?Error:\s*/;
 
 export function ipcErrorMessage(error: unknown, fallback: string): string {
   if (!(error instanceof Error)) return fallback;
-  let message = error.message;
-  if (IPC_INVOKE_PREFIX.test(message))
-    message = message
-      .replace(IPC_INVOKE_PREFIX, "")
-      .replace(NESTED_ERROR_PREFIX, "");
+  const message = error.message
+    .replace(IPC_INVOKE_PREFIX, "")
+    .replace(ERROR_LABEL_PREFIX, "");
   return message || fallback;
 }

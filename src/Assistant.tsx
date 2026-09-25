@@ -10,7 +10,12 @@ import {
   X,
 } from "lucide-react";
 import { validateSkillMarkdown } from "./skill-format";
-import { ipcErrorMessage, userContent } from "./message-content";
+import {
+  createEpoch,
+  ipcErrorMessage,
+  requestAttachment,
+  userContent,
+} from "./message-content";
 import type { ScreenshotAttachment, Settings } from "./types";
 export type AgentRequest = {
   id: string;
@@ -46,20 +51,29 @@ export function Assistant({
   const handled = useRef("");
   const bottom = useRef<HTMLDivElement>(null);
   const busyRef = useRef(false);
+  // Tracks whether the displayed error came from a capture attempt, so a
+  // later successful capture clears only its own error and never a run
+  // failure or other message the user hasn't read yet.
+  const errorSource = useRef<"capture" | null>(null);
+  function showError(message: string, source: "capture" | null = null) {
+    errorSource.current = source;
+    setError(message);
+  }
   // Bumped whenever the composer moves on from the attachment a capture was
   // started for (new conversation, or a message sent) so a screenshot that
-  // resolves late never lands on the wrong message.
-  const attachmentEpoch = useRef(0);
+  // resolves late never lands on the wrong message - and its error is
+  // dropped too.
+  const attachmentEpoch = useRef(createEpoch());
   useEffect(() => {
     if (!newConversationSignal) return;
     agent.threadId = crypto.randomUUID();
     agent.setMessages([]);
     setInput("");
     setImage(null);
-    setError("");
+    showError("");
     setActivities([]);
     setPhase("");
-    attachmentEpoch.current += 1;
+    attachmentEpoch.current.advance();
   }, [newConversationSignal]);
   useEffect(() => {
     const subscription = agent.subscribe({
@@ -81,7 +95,7 @@ export function Assistant({
           ].slice(-20),
         );
       },
-      onRunErrorEvent: ({ event }) => setError(event.message),
+      onRunErrorEvent: ({ event }) => showError(event.message),
       onToolCallStartEvent: ({ event }) => setPhase(event.toolCallName),
       onTextMessageContentEvent: () => setPhase("Writing"),
       onRunStartedEvent: () => setPhase("Thinking"),
@@ -98,22 +112,22 @@ export function Assistant({
   ) {
     if (busyRef.current) return;
     if (!isReady) {
-      setError("Agent is still connecting. Try again shortly.");
+      showError("Agent is still connecting. Try again shortly.");
       return;
     }
     if (!settings.modelConfigured) {
-      setError(
+      showError(
         "Connect your OpenAI API key in Settings to start this session.",
       );
       onDone();
       return;
     }
-    const attachment = fresh ? null : image;
+    const attachment = requestAttachment(fresh, image);
     let content: ReturnType<typeof userContent>;
     try {
       content = userContent(prompt, attachment);
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Agent request failed");
+      showError(e instanceof Error ? e.message : "Agent request failed");
       setImage(null);
       return;
     }
@@ -121,7 +135,7 @@ export function Assistant({
     busyRef.current = true;
     setBusy(true);
     onBusy(true);
-    setError("");
+    showError("");
     setActivities([]);
     if (fresh) {
       agent.threadId = crypto.randomUUID();
@@ -134,7 +148,7 @@ export function Assistant({
       role: "user",
       content,
     });
-    attachmentEpoch.current += 1;
+    attachmentEpoch.current.advance();
     setInput("");
     setImage(null);
     let finished = false;
@@ -196,7 +210,7 @@ export function Assistant({
         onDraft(markdown);
       }
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Agent request failed");
+      showError(e instanceof Error ? e.message : "Agent request failed");
     } finally {
       completion.unsubscribe();
       busyRef.current = false;
@@ -241,9 +255,9 @@ export function Assistant({
             agent.threadId = crypto.randomUUID();
             agent.setMessages([]);
             setImage(null);
-            setError("");
+            showError("");
             setActivities([]);
-            attachmentEpoch.current += 1;
+            attachmentEpoch.current.advance();
           }}
         >
           <Plus size={18} />
@@ -361,17 +375,17 @@ export function Assistant({
             title="Attach a screenshot of your primary screen"
             disabled={busy}
             onClick={() => {
-              const epoch = attachmentEpoch.current;
+              const isCurrent = attachmentEpoch.current.capture();
               void window
                 .kite!.screenshot()
                 .then((shot) => {
-                  if (attachmentEpoch.current !== epoch) return;
-                  setError("");
+                  if (!isCurrent()) return;
+                  if (errorSource.current === "capture") showError("");
                   setImage(shot);
                 })
                 .catch((e) => {
-                  if (attachmentEpoch.current !== epoch) return;
-                  setError(ipcErrorMessage(e, "Screenshot failed"));
+                  if (!isCurrent()) return;
+                  showError(ipcErrorMessage(e, "Screenshot failed"), "capture");
                 });
             }}
           >

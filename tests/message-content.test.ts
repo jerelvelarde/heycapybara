@@ -1,7 +1,12 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { RunAgentInputSchema } from "@ag-ui/core";
-import { ipcErrorMessage, userContent } from "../src/message-content";
+import {
+  createEpoch,
+  ipcErrorMessage,
+  requestAttachment,
+  userContent,
+} from "../src/message-content";
 import type { ScreenshotAttachment } from "../src/types";
 
 const image: ScreenshotAttachment = {
@@ -11,6 +16,40 @@ const image: ScreenshotAttachment = {
   height: 2,
   dataUrl: "data:image/png;base64,AAAA",
 };
+
+test("requestAttachment drops a pending image for a fresh request", () => {
+  assert.equal(requestAttachment(true, image), null);
+});
+
+test("requestAttachment keeps a pending image for a request that continues the thread", () => {
+  assert.equal(requestAttachment(false, image), image);
+});
+
+test("requestAttachment stays null for a continuing request with nothing attached", () => {
+  assert.equal(requestAttachment(false, null), null);
+});
+
+test("createEpoch: a capture taken before advance() reads as stale afterwards", () => {
+  const epoch = createEpoch();
+  const isCurrent = epoch.capture();
+  epoch.advance();
+  assert.equal(isCurrent(), false);
+});
+
+test("createEpoch: a capture taken after advance() reads as current", () => {
+  const epoch = createEpoch();
+  epoch.advance();
+  const isCurrent = epoch.capture();
+  assert.equal(isCurrent(), true);
+});
+
+test("createEpoch: a capture stays current until the next advance()", () => {
+  const epoch = createEpoch();
+  const isCurrent = epoch.capture();
+  assert.equal(isCurrent(), true);
+  epoch.advance();
+  assert.equal(isCurrent(), false);
+});
 
 test("no image sends the prompt as plain text", () => {
   assert.equal(userContent("hi", null), "hi");
@@ -94,6 +133,38 @@ test("ipcErrorMessage leaves an unprefixed message unchanged", () => {
     ipcErrorMessage(error, "Screenshot failed"),
     "The display changed during the capture. Try again.",
   );
+});
+
+test("ipcErrorMessage strips a SyntaxError label after the Electron prefix", () => {
+  const error = new Error(
+    "Error invoking remote method 'kite:screenshot': SyntaxError: Unexpected token in JSON",
+  );
+  assert.equal(
+    ipcErrorMessage(error, "Screenshot failed"),
+    "Unexpected token in JSON",
+  );
+});
+
+test("ipcErrorMessage strips a TypeError label after the Electron prefix", () => {
+  const error = new Error(
+    "Error invoking remote method 'kite:screenshot': TypeError: Cannot read properties of undefined",
+  );
+  assert.equal(
+    ipcErrorMessage(error, "Screenshot failed"),
+    "Cannot read properties of undefined",
+  );
+});
+
+test("ipcErrorMessage strips a ZodError label after the Electron prefix", () => {
+  const error = new Error(
+    "Error invoking remote method 'kite:screenshot': ZodError: Invalid input",
+  );
+  assert.equal(ipcErrorMessage(error, "Screenshot failed"), "Invalid input");
+});
+
+test("ipcErrorMessage strips the Error label from an otherwise unprefixed message", () => {
+  const error = new Error("Error: x");
+  assert.equal(ipcErrorMessage(error, "Screenshot failed"), "x");
 });
 
 test("ipcErrorMessage falls back for a non-Error value", () => {
