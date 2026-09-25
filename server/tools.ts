@@ -2,7 +2,6 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js";
 import {
   SkillRegistry,
-  formatSkillCatalog,
   loadSkill,
   readSkillFile,
 } from "@copilotkit/runtime/internal/learned-skills";
@@ -12,6 +11,7 @@ import type { Store } from "../electron/store";
 import type { DesktopAction, DesktopActionResult } from "../src/types";
 import type { AgentRun } from "./run-registry";
 import { safeAgentError } from "./codex-agent";
+import { learnedSkillCatalog } from "./learned-skills";
 import {
   bundleIdSchema,
   pointLabelSchema,
@@ -43,16 +43,22 @@ export type DesktopActionHandler = (
 export function createToolHandler(options: {
   store: Store;
   intelligence?: CopilotKitIntelligence;
+  // The runtime passes its one shared registry so the MCP tools, the Codex
+  // catalog and learning status all see the same snapshot. Without one, a
+  // registry is built from `intelligence`, as before.
+  registry?: Pick<SkillRegistry, "acquireSnapshot">;
   containerId: string;
   action?: DesktopActionHandler;
 }) {
-  const registry = options.intelligence
-    ? new SkillRegistry({
-        client: options.intelligence,
-        containerId: options.containerId,
-        requestTimeoutMs: 15000,
-      })
-    : undefined;
+  const registry =
+    options.registry ??
+    (options.intelligence
+      ? new SkillRegistry({
+          client: options.intelligence,
+          containerId: options.containerId,
+          requestTimeoutMs: 15000,
+        })
+      : undefined);
   return async (request: Request, run: AgentRun) => {
     const server = new McpServer({ name: "kite", version: "0.2.0" });
     const result = (text: string) => ({
@@ -94,7 +100,9 @@ export function createToolHandler(options: {
       },
       async () => {
         if (!registry) return result("Intelligence is not configured");
-        return result(formatSkillCatalog(await registry.acquireSnapshot()));
+        return result(
+          learnedSkillCatalog((await registry.acquireSnapshot()).skills),
+        );
       },
     );
     server.registerTool(

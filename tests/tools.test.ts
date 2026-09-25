@@ -37,6 +37,7 @@ function deferred(): { promise: Promise<void>; resolve: () => void } {
 async function withHandler(
   options: {
     action?: DesktopActionHandler;
+    registry?: Parameters<typeof createToolHandler>[0]["registry"];
   },
   run: (handler: Handler) => Promise<void>,
 ): Promise<void> {
@@ -48,6 +49,7 @@ async function withHandler(
       store,
       containerId: "desktop-workflows",
       action: options.action,
+      registry: options.registry,
     });
     await run(handler);
   } finally {
@@ -101,6 +103,51 @@ test("lists learned-skill tools and calls a real no-op tool", async () => {
     });
     assert.equal(result.result.content[0].text, "[]");
   });
+});
+
+// A delivered snapshot in the shape SkillRegistry.acquireSnapshot() returns
+// once it has verified a skills ZIP from Intelligence.
+const deliveredSnapshot = {
+  revision: "3",
+  etag: `"${"a".repeat(64)}"`,
+  skills: [
+    {
+      name: "gmail-spam-triage",
+      description: "Label a Gmail message as spam or not spam",
+      files: [
+        {
+          path: "SKILL.md",
+          size: 9,
+          sha256: "b".repeat(64),
+          text: "# Triage\n",
+        },
+      ],
+    },
+  ],
+};
+
+test("list_learned_skills lists delivered skills with the tools that load them", async () => {
+  await withHandler(
+    { registry: { acquireSnapshot: async () => deliveredSnapshot } },
+    async (handler) => {
+      const listed = await requestTo(handler, "tools/call", {
+        name: "list_learned_skills",
+        arguments: {},
+      });
+      const text: string = listed.result.content[0].text;
+      assert.match(text, /gmail-spam-triage/);
+      assert.match(text, /load_learned_skill/);
+      assert.doesNotMatch(text, /copilotkit_load_skill/);
+      const loaded = await requestTo(handler, "tools/call", {
+        name: "load_learned_skill",
+        arguments: { name: "gmail-spam-triage" },
+      });
+      assert.equal(
+        JSON.parse(loaded.result.content[0].text).content,
+        "# Triage\n",
+      );
+    },
+  );
 });
 
 test("open_application rejects a malformed bundle id without invoking the action", async () => {
