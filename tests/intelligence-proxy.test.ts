@@ -152,3 +152,77 @@ test("GET is refused, so Codex never waits on an event stream", async () => {
   );
   assert.equal(response.status, 405);
 });
+
+// An Intelligence that accepts the call and never answers. It records the
+// signal the proxy's upstream fetch was given.
+function hungIntelligence() {
+  const signals: (AbortSignal | undefined)[] = [];
+  let called!: () => void;
+  const reached = new Promise<void>((resolve) => (called = resolve));
+  return {
+    signals,
+    reached,
+    fetch: (_url: string | URL, init?: RequestInit) => {
+      signals.push(init?.signal ?? undefined);
+      called();
+      return new Promise<Response>(() => {});
+    },
+  };
+}
+
+test("an Intelligence that never answers times out with a specific message", async () => {
+  const intelligence = hungIntelligence();
+  const handler = createIntelligenceProxy({
+    url: "https://intelligence.example.test/mcp",
+    apiKey: KEY,
+    userId: "kite-local-owner",
+    fetch: intelligence.fetch,
+    timeoutMs: 50,
+  });
+  const listed = await rpc(handler, "tools/list", {});
+  assert.equal(
+    listed.error.message,
+    "Intelligence knowledge base is unavailable: Intelligence did not answer within 0.05 seconds.",
+  );
+  // Closing the upstream client aborted its fetch too.
+  assert.equal(intelligence.signals[0]?.aborted, true);
+});
+
+test("the upstream call ends at once when Codex's request is aborted", async () => {
+  const intelligence = hungIntelligence();
+  const handler = createIntelligenceProxy({
+    url: "https://intelligence.example.test/mcp",
+    apiKey: KEY,
+    userId: "kite-local-owner",
+    fetch: intelligence.fetch,
+  });
+  const incoming = new AbortController();
+  const started = Date.now();
+  const pending = handler(
+    new Request("http://127.0.0.1/mcp/intelligence", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Accept: "application/json, text/event-stream",
+      },
+      body: JSON.stringify({
+        jsonrpc: "2.0",
+        id: 1,
+        method: "tools/list",
+        params: {},
+      }),
+      signal: incoming.signal,
+    }),
+  );
+  await intelligence.reached;
+  incoming.abort();
+  const response = await pending;
+  const text = await response.text();
+  assert.ok(!text.includes(KEY));
+  assert.match(
+    JSON.parse(text).error.message,
+    /^Intelligence knowledge base is unavailable: the request was cancelled\.$/,
+  );
+  assert.equal(intelligence.signals[0]?.aborted, true);
+  assert.ok(Date.now() - started < 5000);
+});

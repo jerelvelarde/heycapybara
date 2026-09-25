@@ -25,21 +25,30 @@ export const KNOWLEDGE_TOOLS = ["copilotkit_knowledge_base_shell"] as const;
  * The proxy connects to `${apiUrl}/mcp` with the headers CopilotKit sends
  * there (handlers/shared/agent-utils.mjs): the project key, the user, and a
  * read-only memory grant. It passes KNOWLEDGE_TOOLS through unchanged, with
- * Intelligence's own schema and results, and nothing else.
+ * Intelligence's own schema and results, and nothing else. Each upstream
+ * call gives up after `timeoutMs` (30 seconds by default), and at once when
+ * the incoming request is aborted.
  */
 export function createIntelligenceProxy(options: {
   url: string;
   apiKey: string;
   userId: string;
   fetch?: (url: string | URL, init?: RequestInit) => Promise<Response>;
+  timeoutMs?: number;
 }) {
   const headers = {
     Authorization: `Bearer ${options.apiKey}`,
     "x-cpki-user-id": options.userId,
     "x-cpki-memory-grant": JSON.stringify(READ_GRANT),
   };
+  const timeoutMs = options.timeoutMs ?? 30000;
   const allowed = new Set<string>(KNOWLEDGE_TOOLS);
-  async function upstream<T>(work: (client: Client) => Promise<T>) {
+  async function upstream<T>(
+    incoming: AbortSignal,
+    work: (client: Client, request: { signal: AbortSignal }) => Promise<T>,
+  ) {
+    const timeout = AbortSignal.timeout(timeoutMs);
+    const signal = AbortSignal.any([incoming, timeout]);
     const client = new Client({
       name: "openmuse-intelligence-proxy",
       version: "0.1.0",
@@ -49,13 +58,19 @@ export function createIntelligenceProxy(options: {
       ...(options.fetch ? { fetch: options.fetch } : {}),
     });
     try {
-      await client.connect(transport);
-      return await work(client);
+      // Closing the client in `finally` also aborts the transport's own
+      // in-flight fetch.
+      await client.connect(transport, { signal });
+      return await work(client, { signal });
     } catch (error) {
-      throw new Error(
-        "Intelligence knowledge base is unavailable: " + safeAgentError(error),
-        { cause: error },
-      );
+      const reason = timeout.aborted
+        ? `Intelligence did not answer within ${timeoutMs / 1000} seconds.`
+        : incoming.aborted
+          ? "the request was cancelled."
+          : safeAgentError(error);
+      throw new Error("Intelligence knowledge base is unavailable: " + reason, {
+        cause: error,
+      });
     } finally {
       await client
         .close()
@@ -76,7 +91,9 @@ export function createIntelligenceProxy(options: {
       { capabilities: { tools: {} } },
     );
     server.setRequestHandler(ListToolsRequestSchema, async () => {
-      const { tools } = await upstream((client) => client.listTools());
+      const { tools } = await upstream(request.signal, (client, options) =>
+        client.listTools(undefined, options),
+      );
       return { tools: tools.filter((tool) => allowed.has(tool.name)) };
     });
     server.setRequestHandler(CallToolRequestSchema, async (call) => {
@@ -84,11 +101,12 @@ export function createIntelligenceProxy(options: {
         throw new Error(
           `The Intelligence tool ${call.params.name} is not available to OpenMuse.`,
         );
-      return (await upstream((client) =>
-        client.callTool({
-          name: call.params.name,
-          arguments: call.params.arguments,
-        }),
+      return (await upstream(request.signal, (client, options) =>
+        client.callTool(
+          { name: call.params.name, arguments: call.params.arguments },
+          undefined,
+          options,
+        ),
       )) as CallToolResult;
     });
     const transport = new WebStandardStreamableHTTPServerTransport({

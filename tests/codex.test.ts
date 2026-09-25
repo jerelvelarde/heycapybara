@@ -2184,6 +2184,136 @@ test("unavailable skills or memories are reported and the run continues", async 
   }
 });
 
+// A Memory client whose calls never answer, as a hung bare fetch in
+// @copilotkit/runtime 1.73.3 would not.
+const hungMemory = {
+  listMemories: () => new Promise<never>(() => {}),
+  recallMemories: () => new Promise<never>(() => {}),
+  createMemory: () => new Promise<never>(() => {}),
+};
+
+test("a hung Memory recall times out, is reported, and the thread still starts", async () => {
+  const { CodexRunner } = await import("../server/codex-agent");
+  const { createMemoryAccess } = await import("../server/memory");
+  const { ScreenshotRegistry } = await import("../server/screenshots");
+  const { mkdtemp, rm } = await import("node:fs/promises");
+  const { tmpdir } = await import("node:os");
+  const { join } = await import("node:path");
+  const root = await mkdtemp(join(tmpdir(), "kite-context-hung-test-"));
+  const record: { prompt?: unknown } = {};
+  const memory = createMemoryAccess(hungMemory, "kite-local-owner", {
+    recall: 20,
+    list: 20,
+    save: 20,
+  });
+  // Skills answer only once recall has begun, so reading them one after the
+  // other would report skills as late instead of delivering them.
+  let recallStarted!: () => void;
+  const started = new Promise<void>((resolve) => (recallStarted = resolve));
+  const signals: AbortSignal[] = [];
+  const runner = new CodexRunner({
+    runs: new RunRegistry(),
+    statePath: root,
+    screenshots: new ScreenshotRegistry(),
+    learnedSkills: async () => {
+      const together = await Promise.race([
+        started.then(() => true),
+        new Promise<false>((resolve) => setTimeout(() => resolve(false), 500)),
+      ]);
+      if (!together) throw new Error("skills were read before recall began");
+      return [{ name: "gmail-spam-triage", description: "Label spam" }];
+    },
+    recallMemories: (query, signal) => {
+      signals.push(signal);
+      recallStarted();
+      return memory.recall(query, signal);
+    },
+    getConfig: contextConfig,
+    createClient: recordingClient(record),
+  });
+  const memoryMessage =
+    "Intelligence Memory is unavailable for this conversation: Intelligence Memory did not answer within 0.02 seconds.";
+  try {
+    const events = [];
+    for await (const event of runner.run(
+      contextInput("hung-recall", "Label this email"),
+      new AbortController().signal,
+    ))
+      events.push(event);
+    assert.deepEqual(
+      events.map((event) =>
+        event.type === "kite.notice"
+          ? [event.name, event.value.summary]
+          : [event.type],
+      ),
+      [["kite.activity", memoryMessage], ["thread.started"]],
+    );
+    assert.equal(signals.length, 1);
+    assert.equal(signals[0].aborted, false);
+    const texts = (record.prompt as { text?: string }[]).map((p) => p.text);
+    assert.match(texts[0] ?? "", /gmail-spam-triage/);
+    assert.equal(texts[1], memoryMessage);
+    assert.equal(runner.busy, false);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("Stop ends a run whose Memory recall never answers, even one that ignores the signal", async () => {
+  const { CodexRunner } = await import("../server/codex-agent");
+  const { ScreenshotRegistry } = await import("../server/screenshots");
+  const { mkdtemp, rm } = await import("node:fs/promises");
+  const { tmpdir } = await import("node:os");
+  const { join } = await import("node:path");
+  const root = await mkdtemp(join(tmpdir(), "kite-context-stop-test-"));
+  const record: { prompt?: unknown } = {};
+  let recalled!: () => void;
+  const recalling = new Promise<void>((resolve) => (recalled = resolve));
+  let signal: AbortSignal | undefined;
+  const runner = new CodexRunner({
+    runs: new RunRegistry(),
+    statePath: root,
+    screenshots: new ScreenshotRegistry(),
+    learnedSkills: async () => [],
+    // Hangs on the first run only, so the second can finish.
+    recallMemories: async (_query, runSignal) => {
+      if (signal) return [];
+      signal = runSignal;
+      recalled();
+      return new Promise<never>(() => {});
+    },
+    getConfig: contextConfig,
+    createClient: recordingClient(record),
+  });
+  try {
+    const stop = new AbortController();
+    const events: unknown[] = [];
+    const run = (async () => {
+      for await (const event of runner.run(
+        contextInput("stopped-recall", "Label this email"),
+        stop.signal,
+      ))
+        events.push(event);
+    })();
+    await recalling;
+    assert.equal(runner.busy, true);
+    stop.abort();
+    await assert.rejects(run, { message: "Run stopped" });
+    assert.equal(signal?.aborted, true);
+    assert.deepEqual(events, []);
+    assert.equal(record.prompt, undefined, "Codex never started");
+    assert.equal(runner.busy, false);
+    // The conversation is free again, not "already running".
+    for await (const event of runner.run(
+      contextInput("stopped-recall", "Label this email"),
+      new AbortController().signal,
+    ))
+      assert.equal(event.type, "thread.started");
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("Codex reaches Intelligence's knowledge base only through OpenMuse's proxy", async () => {
   const { CodexRunner } = await import("../server/codex-agent");
   const { ScreenshotRegistry } = await import("../server/screenshots");

@@ -60,9 +60,12 @@ export type CodexRunnerOptions = {
   // Codex thread; omitted when Intelligence is not configured.
   learnedSkills?: () => Promise<readonly DeliveredSkill[]>;
   // What Intelligence Memory recalls for a task, by meaning. Called once per
-  // new Codex thread with the user's first message.
+  // new Codex thread with the user's first message and the run's signal,
+  // which aborts on Stop. It should bound itself in time
+  // (createMemoryAccess in server/memory.ts does).
   recallMemories?: (
     query: string,
+    signal: AbortSignal,
   ) => Promise<readonly Pick<MemoryNote, "kind" | "content">[]>;
   createClient?: (options: CodexOptions) => {
     startThread(options: ThreadOptions): Pick<Thread, "runStreamed">;
@@ -113,12 +116,15 @@ const text = (value: string): UserInput => ({ type: "text", text: value });
 
 /**
  * What a new Codex thread starts from: the learned skills Intelligence
- * delivers, and what Intelligence Memory recalls for this task. Either can be
- * unavailable. The run goes on, and the chat's activity says why.
+ * delivers, and what Intelligence Memory recalls for this task, read
+ * together. Either can be unavailable or late. The run goes on, and the
+ * chat's activity says why. A Stop meanwhile ends the wait at once, even if a
+ * read ignores `signal`, and the caller then ends the run as stopped.
  */
 async function newThreadContext(
   options: Pick<CodexRunnerOptions, "learnedSkills" | "recallMemories">,
   task: string,
+  signal: AbortSignal,
 ) {
   const parts: UserInput[] = [];
   const notices: KiteNotice[] = [];
@@ -130,38 +136,48 @@ async function newThreadContext(
       value: { id, summary: message, status: "item.completed" },
     });
   };
-  if (options.learnedSkills)
-    try {
-      const skills = await options.learnedSkills();
-      if (skills.length) parts.push(text(learnedSkillCatalog(skills)));
-    } catch (error) {
-      unavailable(
-        "learned-skills-unavailable",
-        "Learned skills are unavailable for this conversation: " +
-          safeAgentError(error),
-      );
-    }
-  if (options.recallMemories && task.trim())
-    try {
-      const memories = await options.recallMemories(task);
-      if (memories.length) {
-        parts.push(text(memoryNotes(memories)));
-        notices.push({
-          type: "kite.notice",
-          name: "kite.memory-recalled",
-          value: {
-            count: memories.length,
-            previews: memories.map((memory) => memoryPreview(memory.content)),
-          },
-        });
-      }
-    } catch (error) {
-      unavailable(
-        "memory-unavailable",
-        "Intelligence Memory is unavailable for this conversation: " +
-          safeAgentError(error),
-      );
-    }
+  const untilStopped = <T>(work: () => Promise<T>) =>
+    new Promise<T>((resolve, reject) => {
+      const stopped = () => reject(new Error("Run stopped"));
+      if (signal.aborted) return stopped();
+      signal.addEventListener("abort", stopped, { once: true });
+      work()
+        .then(resolve, reject)
+        .finally(() => signal.removeEventListener("abort", stopped));
+    });
+  const { learnedSkills, recallMemories } = options;
+  const [skills, memories] = await Promise.allSettled([
+    learnedSkills ? untilStopped(learnedSkills) : undefined,
+    recallMemories && task.trim()
+      ? untilStopped(() => recallMemories(task, signal))
+      : undefined,
+  ]);
+  if (signal.aborted) return { parts, notices };
+  if (skills.status === "rejected")
+    unavailable(
+      "learned-skills-unavailable",
+      "Learned skills are unavailable for this conversation: " +
+        safeAgentError(skills.reason),
+    );
+  else if (skills.value?.length)
+    parts.push(text(learnedSkillCatalog(skills.value)));
+  if (memories.status === "rejected")
+    unavailable(
+      "memory-unavailable",
+      "Intelligence Memory is unavailable for this conversation: " +
+        safeAgentError(memories.reason),
+    );
+  else if (memories.value?.length) {
+    parts.push(text(memoryNotes(memories.value)));
+    notices.push({
+      type: "kite.notice",
+      name: "kite.memory-recalled",
+      value: {
+        count: memories.value.length,
+        previews: memories.value.map((memory) => memoryPreview(memory.content)),
+      },
+    });
+  }
   return { parts, notices };
 }
 
@@ -322,7 +338,10 @@ export class CodexRunner {
             : latest.content
                 .flatMap((part) => (part.type === "text" ? [part.text] : []))
                 .join("\n"),
+          controller.signal,
         );
+        // Stopped while reading: end the way any other Stop does.
+        if (controller.signal.aborted) throw new Error("Run stopped");
         prompt.push(...context.parts);
         for (const notice of context.notices) yield notice;
       }
