@@ -80,12 +80,12 @@ test("anything newly learned offers to try it", () => {
     learningStrip(
       status({
         phase: "learned",
-        message: 'Intelligence learned from your conversations: "x"',
+        message: 'New in Intelligence Memory: "x"',
       }),
     ),
     {
       tone: "success",
-      text: 'Intelligence learned from your conversations: "x"',
+      text: 'New in Intelligence Memory: "x"',
       action: { kind: "try" },
     },
   );
