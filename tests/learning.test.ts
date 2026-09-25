@@ -41,10 +41,26 @@ test("a memory Intelligence wrote after the baseline is learned, even with no co
   assert.equal(status.phase, "learned");
   assert.equal(
     status.message,
-    'Intelligence learned from your conversations: "How to label Gmail spam"',
+    'New in Intelligence Memory: "How to label Gmail spam"',
   );
   assert.deepEqual(status.newMemories, ["How to label Gmail spam"]);
   assert.equal(status.memories, 1);
+});
+
+test("several new memories are announced neutrally, with the first as an example", () => {
+  const status = describeLearning(
+    learningRead(
+      {},
+      { memories: [memory("m1", "First note"), memory("m2", "Second note")] },
+    ),
+    none,
+    now,
+  );
+  assert.equal(status.phase, "learned");
+  assert.equal(
+    status.message,
+    'New in Intelligence Memory: 2 notes, including "First note"',
+  );
 });
 
 test("memories in the baseline are counted but not announced", () => {

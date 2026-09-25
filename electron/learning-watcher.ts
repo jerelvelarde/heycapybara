@@ -30,6 +30,7 @@ export class LearningWatcher {
   #skillBaseline: Set<string> | undefined;
   #memoryBaseline: Set<string> | undefined;
   readonly #mine = new Set<string>();
+  readonly #taught = new Set<string>();
   #last: LearningRead | undefined;
   #until = 0;
   #cancel: (() => void) | undefined;
@@ -73,6 +74,15 @@ export class LearningWatcher {
     return this.#tick();
   }
 
+  /**
+   * Call before saving a lesson from `threadId`. A poll can list the lesson
+   * before createMemory returns its id, so every memory sourced from a taught
+   * thread is treated as the user's own, during the save and after it.
+   */
+  expectLesson(threadId: string) {
+    this.#taught.add(threadId);
+  }
+
   /** A memory OpenMuse saved itself: never announce it as Intelligence's. */
   remember(memoryId: string) {
     this.#mine.add(memoryId);
@@ -98,7 +108,15 @@ export class LearningWatcher {
       read,
       {
         skills: this.#skillBaseline ?? new Set(),
-        memories: new Set([...(this.#memoryBaseline ?? []), ...this.#mine]),
+        memories: new Set([
+          ...(this.#memoryBaseline ?? []),
+          ...this.#mine,
+          ...(read.memories ?? [])
+            .filter((memory) =>
+              memory.sourceThreadIds.some((id) => this.#taught.has(id)),
+            )
+            .map((memory) => memory.id),
+        ]),
       },
       new Date(this.#now()),
     );
@@ -148,6 +166,15 @@ export class LearningWatcher {
       JSON.stringify({ ...next, checkedAt: null }) ===
       JSON.stringify({ ...this.#status, checkedAt: null });
     this.#status = next;
-    if (!same) this.#onChange(next);
+    if (same || this.#stopped) return;
+    // A failing listener must not reject watch(), which callers fire and forget.
+    try {
+      this.#onChange(next);
+    } catch (error) {
+      console.error(
+        "Learning status changed but could not be sent to the windows:",
+        error instanceof Error ? error.message : error,
+      );
+    }
   }
 }

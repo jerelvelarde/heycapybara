@@ -118,8 +118,8 @@ export function describeLearning(
       phase: "learned",
       message:
         newMemories.length === 1
-          ? `Intelligence learned from your conversations: "${newMemories[0]}"`
-          : `Intelligence learned ${newMemories.length} things from your conversations, including "${newMemories[0]}"`,
+          ? `New in Intelligence Memory: "${newMemories[0]}"`
+          : `New in Intelligence Memory: ${newMemories.length} notes, including "${newMemories[0]}"`,
       link: null,
     };
   if (!snapshot)

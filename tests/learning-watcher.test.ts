@@ -164,3 +164,88 @@ test("stop() cancels the next poll and ignores later watch() calls", async () =>
   await watcher.watch();
   assert.equal(calls(), 1);
 });
+
+test("a poll that lands mid-save never announces the user's own lesson", async () => {
+  const lesson = {
+    ...memory("mine", "Saved lesson"),
+    sourceThreadIds: ["t-lesson"],
+  };
+  const { watcher, timers } = setup([
+    learningRead(),
+    learningRead({}, { memories: [lesson] }),
+    learningRead(
+      {},
+      {
+        memories: [
+          lesson,
+          memory("theirs", "Gmail spam is labeled from the toolbar"),
+        ],
+      },
+    ),
+  ]);
+  await watcher.watch();
+  watcher.expectLesson("t-lesson");
+  // createMemory has written the lesson but not yet returned its id.
+  await timers.fire();
+  assert.equal(watcher.status.phase, "idle");
+  assert.deepEqual(watcher.status.newMemories, []);
+  watcher.remember("mine");
+  await timers.fire();
+  assert.equal(watcher.status.phase, "learned");
+  assert.deepEqual(watcher.status.newMemories, [
+    "Gmail spam is labeled from the toolbar",
+  ]);
+});
+
+test("a lesson from a taught thread stays unannounced if its id never comes back", async () => {
+  const lesson = {
+    ...memory("mine", "Saved lesson"),
+    sourceThreadIds: ["t-lesson"],
+  };
+  const { watcher, timers } = setup([
+    learningRead(),
+    learningRead({}, { memories: [lesson] }),
+  ]);
+  await watcher.watch();
+  watcher.expectLesson("t-lesson");
+  await timers.fire();
+  await timers.fire();
+  assert.equal(watcher.status.phase, "idle");
+  assert.deepEqual(watcher.status.newMemories, []);
+});
+
+test("a throwing onChange is logged and never rejects watch()", async (t) => {
+  const logged = t.mock.method(console, "error", () => {});
+  let calls = 0;
+  const watcher = new LearningWatcher({
+    source: () => async () => learningRead({ pendingCandidateCount: 1 }),
+    onChange: () => {
+      calls += 1;
+      throw new Error("window gone");
+    },
+    schedule: fakeSchedule().schedule,
+  });
+  await watcher.watch();
+  assert.equal(calls, 1);
+  assert.equal(logged.mock.callCount(), 1);
+});
+
+test("a read that resolves after stop() does not notify", async () => {
+  let release: (read: LearningRead) => void = () => {};
+  let calls = 0;
+  const watcher = new LearningWatcher({
+    source: () => () =>
+      new Promise<LearningRead>((resolve) => {
+        release = resolve;
+      }),
+    onChange: () => {
+      calls += 1;
+    },
+    schedule: fakeSchedule().schedule,
+  });
+  const reading = watcher.watch();
+  watcher.stop();
+  release(learningRead({ pendingCandidateCount: 1 }));
+  await reading;
+  assert.equal(calls, 0);
+});

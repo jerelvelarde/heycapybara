@@ -211,9 +211,10 @@ let transitioning = false;
 // Setup replays that passed their guard and are still saving; a counter so overlapping replays cannot clear each other.
 let setupReopenings = 0;
 const broadcast = () =>
-  BrowserWindow.getAllWindows().forEach((w) =>
-    w.webContents.send("kite:update"),
-  );
+  BrowserWindow.getAllWindows().forEach((w) => {
+    if (!w.isDestroyed() && !w.webContents.isDestroyed())
+      w.webContents.send("kite:update");
+  });
 // Every window listed here gets concealed for screenshots and the pointer;
 // a window left out of this list still shows up in captures and is never
 // cleared before the pointer ring appears over it.
@@ -1128,6 +1129,8 @@ app
           "The lesson to save is invalid: " +
             parsed.error.issues.map((issue) => issue.message).join("; "),
         );
+      // Before the save: a poll can list the lesson before its id comes back.
+      learning!.expectLesson(parsed.data.threadId);
       const saved = await runtime.memory.saveLesson(parsed.data);
       learning!.remember(saved.id);
       void learning!.watch();
