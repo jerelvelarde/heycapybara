@@ -42,12 +42,13 @@ Be concise and practical. Keep working through recoverable errors, and verify th
 export type CodexRunnerOptions = {
   statePath: string;
   binaryPath?: string;
-  // Required (though its value may be `undefined`) so omitting this wiring is
-  // a typecheck error at both hops it passes through: startRuntime's own
-  // options (server/runtime.ts), which mirror this same required-but-
-  // possibly-undefined shape, and this constructor's options here. See the
-  // screenshot lookup used below in `run()`.
-  screenshots: ScreenshotLookup | undefined;
+  // Required, and never `undefined`: a caller must always wire up a real
+  // ScreenshotRegistry (server/screenshots.ts). Passing `undefined` used to
+  // typecheck and pass every test while silently turning off
+  // point_on_screen's screenshot notes; see the lookup used below in
+  // `run()`. startRuntime's own options (server/runtime.ts) mirror this
+  // same required shape.
+  screenshots: ScreenshotLookup;
   createClient?: (options: CodexOptions) => {
     startThread(options: ThreadOptions): Pick<Thread, "runStreamed">;
     resumeThread(
@@ -175,6 +176,10 @@ export class CodexRunner {
               url: config.mcpUrl,
               bearer_token_env_var: "KITE_MCP_TOKEN",
               required: true,
+              // Codex's own default (rust-v0.156.1 DEFAULT_TOOL_TIMEOUT);
+              // pinned here so this limit is ours and doesn't change out
+              // from under us on a Codex upgrade.
+              tool_timeout_sec: 300,
               tools: Object.fromEntries(
                 [
                   "list_local_skills",
@@ -252,7 +257,9 @@ export class CodexRunner {
           else if (part.type === "binary") {
             imageNumber += 1;
             if (part.mimeType !== "image/png")
-              throw new Error(`Image ${imageNumber} is not a PNG screenshot.`);
+              throw new Error(
+                `Attachment ${imageNumber} is not a PNG screenshot.`,
+              );
             if (!part.data)
               throw new Error(`Image ${imageNumber} has no image data.`);
             if (part.data.length > 16_000_000)
@@ -268,7 +275,7 @@ export class CodexRunner {
               );
             }
             const shot = part.id
-              ? this.options.screenshots?.get(part.id)
+              ? this.options.screenshots.get(part.id)
               : undefined;
             let note: string;
             if (!part.id) note = unreferencedImageNote(imageNumber);
@@ -282,7 +289,12 @@ export class CodexRunner {
             const path = join(temp, randomUUID() + ".png");
             await writeFile(path, bytes, { mode: 0o600 });
             prompt.push({ type: "local_image", path });
-          } else throw new Error("Unsupported message attachment");
+          } else {
+            imageNumber += 1;
+            throw new Error(
+              `Attachment ${imageNumber} (${part.type}) is not supported.`,
+            );
+          }
         }
       const { events } = await thread.runStreamed(prompt, {
         signal: controller.signal,

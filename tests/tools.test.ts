@@ -14,7 +14,9 @@ type Handler = (request: Request) => Promise<Response>;
 // its own `actions` array, so an early failure in one test never hides or
 // pollutes another.
 async function withHandler(
-  options: { action?: (action: DesktopAction) => Promise<void> },
+  options: {
+    action?: (action: DesktopAction, signal: AbortSignal) => Promise<void>;
+  },
   run: (handler: Handler) => Promise<void>,
 ): Promise<void> {
   const root = await mkdtemp(join(tmpdir(), "kite-mcp-test-"));
@@ -32,8 +34,15 @@ async function withHandler(
   }
 }
 
-// Sends one MCP JSON-RPC call through a handler from withHandler().
-async function requestTo(handler: Handler, method: string, params: unknown) {
+// Sends one MCP JSON-RPC call through a handler from withHandler(). `init`
+// carries extra Request options a test needs to control, such as its own
+// AbortSignal.
+async function requestTo(
+  handler: Handler,
+  method: string,
+  params: unknown,
+  init: { signal?: AbortSignal } = {},
+) {
   const response = await handler(
     new Request("http://127.0.0.1/mcp", {
       method: "POST",
@@ -42,6 +51,7 @@ async function requestTo(handler: Handler, method: string, params: unknown) {
         Accept: "application/json, text/event-stream",
       },
       body: JSON.stringify({ jsonrpc: "2.0", id: 1, method, params }),
+      ...init,
     }),
   );
   assert.equal(response.status, 200);
@@ -370,4 +380,71 @@ test('returns "Desktop actions unavailable" when no action is configured', async
     assert.equal(pointed.result.isError, true);
     assert.equal(pointed.result.content[0].text, "Desktop actions unavailable");
   });
+});
+
+test("open_application and point_on_screen both forward the request's own AbortSignal to the action", async () => {
+  const seenSignals: AbortSignal[] = [];
+  const controller = new AbortController();
+  await withHandler(
+    {
+      action: async (_action, signal) => void seenSignals.push(signal),
+    },
+    async (handler) => {
+      const opened = await requestTo(
+        handler,
+        "tools/call",
+        {
+          name: "open_application",
+          arguments: { bundleId: "com.apple.TextEdit" },
+        },
+        { signal: controller.signal },
+      );
+      assert.ok(!opened.result.isError);
+      const pointed = await requestTo(
+        handler,
+        "tools/call",
+        {
+          name: "point_on_screen",
+          arguments: { ...validPoint, label: "Save button" },
+        },
+        { signal: controller.signal },
+      );
+      assert.ok(!pointed.result.isError);
+    },
+  );
+  // Neither tool call has aborted anything yet: the action saw a live,
+  // not-yet-aborted signal, not a pre-aborted stand-in.
+  assert.equal(seenSignals.length, 2);
+  assert.ok(seenSignals.every((signal) => signal.aborted === false));
+  // Aborting the controller the request was built from reaches the exact
+  // signal object the action received, proving it is (or follows) the
+  // request's own signal rather than a disconnected copy.
+  controller.abort();
+  assert.ok(seenSignals.every((signal) => signal.aborted === true));
+});
+
+test("open_application's bundle-id length boundary: 255 characters passes, 256 is rejected", async () => {
+  const actions: DesktopAction[] = [];
+  await withHandler(
+    { action: async (action) => void actions.push(action) },
+    async (handler) => {
+      const atLimit = "a".repeat(127) + "." + "a".repeat(127);
+      assert.equal(atLimit.length, 255);
+      const ok = await requestTo(handler, "tools/call", {
+        name: "open_application",
+        arguments: { bundleId: atLimit },
+      });
+      assert.ok(!ok.result.isError);
+      assert.equal(actions.length, 1);
+
+      const overLimit = "a".repeat(127) + "." + "a".repeat(128);
+      assert.equal(overLimit.length, 256);
+      const rejected = await requestTo(handler, "tools/call", {
+        name: "open_application",
+        arguments: { bundleId: overLimit },
+      });
+      assert.equal(rejected.result.isError, true);
+      assert.equal(actions.length, 1);
+    },
+  );
 });

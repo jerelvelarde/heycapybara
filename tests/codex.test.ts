@@ -129,6 +129,7 @@ test("Codex receives only allowlisted environment and isolated shell home", asyn
 
 test("conversations resume their own native thread and reject workspace changes", async () => {
   const { CodexRunner } = await import("../server/codex-agent");
+  const { ScreenshotRegistry } = await import("../server/screenshots");
   const { mkdtemp, rm, readFile } = await import("node:fs/promises");
   const { tmpdir } = await import("node:os");
   const { join } = await import("node:path");
@@ -145,7 +146,7 @@ test("conversations resume their own native thread and reject workspace changes"
   });
   const runner = new CodexRunner({
     statePath: root,
-    screenshots: undefined,
+    screenshots: new ScreenshotRegistry(),
     getConfig: () => ({
       apiKey: "fixture-key",
       model: "gpt-5.4",
@@ -164,6 +165,17 @@ test("conversations resume their own native thread and reject workspace changes"
         "OPENAI_API_KEY",
         "KITE_MCP_TOKEN",
       ]);
+      const mcpServers = options.config?.mcp_servers;
+      assert.ok(
+        mcpServers &&
+          typeof mcpServers === "object" &&
+          !Array.isArray(mcpServers),
+      );
+      const kite = mcpServers.kite;
+      assert.ok(kite && typeof kite === "object" && !Array.isArray(kite));
+      // Pinned ourselves rather than left to Codex's own default, so an
+      // upstream Codex change can't silently move this out from under us.
+      assert.equal(kite.tool_timeout_sec, 300);
       return {
         startThread: () => fakeThread("native-" + ++counter),
         resumeThread: (id) => {
@@ -465,13 +477,14 @@ test("a screenshot capture older than 10 minutes is described as too stale to po
 
 test("a binary attachment that isn't actually a PNG is rejected even when labelled image/png", async () => {
   const { CodexRunner } = await import("../server/codex-agent");
+  const { ScreenshotRegistry } = await import("../server/screenshots");
   const { mkdtemp, rm } = await import("node:fs/promises");
   const { tmpdir } = await import("node:os");
   const { join } = await import("node:path");
   const root = await mkdtemp(join(tmpdir(), "kite-prompt-badpng-test-"));
   const runner = new CodexRunner({
     statePath: root,
-    screenshots: undefined,
+    screenshots: new ScreenshotRegistry(),
     getConfig: () => ({
       apiKey: "fixture-key",
       model: "gpt-5.4",
@@ -522,13 +535,14 @@ test("a binary attachment that isn't actually a PNG is rejected even when labell
 
 test("a binary part whose MIME type isn't image/png is rejected before decoding", async () => {
   const { CodexRunner } = await import("../server/codex-agent");
+  const { ScreenshotRegistry } = await import("../server/screenshots");
   const { mkdtemp, rm } = await import("node:fs/promises");
   const { tmpdir } = await import("node:os");
   const { join } = await import("node:path");
   const root = await mkdtemp(join(tmpdir(), "kite-prompt-mimetype-test-"));
   const runner = new CodexRunner({
     statePath: root,
-    screenshots: undefined,
+    screenshots: new ScreenshotRegistry(),
     getConfig: () => ({
       apiKey: "fixture-key",
       model: "gpt-5.4",
@@ -571,7 +585,7 @@ test("a binary part whose MIME type isn't image/png is rejected before decoding"
         new AbortController().signal,
       ))
         assert.equal(event.type, "thread.started");
-    }, /Image 1 is not a PNG screenshot\./);
+    }, /Attachment 1 is not a PNG screenshot\./);
   } finally {
     await rm(root, { recursive: true, force: true });
   }
@@ -579,13 +593,14 @@ test("a binary part whose MIME type isn't image/png is rejected before decoding"
 
 test("a binary image part with no data is rejected", async () => {
   const { CodexRunner } = await import("../server/codex-agent");
+  const { ScreenshotRegistry } = await import("../server/screenshots");
   const { mkdtemp, rm } = await import("node:fs/promises");
   const { tmpdir } = await import("node:os");
   const { join } = await import("node:path");
   const root = await mkdtemp(join(tmpdir(), "kite-prompt-nodata-test-"));
   const runner = new CodexRunner({
     statePath: root,
-    screenshots: undefined,
+    screenshots: new ScreenshotRegistry(),
     getConfig: () => ({
       apiKey: "fixture-key",
       model: "gpt-5.4",
@@ -637,10 +652,11 @@ test("an image's data length boundary: 16,000,000 characters passes, 16,000,001 
   const { tmpdir } = await import("node:os");
   const { join } = await import("node:path");
   const root = await mkdtemp(join(tmpdir(), "kite-prompt-sizelimit-test-"));
+  const { ScreenshotRegistry } = await import("../server/screenshots");
   const makeRunner = () =>
     new CodexRunner({
       statePath: root,
-      screenshots: undefined,
+      screenshots: new ScreenshotRegistry(),
       getConfig: () => ({
         apiKey: "fixture-key",
         model: "gpt-5.4",
@@ -708,15 +724,16 @@ test("an image's data length boundary: 16,000,000 characters passes, 16,000,001 
   }
 });
 
-test("a content part that is neither text nor binary is rejected as an unsupported attachment", async () => {
+test("a content part that is neither text nor binary is rejected as an unsupported, numbered attachment", async () => {
   const { CodexRunner } = await import("../server/codex-agent");
+  const { ScreenshotRegistry } = await import("../server/screenshots");
   const { mkdtemp, rm } = await import("node:fs/promises");
   const { tmpdir } = await import("node:os");
   const { join } = await import("node:path");
   const root = await mkdtemp(join(tmpdir(), "kite-prompt-unsupported-test-"));
   const runner = new CodexRunner({
     statePath: root,
-    screenshots: undefined,
+    screenshots: new ScreenshotRegistry(),
     getConfig: () => ({
       apiKey: "fixture-key",
       model: "gpt-5.4",
@@ -735,6 +752,9 @@ test("a content part that is neither text nor binary is rejected as an unsupport
       },
     }),
   });
+  // A valid image occupies attachment 1, so the unsupported part must be
+  // named 2: proving the count advances across kinds, not just always "1".
+  const validImage = Buffer.from(pngHeader(10, 10)).toString("base64");
   try {
     await assert.rejects(async () => {
       for await (const event of runner.run(
@@ -746,6 +766,7 @@ test("a content part that is neither text nor binary is rejected as an unsupport
               id: "m",
               role: "user",
               content: [
+                { type: "binary", mimeType: "image/png", data: validImage },
                 {
                   type: "image",
                   source: {
@@ -765,7 +786,7 @@ test("a content part that is neither text nor binary is rejected as an unsupport
         new AbortController().signal,
       ))
         assert.equal(event.type, "thread.started");
-    }, /Unsupported message attachment/);
+    }, /Attachment 2 \(image\) is not supported\./);
   } finally {
     await rm(root, { recursive: true, force: true });
   }
@@ -777,10 +798,11 @@ test("a recovered conversation keeps the text a user typed alongside an earlier 
   const { tmpdir } = await import("node:os");
   const { join } = await import("node:path");
   const root = await mkdtemp(join(tmpdir(), "kite-history-test-"));
+  const { ScreenshotRegistry } = await import("../server/screenshots");
   let prompt: unknown;
   const runner = new CodexRunner({
     statePath: root,
-    screenshots: undefined,
+    screenshots: new ScreenshotRegistry(),
     getConfig: () => ({
       apiKey: "fixture-key",
       model: "gpt-5.4",
@@ -858,10 +880,11 @@ test("recovered history labels an image part distinctly from audio, video, docum
   const { tmpdir } = await import("node:os");
   const { join } = await import("node:path");
   const root = await mkdtemp(join(tmpdir(), "kite-history-kinds-test-"));
+  const { ScreenshotRegistry } = await import("../server/screenshots");
   let prompt: unknown;
   const runner = new CodexRunner({
     statePath: root,
-    screenshots: undefined,
+    screenshots: new ScreenshotRegistry(),
     getConfig: () => ({
       apiKey: "fixture-key",
       model: "gpt-5.4",
@@ -1093,6 +1116,8 @@ type NoteRow = {
 // An id that looks like a real registered id but never collides with it:
 // flipping the last hex digit guarantees a mismatch instead of relying on a
 // fixed id staying different from whatever the registry randomly generated.
+// tests/doc-contract.test.ts's otherId does the same thing; the two aren't
+// shared yet.
 function flippedLastHexDigit(id: string) {
   const last = id.at(-1) ?? "0";
   const flipped = ((Number.parseInt(last, 16) + 1) % 16).toString(16);
@@ -1100,10 +1125,13 @@ function flippedLastHexDigit(id: string) {
 }
 
 // Shared setup for the note-state matrix below. `registry.add` always runs,
-// so the capture always exists in the registry -- backdated when the row
-// sets `registryNow`, to land it outside the freshness window. `hasRegistry`
-// decides only whether the runner is given that registry at all, not
-// whether the capture is registered. Attaches a single image referencing the
+// so the capture always exists in a registry -- backdated or forward-dated
+// when the row sets `registryNow`, to land it outside the freshness window
+// either way. `hasRegistry` decides only whether the runner's own registry
+// actually contains that capture, not whether it is given a registry at all:
+// `screenshots` is no longer optional (see CodexRunnerOptions in
+// server/codex-agent.ts), so a row with `hasRegistry: false` still gets a
+// real registry, just an empty one. Attaches a single image referencing the
 // capture (or not), and returns the first prompt part's text -- the note
 // codex-agent.ts chose for that state.
 async function firstNoteFor(row: NoteRow) {
@@ -1124,7 +1152,7 @@ async function firstNoteFor(row: NoteRow) {
   let prompt: unknown;
   const runner = new CodexRunner({
     statePath: root,
-    screenshots: row.hasRegistry ? registry : undefined,
+    screenshots: row.hasRegistry ? registry : new ScreenshotRegistry(),
     getConfig: () => ({
       apiKey: "fixture-key",
       model: "gpt-5.4",
@@ -1248,7 +1276,7 @@ test("screenshot notes cover every state, checked in the documented order", asyn
       opening: "Image 1 in this message has no screen reference",
     },
     {
-      name: "runner with screenshots: undefined and an id (must be unknown)",
+      name: "runner whose registry is empty, given an id it doesn't have (must be unknown)",
       hasRegistry: false,
       imageSize: { width: 1386, height: 900 },
       referenceId: "valid",
@@ -1262,5 +1290,114 @@ test("screenshot notes cover every state, checked in the documented order", asyn
       note.startsWith(row.opening),
       `${row.name}: expected note to start with ${JSON.stringify(row.opening)}, got ${JSON.stringify(note)}`,
     );
+  }
+});
+
+test("the system instructions tell the agent to name the target with a short label", async () => {
+  const { instructions } = await import("../server/codex-agent");
+  assert.match(instructions, /a short label naming the target/);
+});
+
+test("temp screenshot directories are removed after a successful run and after a mid-run validation failure", async () => {
+  const { CodexRunner } = await import("../server/codex-agent");
+  const { ScreenshotRegistry } = await import("../server/screenshots");
+  const { mkdtemp, rm, readdir } = await import("node:fs/promises");
+  const { tmpdir } = await import("node:os");
+  const { join } = await import("node:path");
+  const root = await mkdtemp(join(tmpdir(), "kite-prompt-tempcleanup-test-"));
+  const makeRunner = () =>
+    new CodexRunner({
+      statePath: root,
+      screenshots: new ScreenshotRegistry(),
+      getConfig: () => ({
+        apiKey: "fixture-key",
+        model: "gpt-5.4",
+        workspace: "/test/one",
+        mcpUrl: "http://localhost/mcp",
+        mcpToken: "fixture-token",
+      }),
+      createClient: () => ({
+        startThread: () => ({
+          runStreamed: async () => ({
+            events: (async function* () {
+              yield {
+                type: "thread.started" as const,
+                thread_id: "native-1",
+              };
+            })(),
+          }),
+        }),
+        resumeThread: () => {
+          throw new Error("Unexpected resume");
+        },
+      }),
+    });
+  // Removing `if (temp) await rm(temp, ...)` in codex-agent.ts's `run()`
+  // would still pass every other test, because they each delete their own
+  // temp root wholesale in `finally`. This test keeps `root` alive across
+  // both runs and inspects it directly, so a missing cleanup shows up here.
+  const screenDirs = async () =>
+    (await readdir(root)).filter((name) => name.startsWith("screen-"));
+  const goodImage = Buffer.from(pngHeader(10, 10)).toString("base64");
+  try {
+    for await (const event of makeRunner().run(
+      {
+        threadId: "cleanup-success",
+        runId: "r",
+        messages: [
+          {
+            id: "m",
+            role: "user",
+            content: [
+              { type: "binary", mimeType: "image/png", data: goodImage },
+            ],
+          },
+        ],
+        tools: [],
+        context: [],
+        state: {},
+        forwardedProps: {},
+      },
+      new AbortController().signal,
+    ))
+      assert.equal(event.type, "thread.started");
+    assert.deepEqual(
+      await screenDirs(),
+      [],
+      "expected no leftover screen-* directory after a successful run",
+    );
+
+    const badImage = Buffer.from("not actually a png").toString("base64");
+    await assert.rejects(async () => {
+      for await (const event of makeRunner().run(
+        {
+          threadId: "cleanup-failure",
+          runId: "r",
+          messages: [
+            {
+              id: "m",
+              role: "user",
+              content: [
+                { type: "binary", mimeType: "image/png", data: goodImage },
+                { type: "binary", mimeType: "image/png", data: badImage },
+              ],
+            },
+          ],
+          tools: [],
+          context: [],
+          state: {},
+          forwardedProps: {},
+        },
+        new AbortController().signal,
+      ))
+        assert.equal(event.type, "thread.started");
+    }, /Image 2 is not a valid PNG image/);
+    assert.deepEqual(
+      await screenDirs(),
+      [],
+      "expected no leftover screen-* directory after image 2 fails validation",
+    );
+  } finally {
+    await rm(root, { recursive: true, force: true });
   }
 });

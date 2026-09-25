@@ -17,7 +17,7 @@ export function createToolHandler(options: {
   store: Store;
   intelligence?: CopilotKitIntelligence;
   containerId: string;
-  action?: (action: DesktopAction) => Promise<void>;
+  action?: (action: DesktopAction, signal: AbortSignal) => Promise<void>;
 }) {
   const registry = options.intelligence
     ? new SkillRegistry({
@@ -101,12 +101,15 @@ export function createToolHandler(options: {
         description:
           "Open an installed macOS app after a native user approval dialog",
         inputSchema: {
-          bundleId: z.string().regex(/^[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+$/),
+          bundleId: z
+            .string()
+            .max(255)
+            .regex(/^[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+$/),
         },
       },
       async ({ bundleId }) => {
         if (!options.action) throw new Error("Desktop actions unavailable");
-        await options.action({ type: "open-app", bundleId });
+        await options.action({ type: "open-app", bundleId }, request.signal);
         return result("Application opened after user approval");
       },
     );
@@ -126,7 +129,10 @@ export function createToolHandler(options: {
       },
       async ({ screenshotId, x, y, label }) => {
         if (!options.action) throw new Error("Desktop actions unavailable");
-        await options.action({ type: "point", screenshotId, x, y, label });
+        await options.action(
+          { type: "point", screenshotId, x, y, label },
+          request.signal,
+        );
         return result("Pointer displayed after user approval");
       },
     );

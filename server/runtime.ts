@@ -20,12 +20,10 @@ export async function startRuntime(
   options: {
     statePath?: string;
     binaryPath?: string;
-    action?: (action: DesktopAction) => Promise<void>;
-    // Required (though its value may be `undefined`) so a call site that
-    // drops this wiring is a typecheck error here, not just where
-    // CodexRunner is constructed below: see CodexRunnerOptions in
-    // server/codex-agent.ts, which mirrors this same shape.
-    screenshots: ScreenshotLookup | undefined;
+    action?: (action: DesktopAction, signal: AbortSignal) => Promise<void>;
+    // Required: see CodexRunnerOptions in server/codex-agent.ts for why a
+    // real registry must always be supplied here.
+    screenshots: ScreenshotLookup;
   },
 ) {
   const config = runtimeConfig(process.env);
