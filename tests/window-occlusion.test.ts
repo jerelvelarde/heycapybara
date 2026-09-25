@@ -272,3 +272,59 @@ test("if one undo throws during restore, the other windows are still restored an
   assert.equal(a.opacity(), 1);
   assert.equal(a.isIgnoringMouseEvents(), false);
 });
+
+test("if setIgnoreMouseEvents throws after setOpacity(0) already landed, the window's opacity is put back and no fade is left behind", () => {
+  let shouldThrow = true;
+  let opacity = 1;
+  let ignoringMouseEvents = false;
+  const win: ConcealableWindow = {
+    isDestroyed: () => false,
+    getOpacity: () => opacity,
+    setOpacity: (next: number) => {
+      opacity = next;
+    },
+    setIgnoreMouseEvents: (ignore: boolean) => {
+      if (shouldThrow) throw new Error("setIgnoreMouseEvents boom");
+      ignoringMouseEvents = ignore;
+    },
+  };
+
+  assert.throws(() => conceal([win]), /setIgnoreMouseEvents boom/);
+  // setOpacity(0) already succeeded before setIgnoreMouseEvents threw; the
+  // window must be left exactly as fadeOut found it, not stuck invisible.
+  assert.equal(opacity, 1);
+
+  // A later conceal on the very same window, now with a working fake, must
+  // behave like a brand new fade rather than a nested one: if the earlier
+  // failure had left a stale fade entry, or had recorded 0 (the stuck
+  // opacity) as the "original" to restore to, this would fail to fade, or
+  // would restore to 0 instead of 1.
+  shouldThrow = false;
+  const restore = conceal([win]);
+  assert.equal(opacity, 0);
+  assert.equal(ignoringMouseEvents, true);
+  restore();
+  assert.equal(opacity, 1);
+  assert.equal(ignoringMouseEvents, false);
+});
+
+test("if the second window's setIgnoreMouseEvents throws during conceal, both windows end restored and the error propagates", () => {
+  const a = fakeConcealable(1);
+  let bOpacity = 0.8;
+  const b: ConcealableWindow = {
+    isDestroyed: () => false,
+    getOpacity: () => bOpacity,
+    setOpacity: (next: number) => {
+      bOpacity = next;
+    },
+    setIgnoreMouseEvents: () => {
+      throw new Error("setIgnoreMouseEvents boom");
+    },
+  };
+  assert.throws(() => conceal([a, b]), /setIgnoreMouseEvents boom/);
+  // a fully faded and was then undone by conceal()'s own cleanup.
+  assert.equal(a.opacity(), 1);
+  assert.equal(a.isIgnoringMouseEvents(), false);
+  // b's own fadeOut call must have put its opacity back before rethrowing.
+  assert.equal(bOpacity, 0.8);
+});

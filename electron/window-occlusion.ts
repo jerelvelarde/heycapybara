@@ -67,13 +67,24 @@ function fadeOut(win: ConcealableWindow): void {
   }
   const opacity = win.getOpacity();
   fades.set(win, { count: 1, opacity });
+  let opacityChanged = false;
   try {
     win.setOpacity(0);
+    opacityChanged = true;
     if (!transparentWindows.has(win)) win.setIgnoreMouseEvents(true);
   } catch (error) {
-    // This call never actually faded the window, so undo the bookkeeping
-    // rather than leave a fade entry with no matching state change.
+    // setOpacity(0) may have already landed before this failed, so put it
+    // back rather than leave the window stuck invisible with the fade
+    // entry gone and nothing on record of the change. A second failure
+    // while undoing is swallowed so it doesn't mask the original error.
     fades.delete(win);
+    if (opacityChanged) {
+      try {
+        if (!win.isDestroyed()) win.setOpacity(opacity);
+      } catch {
+        // ignored: the error above takes precedence
+      }
+    }
     throw error;
   }
 }
