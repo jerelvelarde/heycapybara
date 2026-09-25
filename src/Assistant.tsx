@@ -1,5 +1,9 @@
 import { useEffect, useRef, useState } from "react";
-import { useAgent, useCopilotKit } from "@copilotkit/react-core/v2";
+import {
+  useAgent,
+  useCopilotKit,
+  useLearnFromUserAction,
+} from "@copilotkit/react-core/v2";
 import {
   ArrowUp,
   BookOpen,
@@ -19,6 +23,7 @@ import {
   userContent,
 } from "./message-content";
 import { LearningStrip } from "./LearningStrip";
+import { lessonMemory, teachingAnnotation } from "./learning-view";
 import type { LearningStatus, ScreenshotAttachment, Settings } from "./types";
 export type AgentRequest = {
   id: string;
@@ -44,6 +49,14 @@ export function Assistant({
 }) {
   const { agent, isReady } = useAgent();
   const { copilotkit } = useCopilotKit();
+  // The user's "that worked" goes to Intelligence as a user_action
+  // (POST {runtimeUrl}/annotate -> PUT /connector/annotate/:id), and the
+  // lesson itself goes to Intelligence Memory through the main process. The
+  // Intelligence key stays in the runtime.
+  const learnFromUserAction = useLearnFromUserAction();
+  const [lesson, setLesson] = useState<"none" | "offered" | "sending" | "sent">(
+    "none",
+  );
   const [input, setInput] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
@@ -80,6 +93,7 @@ export function Assistant({
     setActivities([]);
     setUsedSkills([]);
     setRecalled([]);
+    setLesson("none");
     attachmentEpoch.current.advance();
   }
   useEffect(() => {
@@ -168,6 +182,7 @@ export function Assistant({
     onBusy(true);
     showError("");
     setActivities([]);
+    setLesson("none");
     if (fresh) {
       agent.threadId = crypto.randomUUID();
       agent.setMessages([]);
@@ -239,7 +254,7 @@ export function Assistant({
           .replace(/\n```\s*$/, "");
         validateSkillMarkdown(markdown);
         onDraft(markdown);
-      }
+      } else if (settings.intelligenceConfigured) setLesson("offered");
     } catch (e) {
       showError(e instanceof Error ? e.message : "Agent request failed");
     } finally {
@@ -250,6 +265,33 @@ export function Assistant({
       setPhase("");
       onDone();
     }
+  }
+  async function teach() {
+    setLesson("sending");
+    try {
+      await window.kite!.saveLesson({
+        threadId: agent.threadId,
+        content: lessonMemory(agent.messages),
+      });
+    } catch (e) {
+      setLesson("offered");
+      showError(
+        ipcErrorMessage(e, "Could not save this lesson to Intelligence"),
+      );
+      return;
+    }
+    setLesson("sent");
+    try {
+      await learnFromUserAction(
+        teachingAnnotation(agent.messages, agent.threadId),
+      );
+    } catch (e) {
+      showError(
+        "Saved to Intelligence Memory, but the note for Intelligence's own learning failed: " +
+          (e instanceof Error ? e.message : String(e)),
+      );
+    }
+    await window.kite!.watchLearning();
   }
   useEffect(() => {
     if (
@@ -357,6 +399,24 @@ export function Assistant({
               <p key={item.id}>{item.summary}</p>
             ))}
           </details>
+        )}
+        {lesson !== "none" && !busy && (
+          <div className="lesson-offer">
+            {lesson === "sent" ? (
+              "Saved to Intelligence Memory. New conversations will recall it."
+            ) : (
+              <>
+                Did that work?
+                <button
+                  type="button"
+                  disabled={lesson === "sending"}
+                  onClick={() => void teach()}
+                >
+                  {lesson === "sending" ? "Saving…" : "Learn from this"}
+                </button>
+              </>
+            )}
+          </div>
         )}
         {busy && (
           <div className="thinking">
