@@ -53,7 +53,7 @@ A 1512×982 display is captured at 1512×982, and a 2560×1440 display at 1920×
    - reads the display again, and fails if it is gone or its bounds changed during the capture;
    - registers the capture with `registry.add`, which validates its dimensions and bounds.
 
-   The `restore()` that `conceal()` returns runs in `finally`; it puts back each window's opacity and turns click-through off. Concurrent capture calls share one in-flight capture, so a second click can't capture the windows the first is still restoring.
+   The `restore()` that `conceal()` returns runs in `finally`. Fades nest per window, so a window gets its opacity back and stops ignoring clicks only once every overlapping fade covering it (including one from the pointer's own conceal in `electron/point-action.ts`) has ended. Concurrent capture calls share one in-flight capture, so a second click can't capture the windows the first is still restoring.
 
 2. **Registry.** The registry is in memory and keeps the 16 most recent captures as `{id, displayId, label, bounds, width, height, capturedAt}`. Each entry and its bounds are frozen, so they can't change after the fact. IDs are `shot_` plus 8 hex characters (32 random bits, for example `shot_1a2b3c4d`), so an ID from an earlier session is vanishingly unlikely to match a new capture.
 

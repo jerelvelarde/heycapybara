@@ -131,3 +131,56 @@ test("conceal's restore skips a window destroyed in the meantime, without throwi
   // The destroyed window's opacity is left untouched: still concealed.
   assert.equal(a.opacity(), 0);
 });
+
+test("two overlapping conceals of the same window: restoring the first leaves it concealed, restoring the second brings it back", () => {
+  const a = fakeConcealable(0.9);
+  const restoreFirst = conceal([a]);
+  const restoreSecond = conceal([a]);
+  restoreFirst();
+  // The second fade still covers it.
+  assert.equal(a.opacity(), 0);
+  assert.equal(a.isIgnoringMouseEvents(), true);
+  restoreSecond();
+  assert.equal(a.opacity(), 0.9);
+  assert.equal(a.isIgnoringMouseEvents(), false);
+});
+
+test("two overlapping conceals of the same window: restoring in the opposite order still only restores once the last one ends", () => {
+  const a = fakeConcealable(0.9);
+  const restoreFirst = conceal([a]);
+  const restoreSecond = conceal([a]);
+  restoreSecond();
+  // The first fade still covers it.
+  assert.equal(a.opacity(), 0);
+  assert.equal(a.isIgnoringMouseEvents(), true);
+  restoreFirst();
+  assert.equal(a.opacity(), 0.9);
+  assert.equal(a.isIgnoringMouseEvents(), false);
+});
+
+test("calling the same restore twice does not restore early while another overlapping fade is still active", () => {
+  const a = fakeConcealable(0.9);
+  const restoreFirst = conceal([a]);
+  conceal([a]); // a second, overlapping fade whose own restore is never called here
+  restoreFirst();
+  restoreFirst(); // calling it again must not decrement a second time
+  assert.equal(a.opacity(), 0);
+  assert.equal(a.isIgnoringMouseEvents(), true);
+});
+
+test("a conceal over two windows, one already concealed elsewhere, only restores the window no longer covered by any fade", () => {
+  const a = fakeConcealable(0.9);
+  const b = fakeConcealable(0.7);
+  const restoreOuter = conceal([a]); // a is already concealed by this outer call
+  const restoreBoth = conceal([a, b]);
+  restoreBoth();
+  // a is still covered by restoreOuter's fade.
+  assert.equal(a.opacity(), 0);
+  assert.equal(a.isIgnoringMouseEvents(), true);
+  // b had only this one fade, so it comes back.
+  assert.equal(b.opacity(), 0.7);
+  assert.equal(b.isIgnoringMouseEvents(), false);
+  restoreOuter();
+  assert.equal(a.opacity(), 0.9);
+  assert.equal(a.isIgnoringMouseEvents(), false);
+});
