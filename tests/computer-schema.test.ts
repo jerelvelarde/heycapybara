@@ -1,11 +1,13 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
 import type { z } from "zod";
 import {
   BLOCKED_CHORD_MESSAGE,
   CLICKS_MAX,
   KEY_NAMES,
   MODIFIERS,
+  SCROLL_DIRECTIONS,
   SCROLL_MAX,
   TYPE_MAX_LENGTH,
   URL_MAX_LENGTH,
@@ -250,4 +252,44 @@ test("the desktop action schema accepts each action and refuses malformed ones",
       false,
       JSON.stringify(action),
     );
+});
+
+const swiftSource = () =>
+  readFile(new URL("../native/Recorder.swift", import.meta.url), "utf8");
+
+// The names inside one of Recorder.swift's `let <name>: [String: <Type>] =
+// [...]` dictionary literals.
+function swiftDictionaryKeys(source: string, name: string) {
+  const match = new RegExp(
+    `let ${name}: \\[String: [A-Za-z]+\\] = \\[([\\s\\S]*?)\\n\\]`,
+  ).exec(source);
+  assert.ok(match, `native/Recorder.swift must define ${name}`);
+  return [...match[1].matchAll(/"([a-z0-9_]+)":/g)].map((entry) => entry[1]);
+}
+
+// Guards against the schema and the helper drifting apart: a key the
+// schema accepts but the helper doesn't know would fail after the model
+// was told it could send it, and one the helper knows but the schema
+// doesn't is dead code.
+test("native/Recorder.swift maps exactly KEY_NAMES to key codes and MODIFIERS to flags", async () => {
+  const source = await swiftSource();
+  const keys = swiftDictionaryKeys(source, "keyCodes");
+  assert.equal(new Set(keys).size, keys.length, "a key is listed twice");
+  assert.deepEqual([...keys].sort(), [...KEY_NAMES].sort());
+  assert.deepEqual(
+    swiftDictionaryKeys(source, "modifierFlags").sort(),
+    [...MODIFIERS].sort(),
+  );
+});
+
+test("native/Recorder.swift enforces the same scroll, click and text limits as the schemas", async () => {
+  const source = await swiftSource();
+  assert.ok(source.includes(`(1...${SCROLL_MAX}).contains(notches)`));
+  assert.ok(source.includes(`(1...${CLICKS_MAX}).contains(clicks)`));
+  for (const direction of SCROLL_DIRECTIONS)
+    assert.ok(source.includes(`"${direction}"`), direction);
+  const cap = /data\.count <= (\d+)/.exec(source);
+  assert.ok(cap, "native/Recorder.swift must cap the typed text's size");
+  // A code point is at most four bytes of UTF-8.
+  assert.ok(Number(cap[1]) >= TYPE_MAX_LENGTH * 4);
 });
