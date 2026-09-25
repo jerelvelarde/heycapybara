@@ -242,6 +242,14 @@ export function unreferencedImageNote(imageNumber: number) {
   return `Image ${imageNumber} in this message has no screen reference, so point_on_screen cannot target it.`;
 }
 
+export function unknownImageNote(imageNumber: number) {
+  return `Image ${imageNumber} in this message names a screenshot OpenMuse no longer has, so point_on_screen can't target it. Ask the user to attach a new one if you need to point.`;
+}
+
+export function mismatchedImageNote(imageNumber: number) {
+  return `Image ${imageNumber} in this message doesn't match the screenshot it names, so point_on_screen can't target it. Ask the user to attach a new screenshot if you need to point.`;
+}
+
 export function staleImageNote(imageNumber: number) {
-  return `Image ${imageNumber} in this message is a screenshot that is too old to point at. Ask the user to attach a new one if you need to point.`;
+  return `Image ${imageNumber} in this message is a screenshot that is too old to point at, or whose capture time is unknown. Ask the user to attach a new one if you need to point.`;
 }
