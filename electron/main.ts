@@ -51,6 +51,7 @@ import {
 } from "./buddy-position";
 import { runHelper } from "./helper-result";
 import { performPointAction } from "./point-action";
+import { conceal } from "./window-occlusion";
 import type { Point } from "../src/buddy-drag";
 import { pointLabelSchema, screenshotIdSchema } from "../server/point-schema";
 import { startRuntime } from "../server/runtime";
@@ -79,7 +80,11 @@ const helper = app.isPackaged
   : join(root, "native/bin/kite-recorder");
 const exec = promisify(execFile);
 const helperTimeout = { timeout: 15_000 };
+// A first launch of an app can walk through Gatekeeper's notarization
+// check, which can take longer than every other helper call.
+const appLaunchTimeout = { timeout: 60_000 };
 const screenshots = new ScreenshotRegistry();
+let captureInFlight: Promise<ScreenshotAttachment> | undefined;
 let workspace: BrowserWindow;
 let buddy: BrowserWindow;
 let notch: BrowserWindow;
@@ -205,14 +210,17 @@ const broadcast = () =>
   BrowserWindow.getAllWindows().forEach((w) =>
     w.webContents.send("kite:update"),
   );
-// The four windows OpenMuse owns, in the order actions should consider them.
+// The windows OpenMuse owns.
 function openMuseWindows() {
   return [workspace, buddy, notch, companionChat].filter(
     (win) => win && !win.isDestroyed(),
   );
 }
 async function approve(prompt: { message: string; detail?: string }) {
-  const result = await dialog.showMessageBox(workspace, {
+  // No parent window: a sheet on a window sitting behind others could go
+  // unseen. A standalone alert always comes to the front, whichever window
+  // asked.
+  const result = await dialog.showMessageBox({
     type: "question",
     title: "OpenMuse wants to take an action",
     message: prompt.message,
@@ -233,8 +241,8 @@ async function approvedAction(input: unknown) {
       z.object({
         type: z.literal("point"),
         screenshotId: screenshotIdSchema,
-        x: z.number().finite(),
-        y: z.number().finite(),
+        x: z.number(),
+        y: z.number(),
         label: pointLabelSchema,
       }),
     ])
@@ -243,7 +251,7 @@ async function approvedAction(input: unknown) {
     if (!(await approve({ message: `Open application ${action.bundleId}` })))
       throw new Error("User declined action");
     await runHelper(
-      () => exec(helper, ["--open-app", action.bundleId], helperTimeout),
+      () => exec(helper, ["--open-app", action.bundleId], appLaunchTimeout),
       "Application opened",
     );
     return;
@@ -769,64 +777,80 @@ app
       );
       return permissions();
     });
-    handle("screenshot", async (): Promise<ScreenshotAttachment> => {
-      if (!(await permissions()).screenCapture)
-        throw new Error("Enable Screen Recording permission in Settings.");
-      const display = screen.getPrimaryDisplay();
-      const target = captureSize(display.size);
-      const restoreWorkspace = workspace.isVisible();
-      const restoreBuddy = buddy.isVisible();
-      const restoreNotch = notch.isVisible();
-      const restoreChat = companionChat.isVisible();
-      workspace.hide();
-      buddy.hide();
-      notch.hide();
-      companionChat.hide();
-      try {
-        await new Promise((resolve) => setTimeout(resolve, 200));
-        const sources = await desktopCapturer.getSources({
-          types: ["screen"],
-          thumbnailSize: target,
-        });
-        // A capture of another display would put the pointer in the wrong place.
-        const source = sources.find(
-          (candidate) => candidate.display_id === String(display.id),
+    handle("screenshot", (): Promise<ScreenshotAttachment> => {
+      // Two quick clicks would otherwise start overlapping captures, and the
+      // second could capture the windows the first is still restoring.
+      if (captureInFlight) return captureInFlight;
+      const capture = (async (): Promise<ScreenshotAttachment> => {
+        if (!(await permissions()).screenCapture)
+          throw new Error("Enable Screen Recording permission in Settings.");
+        const display = screen.getPrimaryDisplay();
+        const target = captureSize(display.size);
+        const restore = conceal(
+          openMuseWindows().filter((win) => win.isVisible()),
         );
-        if (!source)
-          throw new Error(
-            `Couldn't find a screen source for ${display.label || "Main display"}. Try again, or reconnect the display.`,
+        try {
+          // The compositor needs a frame to actually drop the concealed
+          // windows before we capture.
+          await new Promise((resolve) => setTimeout(resolve, 200));
+          const sources = await desktopCapturer.getSources({
+            types: ["screen"],
+            thumbnailSize: target,
+          });
+          // A capture of another display would put the pointer in the wrong place.
+          const source = sources.find(
+            (candidate) => candidate.display_id === String(display.id),
           );
-        if (source.thumbnail.isEmpty())
-          throw new Error(
-            "Screen capture came back empty. If you just granted Screen Recording, quit and reopen OpenMuse Desktop.",
+          if (!source)
+            throw new Error(
+              `Couldn't find a screen source for ${display.label || "Main display"}. Try again, or reconnect the display.`,
+            );
+          if (source.thumbnail.isEmpty())
+            throw new Error(
+              "Screen capture came back empty. If you just granted Screen Recording, quit and reopen OpenMuse Desktop.",
+            );
+          // A 2x NativeImage keeps its scale factor through resize(), so its
+          // PNG would stay 2x; rebuilding it from its own pixels makes the
+          // target a pixel size.
+          const rawPng = source.thumbnail.toPNG();
+          const { png, size } = fitThumbnail(
+            {
+              toPNG: () => rawPng,
+              resize: (resizeTarget) =>
+                nativeImage.createFromBuffer(rawPng).resize(resizeTarget),
+            },
+            target,
           );
-        const { png, size } = fitThumbnail(source.thumbnail, target);
-        // The display can change while we waited and captured; catch it here
-        // rather than register bounds that no longer match the image.
-        const current = screen
-          .getAllDisplays()
-          .find((candidate) => candidate.id === display.id);
-        if (!current || !sameBounds(current.bounds, display.bounds))
-          throw new Error("The display changed during the capture. Try again.");
-        const shot = screenshots.add({
-          displayId: String(display.id),
-          label: display.label || "Main display",
-          bounds: display.bounds,
-          ...size,
-        });
-        return {
-          id: shot.id,
-          label: shot.label,
-          width: size.width,
-          height: size.height,
-          dataUrl: "data:image/png;base64," + png.toString("base64"),
-        };
-      } finally {
-        if (restoreWorkspace) workspace.show();
-        if (restoreBuddy) buddy.showInactive();
-        if (restoreNotch) notch.showInactive();
-        if (restoreChat) companionChat.showInactive();
-      }
+          // The display can change while we waited and captured; catch it here
+          // rather than register bounds that no longer match the image.
+          const current = screen
+            .getAllDisplays()
+            .find((candidate) => candidate.id === display.id);
+          if (!current || !sameBounds(current.bounds, display.bounds))
+            throw new Error(
+              "The display changed during the capture. Try again.",
+            );
+          const shot = screenshots.add({
+            displayId: String(display.id),
+            label: display.label || "Main display",
+            bounds: display.bounds,
+            ...size,
+          });
+          return {
+            id: shot.id,
+            label: shot.label,
+            width: size.width,
+            height: size.height,
+            dataUrl: "data:image/png;base64," + png.toString("base64"),
+          };
+        } finally {
+          restore();
+        }
+      })().finally(() => {
+        captureInFlight = undefined;
+      });
+      captureInFlight = capture;
+      return capture;
     });
     handle("action", approvedAction);
     handle("openWorkspace", openWorkspace);

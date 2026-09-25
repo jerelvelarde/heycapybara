@@ -7,27 +7,34 @@ import {
 } from "../electron/point-action";
 import type { Rect } from "../server/screenshots";
 
-// Bounds and visibility are real: coversPoint (from window-occlusion) decides
-// whether a given window counts as covering, exactly as it does in main.ts.
+// Bounds and visibility are real inputs: coversPoint and conceal (both from
+// window-occlusion) decide what counts as covering and do the actual
+// concealing, exactly as they do in main.ts. Concealment is observed through
+// opacity, not through a hide()/showInactive() call the fake no longer has.
 function fakeWindow(
   bounds: Rect,
   visible: boolean,
   events: string[],
   name: string,
+  state: { destroyed: boolean; opacity: number } = {
+    destroyed: false,
+    opacity: 1,
+  },
 ): PointWindow {
   return {
     isVisible: () => visible,
     getBounds: () => bounds,
-    hide: () => {
-      events.push(`hide:${name}`);
+    isDestroyed: () => state.destroyed,
+    getOpacity: () => state.opacity,
+    setOpacity: (next: number) => {
+      state.opacity = next;
+      events.push(`${next === 0 ? "conceal" : "restore"}:${name}`);
     },
-    showInactive: () => {
-      events.push(`showInactive:${name}`);
-    },
+    setIgnoreMouseEvents: () => {},
   };
 }
 
-test("happy path: resolve, confirm, resolve, hide, showPointer, showInactive run in order for every covering window", async () => {
+test("happy path: resolve, confirm, resolve, conceal, showPointer, restore run in order for every covering window", async () => {
   const events: string[] = [];
   const point = { x: 500, y: 500 };
   const coveringA = fakeWindow(
@@ -62,11 +69,11 @@ test("happy path: resolve, confirm, resolve, hide, showPointer, showInactive run
     "resolve",
     "confirm",
     "resolve",
-    "hide:coveringA",
-    "hide:coveringB",
+    "conceal:coveringA",
+    "conceal:coveringB",
     "showPointer",
-    "showInactive:coveringA",
-    "showInactive:coveringB",
+    "restore:coveringA",
+    "restore:coveringB",
   ]);
 });
 
@@ -88,7 +95,7 @@ test("confirm receives exactly the point prompt for the label and shot", async (
   });
 });
 
-test("a window that isn't visible, and a visible window that doesn't cover the point, are never hidden or shown", async () => {
+test("a window that isn't visible, and a visible window that doesn't cover the point, are never concealed or restored", async () => {
   const events: string[] = [];
   const point = { x: 500, y: 500 };
   const invisibleCovering = fakeWindow(
@@ -115,7 +122,7 @@ test("a window that isn't visible, and a visible window that doesn't cover the p
   assert.deepEqual(events, ["showPointer"]);
 });
 
-test("a decline rejects with the exact error, with no second resolve, no hide and no showPointer", async () => {
+test("a decline rejects with the exact error, with no second resolve, no conceal and no showPointer", async () => {
   const events: string[] = [];
   let resolveCount = 0;
   const deps: PointActionDeps = {
@@ -148,7 +155,7 @@ test("a decline rejects with the exact error, with no second resolve, no hide an
   assert.deepEqual(events, []);
 });
 
-test("a failure in the second resolve propagates, with no hide and no showPointer", async () => {
+test("a failure in the second resolve propagates, with no conceal and no showPointer", async () => {
   const events: string[] = [];
   let resolveCount = 0;
   const deps: PointActionDeps = {
@@ -206,7 +213,7 @@ test("a failure in the first resolve propagates without ever asking to confirm",
   assert.equal(confirmCalled, false);
 });
 
-test("a showPointer failure still restores every hidden window, and the failure propagates", async () => {
+test("a showPointer failure still restores every concealed window, and the failure propagates", async () => {
   const events: string[] = [];
   const point = { x: 500, y: 500 };
   const coveringA = fakeWindow(
@@ -238,9 +245,35 @@ test("a showPointer failure still restores every hidden window, and the failure 
   assert.ok(caught instanceof Error);
   assert.equal(caught.message, "helper failed");
   assert.deepEqual(events, [
-    "hide:coveringA",
-    "hide:coveringB",
-    "showInactive:coveringA",
-    "showInactive:coveringB",
+    "conceal:coveringA",
+    "conceal:coveringB",
+    "restore:coveringA",
+    "restore:coveringB",
   ]);
+});
+
+test("a window destroyed while the pointer is showing is skipped on restore, without throwing", async () => {
+  const events: string[] = [];
+  const point = { x: 500, y: 500 };
+  const state = { destroyed: false, opacity: 1 };
+  const covering = fakeWindow(
+    { x: 400, y: 400, width: 200, height: 200 },
+    true,
+    events,
+    "covering",
+    state,
+  );
+  const deps: PointActionDeps = {
+    resolve: () => ({ shot: { label: "Display A" }, point }),
+    confirm: async () => true,
+    windows: () => [covering],
+    showPointer: async () => {
+      // Something else (a placement change, the user quitting) destroys the
+      // window while the ring is up, before restore runs.
+      state.destroyed = true;
+      events.push("showPointer");
+    },
+  };
+  await performPointAction("Save button", deps);
+  assert.deepEqual(events, ["conceal:covering", "showPointer"]);
 });
