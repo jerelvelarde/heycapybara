@@ -17,9 +17,12 @@ import {
   type CodexOptions,
   type ThreadEvent,
   type ThreadOptions,
+  type UserInput,
 } from "@openai/codex-sdk";
 import { Observable } from "rxjs";
-import { codexEvents } from "./codex-events";
+import { codexEvents, type KiteNotice } from "./codex-events";
+import { learnedSkillCatalog, type DeliveredSkill } from "./learned-skills";
+import { memoryNotes, memoryPreview, type MemoryNote } from "./memory";
 import type { RunRegistry } from "./run-registry";
 import {
   describeScreenshot,
@@ -53,6 +56,14 @@ export type CodexRunnerOptions = {
   // (server/run-registry.ts), and the runtime's /mcp route accepts only
   // tokens from this same registry.
   runs: RunRegistry;
+  // The learned skills Intelligence delivers right now. Called once per new
+  // Codex thread; omitted when Intelligence is not configured.
+  learnedSkills?: () => Promise<readonly DeliveredSkill[]>;
+  // What Intelligence Memory recalls for a task, by meaning. Called once per
+  // new Codex thread with the user's first message.
+  recallMemories?: (
+    query: string,
+  ) => Promise<readonly Pick<MemoryNote, "kind" | "content">[]>;
   createClient?: (options: CodexOptions) => {
     startThread(options: ThreadOptions): Pick<Thread, "runStreamed">;
     resumeThread(
@@ -65,12 +76,15 @@ export type CodexRunnerOptions = {
     model: string;
     workspace: string;
     mcpUrl: string;
+    // OpenMuse's local proxy to Intelligence's knowledge-base tool
+    // (server/intelligence-proxy.ts); omitted when Intelligence is off.
+    intelligenceMcp?: { url: string; tools: readonly string[] };
   };
 };
 export type StreamRunner = (
   input: RunAgentInput,
   signal: AbortSignal,
-) => AsyncGenerator<ThreadEvent>;
+) => AsyncGenerator<ThreadEvent | KiteNotice>;
 
 export function safeAgentError(error: unknown) {
   return (error instanceof Error ? error.message : "Codex request failed")
@@ -95,6 +109,62 @@ export function codexEnvironment(
   };
 }
 
+const text = (value: string): UserInput => ({ type: "text", text: value });
+
+/**
+ * What a new Codex thread starts from: the learned skills Intelligence
+ * delivers, and what Intelligence Memory recalls for this task. Either can be
+ * unavailable. The run goes on, and the chat's activity says why.
+ */
+async function newThreadContext(
+  options: Pick<CodexRunnerOptions, "learnedSkills" | "recallMemories">,
+  task: string,
+) {
+  const parts: UserInput[] = [];
+  const notices: KiteNotice[] = [];
+  const unavailable = (id: string, message: string) => {
+    parts.push(text(message));
+    notices.push({
+      type: "kite.notice",
+      name: "kite.activity",
+      value: { id, summary: message, status: "item.completed" },
+    });
+  };
+  if (options.learnedSkills)
+    try {
+      const skills = await options.learnedSkills();
+      if (skills.length) parts.push(text(learnedSkillCatalog(skills)));
+    } catch (error) {
+      unavailable(
+        "learned-skills-unavailable",
+        "Learned skills are unavailable for this conversation: " +
+          safeAgentError(error),
+      );
+    }
+  if (options.recallMemories && task.trim())
+    try {
+      const memories = await options.recallMemories(task);
+      if (memories.length) {
+        parts.push(text(memoryNotes(memories)));
+        notices.push({
+          type: "kite.notice",
+          name: "kite.memory-recalled",
+          value: {
+            count: memories.length,
+            previews: memories.map((memory) => memoryPreview(memory.content)),
+          },
+        });
+      }
+    } catch (error) {
+      unavailable(
+        "memory-unavailable",
+        "Intelligence Memory is unavailable for this conversation: " +
+          safeAgentError(error),
+      );
+    }
+  return { parts, notices };
+}
+
 export class CodexRunner {
   private active = new Map<string, AbortController>();
   constructor(private options: CodexRunnerOptions) {}
@@ -107,7 +177,7 @@ export class CodexRunner {
   async *run(
     input: RunAgentInput,
     outerSignal: AbortSignal,
-  ): AsyncGenerator<ThreadEvent> {
+  ): AsyncGenerator<ThreadEvent | KiteNotice> {
     if (!/^[a-zA-Z0-9_-]{1,100}$/.test(input.threadId))
       throw new Error("Invalid conversation id");
     if (this.active.has(input.threadId))
@@ -204,6 +274,25 @@ export class CodexRunner {
                 ].map((name) => [name, { approval_mode: "approve" }]),
               ),
             },
+            // Intelligence's knowledge-base tool, through OpenMuse's proxy on
+            // the same local server and token: the project key stays in the
+            // runtime. Not required, so Codex still starts if it is down.
+            ...(config.intelligenceMcp
+              ? {
+                  intelligence: {
+                    url: config.intelligenceMcp.url,
+                    bearer_token_env_var: "KITE_MCP_TOKEN",
+                    required: false,
+                    tool_timeout_sec: 60,
+                    tools: Object.fromEntries(
+                      config.intelligenceMcp.tools.map((name) => [
+                        name,
+                        { approval_mode: "approve" },
+                      ]),
+                    ),
+                  },
+                }
+              : {}),
           },
         },
       });
@@ -223,6 +312,20 @@ export class CodexRunner {
       const latest = input.messages.filter((m) => m.role === "user").at(-1);
       if (!latest) throw new Error("A user message is required");
       const prompt: Input = [];
+      // A new Codex thread starts from what Intelligence knows. A resumed
+      // one already has it from its first turn.
+      if (!saved) {
+        const context = await newThreadContext(
+          this.options,
+          typeof latest.content === "string"
+            ? latest.content
+            : latest.content
+                .flatMap((part) => (part.type === "text" ? [part.text] : []))
+                .join("\n"),
+        );
+        prompt.push(...context.parts);
+        for (const notice of context.notices) yield notice;
+      }
       if (!saved && input.messages.length > 1) {
         // Recover conversational context when no native thread has been persisted.
         const history = input.messages

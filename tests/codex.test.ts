@@ -1984,3 +1984,252 @@ test("codexEvents turns an OpenMuse notice into one AG-UI custom event", () => {
     ],
   );
 });
+
+// One user turn, as the renderer sends it.
+function contextInput(threadId: string, text: string) {
+  return {
+    threadId,
+    runId: "r",
+    messages: [{ id: "m", role: "user" as const, content: text }],
+    tools: [],
+    context: [],
+    state: {},
+    forwardedProps: {},
+  };
+}
+
+const contextConfig = () => ({
+  apiKey: "fixture-key",
+  model: "gpt-5.4",
+  workspace: "/test/one",
+  mcpUrl: "http://localhost/mcp",
+});
+
+// A Codex client that records the prompt and the config it was given.
+function recordingClient(record: {
+  prompt?: unknown;
+  config?: unknown;
+  env?: Record<string, string>;
+}) {
+  return (options: import("@openai/codex-sdk").CodexOptions) => {
+    record.config = options.config;
+    record.env = options.env;
+    const thread = {
+      runStreamed: async (input: unknown) => {
+        record.prompt = input;
+        return {
+          events: (async function* () {
+            yield { type: "thread.started" as const, thread_id: "native-1" };
+          })(),
+        };
+      },
+    };
+    return { startThread: () => thread, resumeThread: () => thread };
+  };
+}
+
+test("a new Codex thread starts with the learned skills and what Memory recalls", async () => {
+  const { CodexRunner } = await import("../server/codex-agent");
+  const { ScreenshotRegistry } = await import("../server/screenshots");
+  const { mkdtemp, rm } = await import("node:fs/promises");
+  const { tmpdir } = await import("node:os");
+  const { join } = await import("node:path");
+  const root = await mkdtemp(join(tmpdir(), "kite-context-test-"));
+  const record: { prompt?: unknown } = {};
+  const queries: string[] = [];
+  const runner = new CodexRunner({
+    runs: new RunRegistry(),
+    statePath: root,
+    screenshots: new ScreenshotRegistry(),
+    learnedSkills: async () => [
+      {
+        name: "gmail-spam-triage",
+        description: "Label a Gmail message as spam or not spam",
+      },
+    ],
+    recallMemories: async (query) => {
+      queries.push(query);
+      return [
+        { kind: "operational", content: "How to label Gmail spam\nSteps" },
+      ];
+    },
+    getConfig: contextConfig,
+    createClient: recordingClient(record),
+  });
+  try {
+    const events = [];
+    for await (const event of runner.run(
+      contextInput("context", "Label this email"),
+      new AbortController().signal,
+    ))
+      events.push(event);
+    assert.deepEqual(
+      events.map((event) =>
+        event.type === "kite.notice" ? event.name : event.type,
+      ),
+      ["kite.memory-recalled", "thread.started"],
+    );
+    assert.deepEqual(events[0], {
+      type: "kite.notice",
+      name: "kite.memory-recalled",
+      value: { count: 1, previews: ["How to label Gmail spam"] },
+    });
+    assert.deepEqual(queries, ["Label this email"]);
+    const parts = record.prompt as { text?: string }[];
+    assert.match(parts[0].text ?? "", /gmail-spam-triage/);
+    assert.match(parts[0].text ?? "", /load_learned_skill/);
+    assert.match(
+      parts[1].text ?? "",
+      /^What CopilotKit Intelligence remembers/,
+    );
+    assert.match(parts[1].text ?? "", /How to label Gmail spam/);
+    assert.equal(parts.at(-1)?.text, "Label this email");
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("a resumed Codex thread fetches neither skills nor memories again", async () => {
+  const { CodexRunner } = await import("../server/codex-agent");
+  const { ScreenshotRegistry } = await import("../server/screenshots");
+  const { mkdtemp, mkdir, rm, writeFile } = await import("node:fs/promises");
+  const { tmpdir } = await import("node:os");
+  const { join } = await import("node:path");
+  const root = await mkdtemp(join(tmpdir(), "kite-context-resume-test-"));
+  await mkdir(join(root, "threads"), { recursive: true });
+  await writeFile(
+    join(root, "threads", "resumed.json"),
+    JSON.stringify({ id: "native-9", workspace: "/test/one" }),
+  );
+  let fetched = 0;
+  const record: { prompt?: unknown } = {};
+  const runner = new CodexRunner({
+    runs: new RunRegistry(),
+    statePath: root,
+    screenshots: new ScreenshotRegistry(),
+    learnedSkills: async () => {
+      fetched += 1;
+      return [];
+    },
+    recallMemories: async () => {
+      fetched += 1;
+      return [];
+    },
+    getConfig: contextConfig,
+    createClient: recordingClient(record),
+  });
+  try {
+    for await (const event of runner.run(
+      contextInput("resumed", "Again please"),
+      new AbortController().signal,
+    ))
+      assert.equal(event.type, "thread.started");
+    assert.equal(fetched, 0);
+    assert.deepEqual(record.prompt, [{ type: "text", text: "Again please" }]);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("unavailable skills or memories are reported and the run continues", async () => {
+  const { CodexRunner } = await import("../server/codex-agent");
+  const { ScreenshotRegistry } = await import("../server/screenshots");
+  const { mkdtemp, rm } = await import("node:fs/promises");
+  const { tmpdir } = await import("node:os");
+  const { join } = await import("node:path");
+  const root = await mkdtemp(join(tmpdir(), "kite-context-fail-test-"));
+  const record: { prompt?: unknown } = {};
+  const runner = new CodexRunner({
+    runs: new RunRegistry(),
+    statePath: root,
+    screenshots: new ScreenshotRegistry(),
+    learnedSkills: async () => {
+      throw new Error("Learned-skills delivery is disabled.");
+    },
+    recallMemories: async () => {
+      throw new Error("Intelligence platform error 403: forbidden");
+    },
+    getConfig: contextConfig,
+    createClient: recordingClient(record),
+  });
+  const skillsMessage =
+    "Learned skills are unavailable for this conversation: Learned-skills delivery is disabled.";
+  const memoryMessage =
+    "Intelligence Memory is unavailable for this conversation: Intelligence platform error 403: forbidden";
+  try {
+    const events = [];
+    for await (const event of runner.run(
+      contextInput("unavailable", "Label this email"),
+      new AbortController().signal,
+    ))
+      events.push(event);
+    assert.deepEqual(
+      events
+        .slice(0, 2)
+        .map((event) =>
+          event.type === "kite.notice"
+            ? [event.name, event.value.summary]
+            : [event.type],
+        ),
+      [
+        ["kite.activity", skillsMessage],
+        ["kite.activity", memoryMessage],
+      ],
+    );
+    assert.equal(events[2].type, "thread.started");
+    const texts = (record.prompt as { text?: string }[]).map((p) => p.text);
+    assert.deepEqual(texts.slice(0, 2), [skillsMessage, memoryMessage]);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("Codex reaches Intelligence's knowledge base only through OpenMuse's proxy", async () => {
+  const { CodexRunner } = await import("../server/codex-agent");
+  const { ScreenshotRegistry } = await import("../server/screenshots");
+  const { mkdtemp, rm } = await import("node:fs/promises");
+  const { tmpdir } = await import("node:os");
+  const { join } = await import("node:path");
+  const root = await mkdtemp(join(tmpdir(), "kite-knowledge-config-test-"));
+  const record: { config?: unknown; env?: Record<string, string> } = {};
+  let intelligenceMcp: { url: string; tools: readonly string[] } | undefined = {
+    url: "http://127.0.0.1:4000/mcp/intelligence",
+    tools: ["copilotkit_knowledge_base_shell"],
+  };
+  const runner = new CodexRunner({
+    runs: new RunRegistry(),
+    statePath: root,
+    screenshots: new ScreenshotRegistry(),
+    getConfig: () => ({ ...contextConfig(), intelligenceMcp }),
+    createClient: recordingClient(record),
+  });
+  const servers = () =>
+    (record.config as { mcp_servers: Record<string, unknown> }).mcp_servers;
+  try {
+    for await (const event of runner.run(
+      contextInput("with-knowledge", "hi"),
+      new AbortController().signal,
+    ))
+      assert.equal(event.type, "thread.started");
+    assert.deepEqual(servers().intelligence, {
+      url: "http://127.0.0.1:4000/mcp/intelligence",
+      bearer_token_env_var: "KITE_MCP_TOKEN",
+      required: false,
+      tool_timeout_sec: 60,
+      tools: { copilotkit_knowledge_base_shell: { approval_mode: "approve" } },
+    });
+    assert.ok(
+      !Object.keys(record.env ?? {}).some((name) => name.startsWith("CPK_")),
+      "no Intelligence key reaches the Codex process",
+    );
+    intelligenceMcp = undefined;
+    for await (const event of runner.run(
+      contextInput("without-knowledge", "hi"),
+      new AbortController().signal,
+    ))
+      assert.equal(event.type, "thread.started");
+    assert.equal(servers().intelligence, undefined);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
