@@ -79,7 +79,7 @@ export const SETTLE_MS = 500;
 
 // The model reads these, not the user.
 export const PROMPT_OPEN_MESSAGE =
-  "An OpenMuse approval prompt is open, and input sent now could answer it. Wait until the user has answered it, then try again.";
+  "An OpenMuse dialog is open, and input sent now could answer it. Wait until the user has closed it, then try again.";
 export const REPLACED_MESSAGE =
   "That screenshot was replaced while the prompt was open. Call take_screenshot for a new one.";
 export const STOPPED_MESSAGE =
