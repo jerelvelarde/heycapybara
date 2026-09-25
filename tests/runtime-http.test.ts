@@ -4,7 +4,7 @@ import { mkdtemp, realpath, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Store } from "../electron/store";
-import { startRuntime } from "../server/runtime";
+import type { startRuntime } from "../server/runtime";
 import { ScreenshotRegistry } from "../server/screenshots";
 
 // Isolates this test from whatever the shell environment happens to export:
@@ -21,15 +21,21 @@ test("real runtime discovers AG-UI agent only after loopback authentication", as
   const saved = Object.fromEntries(
     ENV_KEYS.map((key) => [key, process.env[key]]),
   );
+  const savedTelemetry = process.env.COPILOTKIT_TELEMETRY_DISABLED;
   let storeRoot: string | undefined;
   let alternate: string | undefined;
   let runtime: Awaited<ReturnType<typeof startRuntime>> | undefined;
   try {
     for (const key of ENV_KEYS) delete process.env[key];
+    // Keeps the suite from sending CopilotKit a usage event on every run.
+    // The telemetry client reads this switch once, when its module loads, so
+    // the runtime is imported only after it is set.
+    process.env.COPILOTKIT_TELEMETRY_DISABLED = "true";
+    const runtimeModule = await import("../server/runtime");
     storeRoot = await mkdtemp(join(tmpdir(), "kite-runtime-test-"));
     const store = new Store(storeRoot);
     await store.load();
-    runtime = await startRuntime(store, {
+    runtime = await runtimeModule.startRuntime(store, {
       screenshots: new ScreenshotRegistry(),
     });
     // A plain, non-optional alias: `runtime` itself stays `T | undefined` so
@@ -75,6 +81,9 @@ test("real runtime discovers AG-UI agent only after loopback authentication", as
       if (saved[key] === undefined) delete process.env[key];
       else process.env[key] = saved[key];
     }
+    if (savedTelemetry === undefined)
+      delete process.env.COPILOTKIT_TELEMETRY_DISABLED;
+    else process.env.COPILOTKIT_TELEMETRY_DISABLED = savedTelemetry;
     runtime?.close();
     if (storeRoot) await rm(storeRoot, { recursive: true, force: true });
     if (alternate) await rm(alternate, { recursive: true, force: true });

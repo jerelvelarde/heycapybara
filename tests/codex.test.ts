@@ -2,6 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { codexEvents } from "../server/codex-events";
 import { pngHeader } from "./png-fixture";
+import { otherId } from "./test-ids";
 
 test("Codex completion emits a single valid AG-UI text message", () => {
   const events = codexEvents({
@@ -1113,17 +1114,6 @@ type NoteRow = {
   opening: string;
 };
 
-// An id that looks like a real registered id but never collides with it:
-// flipping the last hex digit guarantees a mismatch instead of relying on a
-// fixed id staying different from whatever the registry randomly generated.
-// tests/doc-contract.test.ts's otherId does the same thing; the two aren't
-// shared yet.
-function flippedLastHexDigit(id: string) {
-  const last = id.at(-1) ?? "0";
-  const flipped = ((Number.parseInt(last, 16) + 1) % 16).toString(16);
-  return id.slice(0, -1) + flipped;
-}
-
 // Shared setup for the note-state matrix below. `registry.add` always runs,
 // so the capture always exists in a registry -- backdated or forward-dated
 // when the row sets `registryNow`, to land it outside the freshness window
@@ -1186,7 +1176,7 @@ async function firstNoteFor(row: NoteRow) {
     row.referenceId === "valid"
       ? shot.id
       : row.referenceId === "unknown"
-        ? flippedLastHexDigit(shot.id)
+        ? otherId(shot.id)
         : undefined;
   try {
     const events = runner.run(
