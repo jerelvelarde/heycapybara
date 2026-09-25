@@ -84,7 +84,7 @@ A 1512×982 display is captured at 1512×982, and a 2560×1440 display at 1920×
    1. no `\p{C}`, `Zl` or `Zp` character, except ZWNJ and ZWJ;
    2. no known blank character, such as a Hangul filler or the Braille blank;
    3. no other invisible (default-ignorable) character, except ZWNJ, ZWJ and the text and emoji style selectors U+FE0E and U+FE0F;
-   4. no run of two or more ZWNJ/ZWJ, and no three marks from the combining accent blocks (U+0300 to U+036F and its relatives) on one letter, even with other marks or joiners between them; other scripts' marks, as in Hindi, Tibetan or pointed Hebrew, are not limited;
+   4. no run of two or more ZWNJ/ZWJ, and no stack of combining marks on one letter, even with other marks or joiners between them: the combining accent blocks (U+0300 to U+036F and its relatives) cap at two marks per letter, and any script's marks cap at four in a row, so real words in Hindi, Tibetan or pointed Hebrew still pass;
    5. no two spaces (`Zs`) with only marks or joiners between them, because a run of spaces can make the rest of the label look like a line of its own;
    6. at least one letter or number.
 

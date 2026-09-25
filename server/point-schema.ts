@@ -32,8 +32,12 @@ const BLANK_CHARACTERS = new RegExp(
 );
 
 // The accent marks that fonts stack one above another on a single letter,
-// by block. Other scripts' marks don't count, because real words in Hindi,
-// Burmese, Tibetan and pointed Hebrew put three or more marks in a row.
+// by block. These five blocks get their own, tighter threshold below (three
+// marks, not five), because real Latin-script words never stack that many
+// diacritics on one letter. Real words in other scripts, such as Hindi,
+// Burmese, Tibetan and pointed Hebrew, do put three or four marks in a row,
+// so ANY_SCRIPT_STACK below gives every script the same five-mark cap
+// instead of reusing this block list.
 const ACCENT_BLOCKS: readonly [number, number][] = [
   [0x0300, 0x036f], // Combining Diacritical Marks
   [0x1ab0, 0x1aff], // Combining Diacritical Marks Extended
@@ -53,6 +57,20 @@ const ACCENT = `[${ACCENT_BLOCKS.map(
 // the same letter, so it doesn't reset the count.
 const STACKED = new RegExp(
   String.raw`[\u200C\u200D]{2,}|${ACCENT}(?:[\p{M}\u200C\u200D]*${ACCENT}){2,}`,
+  "u",
+);
+
+// Five or more combining marks in a row build a tall glyph in any script,
+// even when no single block above supplies three by itself: the well-known
+// Thai, Tibetan, Arabic, Hebrew, Devanagari and Cyrillic tall-text tricks
+// all stack marks outside the five Latin-centred blocks. A joiner may sit
+// between marks without resetting the run, same as above. Variation
+// selectors are marks too (general category Mn), so a run of dozens of
+// emoji-style selectors alone is caught here as well; a single selector
+// after one base character still passes.
+const JOINERS = String.fromCodePoint(0x200c, 0x200d); // ZWNJ, ZWJ
+const ANY_SCRIPT_STACK = new RegExp(
+  String.raw`\p{M}(?:[${JOINERS}]*\p{M}){4,}`,
   "u",
 );
 
@@ -104,7 +122,7 @@ export const pointLabelSchema = z
     "Use a label without invisible characters",
   )
   .refine(
-    (label) => !STACKED.test(label),
+    (label) => !STACKED.test(label) && !ANY_SCRIPT_STACK.test(label),
     "Use a label without stacked accent marks or repeated joiners",
   )
   .refine((label) => !SPACE_RUN.test(label), "Use single spaces between words")

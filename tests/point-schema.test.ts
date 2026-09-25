@@ -132,6 +132,11 @@ const rows: Row[] = [
     label: "Tie" + cp(0x302, ACUTE) + "ng Vie" + cp(0x323, 0x302) + "t",
     ok: true,
   },
+  {
+    name: "fully pointed and cantillated Hebrew: dagesh, shin dot, qamats and a cantillation mark stack four marks on one letter",
+    label: cp(0x5e9, 0x5bc, 0x5c1, 0x5b8, 0x5a3, 0x5d1, 0x5ea),
+    ok: true,
+  },
 
   // --- emoji presentation and flags ---
   {
@@ -332,6 +337,82 @@ const rows: Row[] = [
   {
     name: "38 accents on one letter, with a Devanagari stress sign after every pair",
     label: "a" + cp(ACUTE, ACUTE, 0x951).repeat(19),
+    ok: false,
+    message: STACK_MESSAGE,
+  },
+
+  // --- the same tall-glyph trick built from marks outside the five Latin
+  // blocks above: five or more marks in a row are capped in every script,
+  // not only the Latin-centred ones ---
+  {
+    name: "Thai: the tone mark stacked 58 times, the well-known tall-text spam",
+    label: cp(0x0e2a) + cp(0x0e49).repeat(58),
+    ok: false,
+    message: STACK_MESSAGE,
+  },
+  {
+    name: "Tibetan: a subjoined letter stacked 58 times on one letter",
+    label: cp(0x0f40) + cp(0x0f90).repeat(58),
+    ok: false,
+    message: STACK_MESSAGE,
+  },
+  {
+    name: "Arabic: shadda stacked 58 times on one letter",
+    label: cp(0x0628) + cp(0x0651).repeat(58),
+    ok: false,
+    message: STACK_MESSAGE,
+  },
+  {
+    name: "Hebrew: meteg stacked 58 times on one letter",
+    label: cp(0x05d0) + cp(0x05bd).repeat(58),
+    ok: false,
+    message: STACK_MESSAGE,
+  },
+  {
+    name: "Hebrew: a cantillation mark stacked 58 times on one letter",
+    label: cp(0x05d0) + cp(0x0592).repeat(58),
+    ok: false,
+    message: STACK_MESSAGE,
+  },
+  {
+    name: "Devanagari: a stress sign stacked 58 times on one letter",
+    label: cp(0x0915) + cp(0x0951).repeat(58),
+    ok: false,
+    message: STACK_MESSAGE,
+  },
+  {
+    name: "Cyrillic: titlo stacked 58 times on one letter",
+    label: cp(0x0430) + cp(0x0483).repeat(58),
+    ok: false,
+    message: STACK_MESSAGE,
+  },
+  {
+    name: "the letter a plus 40 Cyrillic combining half marks (Me)",
+    label: "a" + cp(0x2de0).repeat(40),
+    ok: false,
+    message: STACK_MESSAGE,
+  },
+  {
+    name: "Save plus 30 Cyrillic combining millions signs (Me)",
+    label: "Save" + cp(0x0489).repeat(30),
+    ok: false,
+    message: STACK_MESSAGE,
+  },
+  {
+    name: "20 astral-plane musical accent marks (U+1D17B) alone",
+    label: cp(0x1d17b).repeat(20),
+    ok: false,
+    message: STACK_MESSAGE,
+  },
+  {
+    name: "20 astral-plane Greek musical triseme marks (U+1D242) alone",
+    label: cp(0x1d242).repeat(20),
+    ok: false,
+    message: STACK_MESSAGE,
+  },
+  {
+    name: "Save plus 56 emoji-style variation selectors, not one per letter",
+    label: "Save" + cp(EMOJI_STYLE).repeat(56),
     ok: false,
     message: STACK_MESSAGE,
   },
