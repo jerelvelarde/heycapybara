@@ -924,12 +924,14 @@ With a key connected in Settings and the floating placement selected:
 
 1. Open the companion chat, attach a screenshot there, and ask the agent to point at something far from the display's top-left corner, such as a Dock icon at the bottom-right or the menu-bar clock at the top-right. A scale error grows with the distance from that corner, so a target near it, such as the Apple menu, would hide one.
 2. Confirm the approval appears as a sheet on the companion chat. Its message reads `The agent wants to show a pointer on <display>`, its detail reads `The agent says it points at: <label>` with the label the agent chose, and Cancel is the default button.
-3. Press Escape, and confirm the sheet closes, no ring appears, and the agent is told `User declined action`.
+3. Press Escape, and confirm the sheet closes, no ring appears, and the agent is told `The user declined. Don't retry unless they ask.`. Record whether it asks again without being asked.
 4. Ask again, choose "Allow once", and confirm the red ring lands on the target.
 5. Ask the agent to point at something that the open chat covers, and choose "Allow once". Confirm the chat turns transparent while the ring shows and comes back after it. While the ring shows, click inside it over the chat, and record whether the click reached the invisible chat, which still catches clicks on its opaque pixels (a known limit), or what was under it.
-6. Close the companion chat. In the workspace, attach a screenshot and ask for a point, then minimize the workspace and switch to another app before the prompt appears. Confirm the workspace is restored and shown with the sheet on it, and that OpenMuse comes to the front, or its Dock icon bounces if it doesn't.
-7. A sheet blocks the window it is on, so Stop has to come from another one. Open the workspace, then click the pet to open the companion chat, so both are on screen, and ask for a point from the workspace's conversation. The sheet appears on the chat. While it is open, choose **Stop agent** in the workspace, and confirm the sheet closes and no ring appears: Stop kills the Codex process, which closes the MCP request the sheet is waiting on. Record whether Intelligence was connected and what you saw.
-8. The built-in 1512×982 display is captured 1:1, which doesn't exercise the scaling. If an external display wider than 1920 points is available, for example one set to 2560×1440, make it the main display and repeat steps 1 to 4 there, because its capture is scaled.
+6. Ask for another point, and while its sheet is open on the companion chat, click the pet, which hides the chat. Confirm the sheet closes, no ring appears, and the agent is told `The approval prompt closed before the user answered. Don't retry unless the user asks again.`, not that the user declined: hiding the window that hosts a prompt ends it (a known limit).
+7. Close the companion chat. In the workspace, attach a screenshot and ask for a point, then minimize the workspace and switch to another app before the prompt appears. Confirm the workspace is restored and shown with the sheet on it, and that OpenMuse comes to the front, or its Dock icon bounces if it doesn't.
+8. Open the companion chat from the pet, ask for a point from the chat's conversation, and hide OpenMuse with Command-H before the prompt appears. Confirm the workspace comes back with the sheet on it, and the chat comes back open instead of being closed.
+9. A sheet blocks the window it is on, so Stop has to come from another one. Open the workspace, then click the pet to open the companion chat, so both are on screen, and ask for a point from the workspace's conversation. The sheet appears on the chat. While it is open, choose **Stop agent** in the workspace, and confirm the sheet closes, no ring appears, and the workspace reports the run as stopped: Stop kills the Codex process, which closes the MCP request the sheet is waiting on. Record whether Intelligence was connected and what you saw.
+10. The built-in 1512×982 display is captured 1:1, which doesn't exercise the scaling. If an external display wider than 1920 points is available, for example one set to 2560×1440, make it the main display and repeat steps 1 to 4 there, because its capture is scaled.
 
 Without a key or permission, write down exactly which step could not run.
 
@@ -944,10 +946,11 @@ git commit -m "docs: record pointer contract verification"
 
 ## Changes after review
 
-The shipped code differs from the tasks above in the ways listed here, and the shipped README text differs from Task 4's block. Section 1 of the spec describes the shipped contract in full. The topics below describe the shipped code, and [Round 4](#round-4) lists what the fourth review round changed.
+The shipped code differs from the tasks above in the ways listed here, and the shipped README text differs from Task 4's block. Section 1 of the spec describes the shipped contract in full. The topics below describe the shipped code. [Round 4](#round-4) and [Round 5](#round-5) list what the fourth and fifth review rounds changed, and where Round 5 changed something Round 4 lists, such as a message's wording, Round 5 has the shipped version.
 
 **Capture**
 
+- Without Screen Recording, the capture fails with `Allow Screen Recording for OpenMuse Desktop in System Settings > Privacy & Security > Screen & System Audio Recording, then quit and reopen OpenMuse Desktop.` before any window changes, instead of Task 3's `Enable Screen Recording permission in Settings.`
 - The screenshot handler makes the visible workspace, pet, notch and companion chat windows transparent with `conceal()` from `electron/window-occlusion.ts` instead of hiding them: it sets each window's opacity to 0 at once, with no animation. Only the opaque workspace also ignores the mouse while concealed. The transparent pet, notch and companion chat windows change only their opacity, because calling `setIgnoreMouseEvents` on a transparent window even once loses AppKit's click-through of its clear pixels for good, and Electron never calls it when it creates the window.
 - The capture calls the `restore()` that `conceal()` returns as soon as `getSources` answers, and on any failure before that. Fades nest per window, so restoring puts back a window's opacity, and the workspace's mouse handling, only when the last overlapping fade on that window ends, whether that fade came from a capture or from the pointer. It skips a window destroyed in the meantime. A failure while fading undoes the fades already made, and a failure while restoring still restores the other windows; either way `conceal()` or `restore()` rethrows the error, and a capture that had already failed keeps its own error. A sheet is a separate window and isn't faded, which is a known limitation.
 - `desktopCapturer.getSources` gets 10 s to answer. After that the capture fails with "Screen capture didn't respond. Try again, or quit and reopen OpenMuse Desktop.", and the windows are restored.
@@ -982,19 +985,19 @@ The shipped code differs from the tasks above in the ways listed here, and the s
 **Label**
 
 - `server/tools.ts` and `approvedAction` share `screenshotIdSchema` and `pointLabelSchema` from `server/point-schema.ts` instead of each defining its own.
-- After trimming and the 1-to-60 length check, in which zod counts code points, the label must pass six refinements, in order, each with its own message: no `\p{C}`, `Zl` or `Zp` character except ZWNJ and ZWJ; no known blank character; no other default-ignorable character except ZWNJ, ZWJ, U+FE0E and U+FE0F; no run of two or more ZWNJ/ZWJ, and no stack of combining marks, which allows at most two marks from the combining accent blocks on one letter, even with other marks or joiners between them, and at most four marks of any script in a row; no two spaces with only marks or joiners between them; at least one letter or number. Real words in scripts such as Hindi, Tibetan and pointed Hebrew still pass. They are refinements rather than `.regex()` because a published JSON Schema pattern has no `u` flag.
+- After trimming, normalizing to NFC and the 1-to-60 length check, in which zod counts code points, the label must pass six refinements, in order, each with its own message: no `\p{C}`, `Zl` or `Zp` character except ZWNJ and ZWJ; no known blank character; no other default-ignorable character except ZWNJ, ZWJ, U+FE0E and U+FE0F; no run of two or more ZWNJ/ZWJ, and no stack of combining marks, which allows at most two marks from the combining accent blocks on one letter, even with other marks or joiners between them, at most four nonspacing or enclosing marks of any script in a row, not counting spacing marks or joiners between them, and no single nonspacing mark three times in a row; no two spaces with only marks or joiners between them; at least one letter or number. Real words in scripts such as Hindi, Burmese, Tibetan and pointed Hebrew still pass. A label over 480 UTF-16 units isn't normalized, as [Round 5](#round-5) explains. They are refinements rather than `.regex()` because a published JSON Schema pattern has no `u` flag.
 - x and y are plain `z.number()`, which in zod 4 already rejects infinite numbers and NaN.
 - The label's tool description says the user sees it in the approval dialog, as one line of visible text of up to 60 characters with at least one letter or number.
 
 **Approval**
 
-- `approve` in `electron/main.ts` asks through `askApproval` in `electron/approval.ts`, which activates OpenMuse first with `app.focus({ steal: true })`. The prompt is always a sheet attached to an OpenMuse window: `approvalHost` picks the companion chat if it is visible, and otherwise the workspace. Task 3 always attached it to the workspace. The parentless form is never used, because a parentless message box on macOS runs synchronously and would block the main process, with the runtime server, MCP, IPC and timers. [Round 4](#round-4) says how the workspace is brought on screen and when the Dock icon bounces.
+- `approve` in `electron/main.ts` asks through `askApproval` in `electron/approval.ts`, which activates OpenMuse first with `app.focus({ steal: true })`. The prompt is always a sheet attached to an OpenMuse window: `approvalHost` picks the companion chat if it is visible, and otherwise the workspace. Task 3 always attached it to the workspace. The parentless form is never used, because a parentless message box on macOS runs synchronously and would block the main process, with the runtime server, MCP, IPC and timers. [Round 4](#round-4) says when the Dock icon bounces, and [Round 5](#round-5) how the workspace is brought on screen.
 - The title, the buttons, and Cancel as both the default and the cancel button are as in Task 3, so Escape declines and Return does nothing; Return never allows.
 - macOS doesn't show the title, so each message says who is asking. For a point, the message is `The agent wants to show a pointer on <display>`, and the model's label goes in the detail, `The agent says it points at: <label>`, built by `pointPrompt`. Task 3 put the label in the message itself. To open an app, the message is `The agent wants to open an app`, and the model's bundle ID goes in the detail, `The agent says the app is: <bundle id>`, instead of Task 3's message `Open application <bundle id>`.
 
 **Pointer and windows**
 
-- `performPointAction` in `electron/point-action.ts` runs the steps in order: resolve, prompt, confirm (a decline fails with `User declined action`), and resolve again, which must return the same screenshot. It then conceals each visible OpenMuse window whose bounds, grown by `RING_MARGIN` (32 pt: half the helper's 48 pt ring panel plus 8 pt of slack), contain the point, runs `--point`, and restores those windows whether or not the helper succeeded. The ring itself reaches about 21 pt from the point: `native/Recorder.swift` insets its oval 5 pt inside the panel and strokes it 4 pt wide. The helper draws the ring at screen-saver level, above our windows, so only the target needs clearing. Task 3 left covering windows alone.
+- `performPointAction` in `electron/point-action.ts` runs the steps in order: resolve, prompt, confirm (a decline fails with `The user declined. Don't retry unless they ask.`), and resolve again, which must return the same screenshot. It then conceals each visible OpenMuse window whose bounds, grown by `RING_MARGIN` (32 pt: half the helper's 48 pt ring panel plus 8 pt of slack), contain the point, runs `--point`, and restores those windows whether or not the helper succeeded; once the ring has shown, a restore that fails doesn't fail the point. The ring itself reaches about 21 pt from the point: `native/Recorder.swift` insets its oval 5 pt inside the panel and strokes it 4 pt wide. The helper draws the ring at screen-saver level, above our windows, so only the target needs clearing. Task 3 left covering windows alone.
 - The pointer's conceal nests with a capture's, so a window covered by both comes back only when both have ended.
 
 **Helper**
@@ -1071,3 +1074,59 @@ The shipped code differs from the tasks above in the ways listed here, and the s
 - `tests/doc-contract.test.ts` also checks that the spec quotes the approval, pointer and capture errors, the open-app prompt and the footer as the code has them, and checks the limits against the spec with both its Messages and Tests sections removed.
 - `tests/runtime-http.test.ts` turns CopilotKit's telemetry off before it imports the runtime, so it no longer sends CopilotKit a usage event.
 - `tests/test-ids.ts` holds the `otherId` helper that `tests/doc-contract.test.ts` and `tests/codex.test.ts` share.
+
+### Round 5
+
+**Stop**
+
+- `KiteCodexAgent` implements `abortRun()`, which aborts the active run, so **Stop agent** kills the Codex process with Intelligence off too. After Round 4 it didn't, and the spec listed that as a known limit. An abort that arrives after `runAgent` has set `isRunning` but before `run()` has subscribed is latched, so it still stops that run; one that arrives before any run, or after a run has finished, does nothing.
+- CopilotKit's Intelligence runner calls the same `abortRun()` when it stops a run and on its failure paths, such as a stop that times out or a rejoin the gateway rejects, so those now end the local Codex turn too.
+- `CodexRunner` checks for Stop once the prompt is ready and never calls `runStreamed` for a run already stopped. The Codex SDK writes the prompt to Codex's stdin with no error listener, so a Codex process killed during preparation could otherwise crash the main process with EPIPE. A Stop within milliseconds of the SDK's own spawn, with a large prompt, can still lose that race inside `@openai/codex-sdk`; that is upstream.
+- A stopped run ends with RUN_ERROR `Run stopped`, whether the SDK rethrows Node's `AbortError` or the stream just ends.
+- A failed removal of a run's temporary screenshot files is dropped, so it never replaces the run's own result or error.
+- Stop kills Codex, which closes the MCP request, which aborts its `request.signal`, which closes a pending sheet without acting.
+
+**Approval**
+
+- The approval results are worded for the model that reads them: `The approval prompt closed before the user answered. Don't retry unless the user asks again.` and `The request was cancelled before the user answered.` replace Round 4's wording addressed to "you".
+- A declined point and a declined app launch both fail with `The user declined. Don't retry unless they ask.`, `DECLINED_MESSAGE` in `electron/approval.ts`, instead of `User declined action`.
+- When the workspace hosts the prompt but isn't on screen, `approve` calls `app.show()`, restores the workspace if it is minimized, and shows and focuses it, instead of calling `openWorkspace()`. Hiding OpenMuse with Command-H is the case this fixes: it makes every window report as not visible, so the workspace hosts the prompt even with the chat open, and `openWorkspace()` would have hidden that chat.
+- The unused `kite:action` IPC route is removed, along with `action` in the preload API and `KiteAPI`, so the runtime is `approvedAction`'s only caller.
+
+**Bundle IDs**
+
+- `server/tools.ts` and `approvedAction` share `bundleIdSchema` from `server/point-schema.ts` instead of each defining its own. It uses the pattern `native/Recorder.swift` checks for `--open-app`, so a bundle ID the user allows never fails the helper's own pattern check, and keeps the 255-character cap. Each dot-separated part must now start with a letter or digit.
+
+**Labels**
+
+- A label is normalized to NFC after trimming and before any check, and the prompt shows the normalized label. A label over 480 UTF-16 units isn't normalized, because normalizing takes quadratic time on a long run of marks and the length check rejects the label anyway.
+- The any-script cap counts only nonspacing and enclosing marks (`Mn`, `Me`), and spacing marks (`Mc`) and joiners may sit between them without ending the run, so Burmese words whose letters carry spacing marks pass. Round 4 counted every mark.
+- The same nonspacing mark three or more times in a row is rejected.
+
+**Windows**
+
+- A fade's record is deleted only once its window is verifiably back, or destroyed. A failed restore, a failed rollback of a fade, and a retry whose own fade fails all keep the record with the window's original opacity, so the next fade and restore retry with it.
+- A failed opacity restore leaves the window as its fade left it: invisible and, for the workspace, still ignoring the mouse, instead of invisible and clickable. Round 4 stopped ignoring the mouse even then. If the opacity comes back but the workspace can't stop ignoring the mouse, the record is kept so the next cycle retries that too.
+
+**Pointer**
+
+- Once the ring has shown, a restore that fails no longer fails the point, so the point is reported as shown and the model isn't invited to ask again; the kept fade record lets a later fade and restore bring the window back.
+
+**Capture**
+
+- Without Screen Recording, the capture fails with `Allow Screen Recording for OpenMuse Desktop in System Settings > Privacy & Security > Screen & System Audio Recording, then quit and reopen OpenMuse Desktop.`
+
+**Helper**
+
+- A missing or non-executable helper fails with `The desktop helper is missing or not executable (<code>). Rebuild it with npm run build:native, or reinstall OpenMuse Desktop.`
+- A failure that gives no reason suggests a retry and then a rebuild: `The desktop helper exited with code <code> and gave no reason. Try again; if it keeps failing, rebuild it with npm run build:native.`, or with no exit code, `The desktop helper failed and gave no reason. Try again; if it keeps failing, rebuild it with npm run build:native.`
+- `SIGSYS`, `SIGXCPU` and `SIGEMT` count as crashes too.
+
+**Tests**
+
+- `tests/runtime-e2e.test.ts` sends a run-scoped `agent/stop`, carrying `{runId}` as the renderer does, while a fake Codex CLI hangs until it is killed, and checks that the process dies and the run ends with RUN_ERROR `Run stopped`.
+- `tests/runtime-http.test.ts` drops a real MCP connection, on the HTTP server `startRuntime` builds, while `point_on_screen`'s action is pending, and checks that the action's signal aborts. A fake Codex CLI hands the test the MCP token, which the runtime otherwise keeps to itself.
+- `tests/codex.test.ts` covers `abortRun()`, its latch, a Stop during preparation, and a failed cleanup that leaves the run's own outcome in place.
+- `tests/electron-version.test.ts` lists every Electron behavior the pin protects in one array, `RELIED_ON_BEHAVIOUR`, which its failure message is built from.
+- `tests/tools.test.ts` compares `bundleIdSchema`'s published pattern with `native/Recorder.swift`'s `--open-app` check.
+- `tests/doc-contract.test.ts` also checks the Screen Recording message, and each helper error the spec quotes, as the code produces them.

@@ -1,11 +1,13 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
+import { constants } from "node:os";
 import {
   askApproval,
   type ApprovalDeps,
   type ApprovalDialogOptions,
 } from "../electron/approval";
+import { runHelper } from "../electron/helper-result";
 import {
   performPointAction,
   type PointActionDeps,
@@ -171,8 +173,9 @@ async function pointErrors() {
   ];
 }
 
-// captureScreenshot's timeout, from a getSources that never answers.
-function captureTimeout() {
+// The error of a capture whose getSources never answers, so it times out
+// unless `change` makes it fail sooner.
+function captureError(change: Partial<CaptureDeps> = {}) {
   const deps: CaptureDeps = {
     screenCaptureAllowed: async () => true,
     primaryDisplay: () => ({
@@ -186,10 +189,50 @@ function captureTimeout() {
     wait: async () => {},
     sources: () => new Promise(() => {}),
     rebuild: (png) => png,
-    register: () => assert.fail("A capture that timed out must not register"),
+    register: () => assert.fail("A capture that failed must not register"),
     sourcesTimeoutMs: 1,
+    ...change,
   };
   return rejection(captureScreenshot(deps));
+}
+
+// captureScreenshot's errors: Screen Recording denied, and the timeout.
+async function captureErrors() {
+  return [
+    await captureError({ screenCaptureAllowed: async () => false }),
+    await captureError(),
+  ];
+}
+
+// runHelper's own reasons, from failures shaped the way Node reports them:
+// an asynchronous failure carries the helper's stdout, and a synchronous
+// spawn failure carries none, only a `syscall` of "spawn". A sample value in
+// a reason is swapped for the placeholder the spec uses.
+const HELPER_FAILURES: { failure: object; sample?: [string, string] }[] = [
+  { failure: { errno: -constants.errno.ENOEXEC, syscall: "spawn" } },
+  { failure: { stdout: "", code: "ENOENT" }, sample: ["(ENOENT)", "(<code>)"] },
+  {
+    failure: { stdout: "", code: null, signal: "SIGSEGV" },
+    sample: ["(SIGSEGV)", "(<signal>)"],
+  },
+  {
+    failure: { stdout: "", code: null, signal: "SIGTERM" },
+    sample: ["by SIGTERM", "by <signal>"],
+  },
+  { failure: { stdout: "", code: 7 }, sample: ["code 7 ", "code <code> "] },
+  { failure: { stdout: "" } },
+];
+async function helperErrors() {
+  const reasons: string[] = [];
+  for (const { failure, sample } of HELPER_FAILURES) {
+    const reason = await rejection(
+      runHelper(() =>
+        Promise.reject(Object.assign(new Error("Command failed"), failure)),
+      ),
+    );
+    reasons.push(sample ? reason.replace(sample[0], sample[1]) : reason);
+  }
+  return reasons;
 }
 
 // electron/main.ts imports Electron, which doesn't load under the Node test
@@ -269,7 +312,7 @@ test("the spec quotes the approval, pointer and capture errors, the open-app pro
     `src/Assistant.tsx's footer no longer reads "${FOOTER}"; update this test and the spec`,
   );
   const texts = [
-    await captureTimeout(),
+    ...(await captureErrors()),
     ...(await approvalErrors()),
     ...(await pointErrors()),
     OPEN_APP_MESSAGE,
@@ -277,6 +320,10 @@ test("the spec quotes the approval, pointer and capture errors, the open-app pro
     FOOTER,
   ];
   assertQuotes(await read(SPEC), "The spec", texts.map(code));
+});
+
+test("the spec quotes the helper's errors as runHelper reports them", async () => {
+  assertQuotes(await read(SPEC), "The spec", (await helperErrors()).map(code));
 });
 
 test("the README and the spec state the limits the code enforces", async () => {

@@ -51,9 +51,9 @@ export type ApprovalDeps = {
 
 // The model reads this message, not the user, so it must say not to retry
 // rather than invite one - a bare "declined" leaves the model free to ask
-// again right away. `electron/main.ts` throws this for a declined open-app
-// request. `electron/point-action.ts` has its own separate literal for a
-// declined point and is not wired to this constant.
+// again right away. Both callers throw this constant for a declined prompt:
+// `electron/main.ts` for an open-app request, and `electron/point-action.ts`
+// for a point.
 export const DECLINED_MESSAGE =
   "The user declined. Don't retry unless they ask.";
 
