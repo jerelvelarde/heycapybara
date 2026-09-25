@@ -225,7 +225,7 @@ test("a marked window never gets setIgnoreMouseEvents on conceal or restore, but
   assert.equal(a.ignoreMouseEventsCallCount(), 0);
 });
 
-test("an unmarked window keeps today's behaviour even when concealed alongside a marked one", () => {
+test("an unmarked window still fades and ignores mouse events even when concealed alongside a marked one", () => {
   const marked = fakeConcealable(1);
   const unmarked = fakeConcealable(0.8);
   markTransparent(marked);
@@ -327,4 +327,60 @@ test("if the second window's setIgnoreMouseEvents throws during conceal, both wi
   assert.equal(a.isIgnoringMouseEvents(), false);
   // b's own fadeOut call must have put its opacity back before rethrowing.
   assert.equal(bOpacity, 0.8);
+});
+
+test("a failing restore still un-ignores mouse events, and a later successful cycle restores the TRUE original opacity, not the stuck 0", () => {
+  let opacity = 0.85;
+  let ignoring = false;
+  let failRestore = true;
+  const win: ConcealableWindow = {
+    isDestroyed: () => false,
+    getOpacity: () => opacity,
+    setOpacity: (next: number) => {
+      if (next !== 0 && failRestore) throw new Error("restore boom");
+      opacity = next;
+    },
+    setIgnoreMouseEvents: (ignore: boolean) => {
+      ignoring = ignore;
+    },
+  };
+
+  const restore = conceal([win]);
+  assert.equal(opacity, 0);
+  assert.equal(ignoring, true);
+
+  // The opacity restore fails, but the window must not stay click-through
+  // forever because of it: setIgnoreMouseEvents(false) still runs even
+  // though setOpacity threw.
+  assert.throws(() => restore(), /restore boom/);
+  assert.equal(opacity, 0);
+  assert.equal(ignoring, false);
+
+  // A fresh cycle must still restore to 0.85, the window's true original
+  // opacity from before it was ever faded. The old bug deleted the fade
+  // entry before attempting the restore, so a failure here would have left
+  // fadeOut() reading back the stuck opacity (0) on the next cycle and
+  // recording that as "original" instead.
+  failRestore = false;
+  const restoreAgain = conceal([win]);
+  restoreAgain();
+  assert.equal(opacity, 0.85);
+});
+
+test("marking a window transparent while it is still faded does not stop restore from un-ignoring it", () => {
+  const win = fakeConcealable(1);
+  const restore = conceal([win]);
+  assert.equal(win.opacity(), 0);
+  assert.equal(win.isIgnoringMouseEvents(), true);
+
+  // Marked only now, while still concealed -- for example, main.ts calling
+  // markTransparent() on a window it just created, after conceal() had
+  // already started fading it. Restore must undo what fadeOut actually did
+  // (it did call setIgnoreMouseEvents(true)), not re-check
+  // transparentWindows' membership as of restore time.
+  markTransparent(win);
+
+  restore();
+  assert.equal(win.opacity(), 1);
+  assert.equal(win.isIgnoringMouseEvents(), false);
 });

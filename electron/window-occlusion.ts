@@ -7,6 +7,9 @@ import type { Rect } from "../server/screenshots";
 // the ring.
 export const RING_MARGIN = 32;
 
+// The left and top edges of the margin are inclusive (>=); the right and
+// bottom are exclusive (<). See the paired boundary tests in
+// tests/window-occlusion.test.ts for each edge.
 export function coversPoint(bounds: Rect, point: { x: number; y: number }) {
   return (
     point.x >= bounds.x - RING_MARGIN &&
@@ -27,10 +30,13 @@ export type ConcealableWindow = {
 // frameless. Electron's only call site for setIgnoresMouseEvents: is
 // SetIgnoreMouseEvents (Electron v44.4.5's shell/browser/native_window_mac.mm);
 // it never runs at window creation, so these windows start out on AppKit's
-// default, where clicks pass straight through their clear pixels. That
-// default holds only until something calls setIgnoreMouseEvents on the
-// window, true or false either one; once called, the window hit-tests its
-// whole frame from then on, and there is no API to get the default back.
+// default, where clicks pass straight through their clear pixels and land on
+// their opaque ones. That default holds only until something calls
+// setIgnoreMouseEvents on the window, true or false either one; once called,
+// the window stops doing that per-pixel test and instead goes uniform: false
+// makes it hit-test its whole frame, including the clear pixels; true makes
+// it ignore its whole frame, including the opaque ones. There is no API to
+// get the per-pixel default back.
 // markTransparent records which windows conceal() must never call it on.
 const transparentWindows = new WeakSet<ConcealableWindow>();
 export function markTransparent(win: ConcealableWindow) {
@@ -38,10 +44,14 @@ export function markTransparent(win: ConcealableWindow) {
 }
 
 // Fades in progress, keyed by window identity, so overlapping conceal() calls
-// on the same window nest instead of clobbering each other's recorded opacity.
+// on the same window nest instead of clobbering each other's recorded
+// opacity. `ignoredMouse` records whether this fade actually called
+// setIgnoreMouseEvents(true), so undoFade can undo exactly that action
+// later instead of re-deciding from transparentWindows' membership at
+// restore time, which can change while the window is still faded.
 const fades = new WeakMap<
   ConcealableWindow,
-  { count: number; opacity: number }
+  { count: number; opacity: number; ignoredMouse: boolean }
 >();
 
 // Fading a window out instead of hiding it keeps its focus, visibility,
@@ -50,11 +60,12 @@ const fades = new WeakMap<
 // still show up in a capture or sit over a pointer target.
 //
 // Every window not marked transparent gets setIgnoreMouseEvents toggled true
-// for the duration of the fade and back to false on restore, same as before.
-// A marked window is never touched that way in either direction: it is
-// invisible at opacity 0 regardless, and calling setIgnoreMouseEvents on it
-// even once would cost it its click-through for good (see markTransparent
-// above).
+// for the duration of the fade and back to false on restore.
+// A marked window is never touched that way in either direction, because
+// calling setIgnoreMouseEvents on it even once would cost it its per-pixel
+// click-through for good (see markTransparent above). The trade-off: while
+// faded, a marked window keeps hit-testing its opaque pixels instead of
+// going fully click-through like the others.
 //
 // Fades nest: the screenshot capture and the pointer can overlap across the
 // workspace and companion chat's separate conversations, so a window gets its
@@ -66,17 +77,24 @@ function fadeOut(win: ConcealableWindow): void {
     return;
   }
   const opacity = win.getOpacity();
-  fades.set(win, { count: 1, opacity });
+  // Decided once, here, from transparentWindows' membership at the moment
+  // this window starts fading. Recorded in the fade entry so undoFade later
+  // undoes exactly this decision rather than re-reading membership that can
+  // change (via markTransparent) while the window is still faded.
+  const ignoredMouse = !transparentWindows.has(win);
+  fades.set(win, { count: 1, opacity, ignoredMouse });
   let opacityChanged = false;
   try {
     win.setOpacity(0);
     opacityChanged = true;
-    if (!transparentWindows.has(win)) win.setIgnoreMouseEvents(true);
+    if (ignoredMouse) win.setIgnoreMouseEvents(true);
   } catch (error) {
-    // setOpacity(0) may have already landed before this failed, so put it
-    // back rather than leave the window stuck invisible with the fade
-    // entry gone and nothing on record of the change. A second failure
-    // while undoing is swallowed so it doesn't mask the original error.
+    // Either setOpacity(0) or the setIgnoreMouseEvents(true) after it can be
+    // the one that threw. If setOpacity(0) already landed before that
+    // happened, opacityChanged is true, so put the original opacity back
+    // rather than leave the window stuck invisible with the fade entry gone
+    // and nothing on record of the change. A second failure while undoing
+    // is swallowed so it doesn't mask the original error.
     fades.delete(win);
     if (opacityChanged) {
       try {
@@ -98,10 +116,31 @@ function undoFade(win: ConcealableWindow) {
     if (!fade) return;
     fade.count -= 1;
     if (fade.count > 0) return;
-    fades.delete(win);
-    if (win.isDestroyed()) return;
-    win.setOpacity(fade.opacity);
-    if (!transparentWindows.has(win)) win.setIgnoreMouseEvents(false);
+    if (win.isDestroyed()) {
+      fades.delete(win);
+      return;
+    }
+    try {
+      win.setOpacity(fade.opacity);
+      // Only delete once the opacity is actually back: if setOpacity threw,
+      // the entry stays with count 0 and this same true original opacity, so
+      // the next conceal()/restore() cycle on this window retries with the
+      // right value instead of a fresh fadeOut() reading back the stuck
+      // opacity and recording that as "original".
+      fades.delete(win);
+    } finally {
+      // Runs whether or not setOpacity above succeeded: a window that
+      // failed to un-fade must still stop ignoring mouse events, or it is
+      // stuck both invisible and click-through instead of just invisible.
+      if (fade.ignoredMouse) {
+        try {
+          win.setIgnoreMouseEvents(false);
+        } catch {
+          // ignored: a setOpacity failure above takes precedence, and this
+          // must not turn a bare setOpacity success into a thrown error.
+        }
+      }
+    }
   };
 }
 

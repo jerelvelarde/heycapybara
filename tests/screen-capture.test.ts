@@ -1,4 +1,4 @@
-import { test } from "node:test";
+import { test, mock } from "node:test";
 import assert from "node:assert/strict";
 import {
   captureScreenshot,
@@ -11,7 +11,7 @@ import { pngHeader } from "./png-fixture";
 const displayId = 7;
 const displayLabel = "Built-in Retina Display";
 // Chosen so captureSize() passes it through unchanged (see
-// server/screenshots.test.ts), keeping the default fixture's target size
+// tests/screenshots.test.ts), keeping the default fixture's target size
 // equal to the display's own size.
 const displaySize = { width: 1512, height: 982 };
 const displayBounds = { x: 0, y: 0, width: 1512, height: 982 };
@@ -24,14 +24,23 @@ function makeDeps(
   overrides: Partial<CaptureDeps> = {},
 ): CaptureDeps {
   const base: CaptureDeps = {
-    screenCaptureAllowed: async () => true,
-    primaryDisplay: () => ({
-      id: displayId,
-      label: displayLabel,
-      size: displaySize,
-      bounds: displayBounds,
-    }),
-    displays: () => [{ id: displayId, bounds: displayBounds }],
+    screenCaptureAllowed: async () => {
+      events.push("screenCaptureAllowed");
+      return true;
+    },
+    primaryDisplay: () => {
+      events.push("primaryDisplay");
+      return {
+        id: displayId,
+        label: displayLabel,
+        size: displaySize,
+        bounds: displayBounds,
+      };
+    },
+    displays: () => {
+      events.push("displays");
+      return [{ id: displayId, bounds: displayBounds }];
+    },
     conceal: () => {
       events.push("conceal");
       return () => {
@@ -53,7 +62,10 @@ function makeDeps(
         },
       ];
     },
-    rebuild: (_png, size) => Buffer.from(pngHeader(size.width, size.height)),
+    rebuild: (_png, size) => {
+      events.push("rebuild");
+      return Buffer.from(pngHeader(size.width, size.height));
+    },
     register: (input) => {
       events.push("register");
       return { ...input, id: "shot_deadbeef", capturedAt: 123 };
@@ -63,17 +75,28 @@ function makeDeps(
   return { ...base, ...overrides };
 }
 
-test("the happy path conceals, waits 200ms, fetches sources, registers, then restores, in that order", async () => {
+test("the happy path checks permission, conceals, waits 200ms, fetches sources, restores, re-reads the display, then registers, in that order", async () => {
   const events: string[] = [];
   const deps = makeDeps(events);
   const result = await captureScreenshot(deps);
   assert.deepEqual(events, [
+    "screenCaptureAllowed",
+    "primaryDisplay",
     "conceal",
     "wait:200",
     "sources",
-    "register",
     "restore",
+    "displays",
+    "register",
   ]);
+  // Restated explicitly, independent of the exact full sequence above: the
+  // display is re-read only after the pixels are captured, and only before
+  // the capture is registered.
+  assert.ok(events.indexOf("sources") < events.indexOf("displays"));
+  assert.ok(events.indexOf("displays") < events.indexOf("register"));
+  // The windows come back as soon as the pixels are captured, not after the
+  // PNG work and the display re-check that follow.
+  assert.ok(events.indexOf("restore") < events.indexOf("displays"));
   assert.equal(result.id, "shot_deadbeef");
   assert.equal(result.label, displayLabel);
   assert.equal(result.width, displaySize.width);
@@ -279,9 +302,9 @@ test("a thumbnail larger than the target is rebuilt at the target size, and the 
     ],
     rebuild: (_png, size) => {
       rebuildCalls.push(size);
-      // Deliberately not exactly the requested target, so a test that
-      // reads the registered size back off the requested size (instead of
-      // measuring the rebuilt PNG) would fail to catch this.
+      // Returns a size different from the one requested, so an assertion
+      // that trusted the requested size instead of measuring the rebuilt
+      // PNG would miss a bug that skips the real measurement.
       return Buffer.from(pngHeader(1511, 982));
     },
     register: (input) => {
@@ -319,6 +342,70 @@ test('an empty display label falls back to "Main display" when registering', asy
   const result = await captureScreenshot(deps);
   assert.equal(registeredLabel, "Main display");
   assert.equal(result.label, "Main display");
+});
+
+test("register receives exactly the display's id, label and bounds, plus the measured pixel size", async () => {
+  const events: string[] = [];
+  const captured: unknown[] = [];
+  const deps = makeDeps(events, {
+    register: (input) => {
+      events.push("register");
+      captured.push(input);
+      return { ...input, id: "shot_deadbeef", capturedAt: 123 };
+    },
+  });
+  await captureScreenshot(deps);
+  assert.deepEqual(captured, [
+    {
+      displayId: String(displayId),
+      label: displayLabel,
+      bounds: displayBounds,
+      width: displaySize.width,
+      height: displaySize.height,
+    },
+  ]);
+});
+
+test("a display larger than the capture cap is requested at the scaled-down target, not passed through at its own size", async () => {
+  const events: string[] = [];
+  const largeSize = { width: 2560, height: 1440 };
+  const largeBounds = { x: 0, y: 0, width: 2560, height: 1440 };
+  let requestedTarget: { width: number; height: number } | undefined;
+  const deps = makeDeps(events, {
+    primaryDisplay: () => {
+      events.push("primaryDisplay");
+      return {
+        id: displayId,
+        label: displayLabel,
+        size: largeSize,
+        bounds: largeBounds,
+      };
+    },
+    displays: () => {
+      events.push("displays");
+      return [{ id: displayId, bounds: largeBounds }];
+    },
+    sources: async (target) => {
+      events.push("sources");
+      requestedTarget = target;
+      return [
+        {
+          display_id: String(displayId),
+          thumbnail: {
+            isEmpty: () => false,
+            toPNG: () => Buffer.from(pngHeader(target.width, target.height)),
+          },
+        },
+      ];
+    },
+  });
+  const result = await captureScreenshot(deps);
+  // 2560x1440 is small enough that a version which passed display.size
+  // straight to sources() instead of captureSize(display.size) would still
+  // produce a valid, if oversized, capture -- this pins the actual target.
+  assert.deepEqual(requestedTarget, { width: 1920, height: 1080 });
+  assert.equal(result.width, 1920);
+  assert.equal(result.height, 1080);
 });
 
 test("singleFlight shares one in-flight run across concurrent callers and resolves both to the same result", async () => {
@@ -360,13 +447,44 @@ test("singleFlight starts a fresh run after the previous one rejects", async () 
   assert.equal(calls, 2);
 });
 
+test("singleFlight starts a fresh run for a later call after a SUCCESSFUL one, not just after a rejection", async () => {
+  // A version that only cleared `inFlight` in the rejection branch (not in
+  // a `finally`) would pass the two tests above -- overlapping callers
+  // still share one run, and a run that rejects still clears -- while
+  // leaving every later call after a successful run replaying the first
+  // result forever instead of capturing again.
+  let calls = 0;
+  const wrapped = singleFlight(() => {
+    calls += 1;
+    return Promise.resolve(`run ${calls}`);
+  });
+  assert.equal(await wrapped(), "run 1");
+  assert.equal(await wrapped(), "run 2");
+  assert.equal(calls, 2);
+});
+
 test("withTimeout resolves with the value and clears its timer when the promise wins", async () => {
-  // A short timeout paired with an already-resolved promise: if the timer
-  // were not cleared, it would still be harmless here since the process
-  // exits once every test finishes, but a leaked handle would keep this
-  // test process alive past that point instead of exiting promptly.
-  const result = await withTimeout(Promise.resolve("value"), 20, "timed out");
-  assert.equal(result, "value");
+  const timeoutSpy = mock.method(global, "setTimeout");
+  const clearSpy = mock.method(global, "clearTimeout");
+  try {
+    // A short timeout paired with an already-resolved promise: if the timer
+    // were not cleared, it would still be harmless here since the process
+    // exits once every test finishes, but a leaked handle would keep this
+    // test process alive past that point instead of exiting promptly.
+    const result = await withTimeout(Promise.resolve("value"), 20, "timed out");
+    assert.equal(result, "value");
+    // Pins the actual clear, not just the absence of a crash: a version
+    // that dropped the clearTimeout call would still resolve correctly
+    // above, and the two assertions below would fail instead.
+    assert.equal(timeoutSpy.mock.calls.length, 1);
+    assert.equal(clearSpy.mock.calls.length, 1);
+    assert.equal(
+      clearSpy.mock.calls[0].arguments[0],
+      timeoutSpy.mock.calls[0].result,
+    );
+  } finally {
+    mock.restoreAll();
+  }
 });
 
 test("withTimeout rejects with the given message when the promise never settles before the timer", async () => {
@@ -381,12 +499,23 @@ test("withTimeout rejects with the given message when the promise never settles 
 });
 
 test("withTimeout propagates a rejection from the promise and still clears its timer", async () => {
+  const timeoutSpy = mock.method(global, "setTimeout");
+  const clearSpy = mock.method(global, "clearTimeout");
   let caught: unknown;
   try {
     await withTimeout(Promise.reject(new Error("boom")), 20, "took too long");
   } catch (error) {
     caught = error;
+  } finally {
+    mock.restoreAll();
   }
   assert.ok(caught instanceof Error);
   assert.equal(caught.message, "boom");
+  // Pins the actual clear, the same way the resolve-wins test above does.
+  assert.equal(timeoutSpy.mock.calls.length, 1);
+  assert.equal(clearSpy.mock.calls.length, 1);
+  assert.equal(
+    clearSpy.mock.calls[0].arguments[0],
+    timeoutSpy.mock.calls[0].result,
+  );
 });
