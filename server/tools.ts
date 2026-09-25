@@ -113,12 +113,22 @@ export function createToolHandler(options: {
       "point_on_screen",
       {
         description:
-          "Display a pointer at a verified screen coordinate after native approval. Does not click.",
-        inputSchema: { x: z.number().finite(), y: z.number().finite() },
+          "Show a pointer on something visible in a screenshot the user attached, after native approval. Pass that screenshot's id and x, y in its pixels (origin at the top-left). Does not click.",
+        inputSchema: {
+          screenshotId: z.string().regex(/^shot_[0-9a-f]{8}$/),
+          x: z.number().finite(),
+          y: z.number().finite(),
+          label: z
+            .string()
+            .trim()
+            .min(1)
+            .max(60)
+            .describe('What you are pointing at, such as "Export button"'),
+        },
       },
-      async ({ x, y }) => {
+      async ({ screenshotId, x, y, label }) => {
         if (!options.action) throw new Error("Desktop actions unavailable");
-        await options.action({ type: "point", x, y });
+        await options.action({ type: "point", screenshotId, x, y, label });
         return result("Pointer displayed after user approval");
       },
     );

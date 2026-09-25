@@ -5,17 +5,18 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Store } from "../electron/store";
 import { createToolHandler } from "../server/tools";
+import type { DesktopAction } from "../src/types";
 
 test("MCP exposes real skill tools and validates native action arguments", async () => {
   const root = await mkdtemp(join(tmpdir(), "kite-mcp-test-"));
   const store = new Store(root);
   await store.load();
-  let actions = 0;
+  const actions: DesktopAction[] = [];
   const handler = createToolHandler({
     store,
     containerId: "desktop-workflows",
-    action: async () => {
-      actions++;
+    action: async (action) => {
+      actions.push(action);
     },
   });
   const request = async (method: string, params: unknown) => {
@@ -49,13 +50,41 @@ test("MCP exposes real skill tools and validates native action arguments", async
       arguments: { bundleId: "bad shell string" },
     });
     assert.equal(invalid.result.isError, true);
-    assert.equal(actions, 0);
+    assert.equal(actions.length, 0);
     const valid = await request("tools/call", {
       name: "open_application",
       arguments: { bundleId: "com.apple.TextEdit" },
     });
     assert.ok(!valid.result.isError);
-    assert.equal(actions, 1);
+    assert.equal(actions.length, 1);
+    const unanchored = await request("tools/call", {
+      name: "point_on_screen",
+      arguments: { x: 10, y: 20, label: "Save button" },
+    });
+    assert.equal(unanchored.result.isError, true);
+    const unlabeled = await request("tools/call", {
+      name: "point_on_screen",
+      arguments: { screenshotId: "shot_1a2b3c4d", x: 10, y: 20, label: " " },
+    });
+    assert.equal(unlabeled.result.isError, true);
+    assert.equal(actions.length, 1);
+    const pointed = await request("tools/call", {
+      name: "point_on_screen",
+      arguments: {
+        screenshotId: "shot_1a2b3c4d",
+        x: 10,
+        y: 20,
+        label: "Save button",
+      },
+    });
+    assert.ok(!pointed.result.isError);
+    assert.deepEqual(actions.at(-1), {
+      type: "point",
+      screenshotId: "shot_1a2b3c4d",
+      x: 10,
+      y: 20,
+      label: "Save button",
+    });
   } finally {
     await rm(root, { recursive: true, force: true });
   }

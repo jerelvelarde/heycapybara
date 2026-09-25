@@ -53,7 +53,13 @@ export type Snapshot = {
 };
 export type DesktopAction =
   | { type: "open-app"; bundleId: string }
-  | { type: "point"; x: number; y: number };
+  | {
+      type: "point";
+      screenshotId: string;
+      x: number;
+      y: number;
+      label: string;
+    };
 export interface KiteAPI {
   state(): Promise<Snapshot>;
   setCompanion(companion: Companion): Promise<void>;
