@@ -321,3 +321,28 @@ for (const { name, chat } of [
     );
   });
 }
+
+test("a prompt can name its allow button, which still approves, and Cancel stays the default", async () => {
+  let received: ApprovalDialogOptions | undefined;
+  const deps: ApprovalDeps = {
+    activate: () => {},
+    showMessageBox: async (options) => {
+      received = options;
+      return { response: 1 };
+    },
+  };
+  assert.equal(
+    await askApproval(
+      {
+        message: "The agent wants to control your Mac for this task",
+        allow: "Allow for this task",
+      },
+      deps,
+    ),
+    true,
+  );
+  assert.deepEqual(received?.buttons, ["Cancel", "Allow for this task"]);
+  assert.equal(received?.defaultId, 0);
+  assert.equal(received?.cancelId, 0);
+  assert.equal("allow" in (received ?? {}), false);
+});
