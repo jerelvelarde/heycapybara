@@ -1,6 +1,11 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { learningStrip, openLabel } from "../src/learning-view";
+import {
+  learningStrip,
+  openLabel,
+  lessonMemory,
+  teachingAnnotation,
+} from "../src/learning-view";
 import type { LearningStatus } from "../src/types";
 
 function status(overrides: Partial<LearningStatus> = {}): LearningStatus {
@@ -101,4 +106,76 @@ test("setup and errors show their message, with a link only when there is one", 
     { kind: "open", label: "Open Intelligence" },
   );
   assert.equal(openLabel("candidates"), "Review in Intelligence");
+});
+
+const taught = [
+  {
+    role: "user",
+    content: [
+      { type: "text", text: "Open Chrome, open Gmail, and label this email" },
+      { type: "binary", mimeType: "image/png", data: "AAAA" },
+    ],
+  },
+  {
+    role: "assistant",
+    toolCalls: [
+      { function: { name: "open_application" } },
+      { function: { name: "click" } },
+    ],
+  },
+  { role: "tool", content: '{"status":"completed"}' },
+  { role: "assistant", content: "Done. It was spam, so I labeled it Spam." },
+  { role: "user", content: "Thanks" },
+];
+
+test("a lesson note names the task from the first user turn, without attachments", () => {
+  const lesson = teachingAnnotation(taught, "thread-1");
+  assert.deepEqual(lesson, {
+    threadId: "thread-1",
+    title: "Taught OpenMuse a task",
+    description: "Open Chrome, open Gmail, and label this email",
+    data: {
+      outcome: "user-confirmed-success",
+      source: "openmuse-desktop",
+      userTurns: 2,
+    },
+  });
+  assert.ok(!JSON.stringify(lesson).includes("AAAA"));
+});
+
+test("a lesson note description is capped at 500 characters", () => {
+  const lesson = teachingAnnotation(
+    [{ role: "user", content: "y".repeat(900) }],
+    "t",
+  );
+  assert.equal(lesson.description.length, 500);
+  assert.ok(lesson.description.endsWith("…"));
+});
+
+test("a lesson needs a task to learn from", () => {
+  assert.throws(
+    () => teachingAnnotation([{ role: "assistant", content: "Hi" }], "t"),
+    /Send OpenMuse a task before teaching it\./,
+  );
+  assert.throws(
+    () => lessonMemory([{ role: "assistant", content: "Hi" }]),
+    /Send OpenMuse a task before teaching it\./,
+  );
+});
+
+test("the saved lesson says how the task was done, in order, and what came of it", () => {
+  assert.equal(
+    lessonMemory(taught),
+    [
+      "How to: Open Chrome, open Gmail, and label this email",
+      "OpenMuse did this successfully and the user confirmed it worked.",
+      "OpenMuse tools used, in order: open_application → click.",
+      "What OpenMuse reported when done: Done. It was spam, so I labeled it Spam.",
+    ].join("\n"),
+  );
+  const long = lessonMemory([
+    { role: "user", content: "t" },
+    { role: "assistant", content: "r".repeat(9000) },
+  ]);
+  assert.ok(long.length <= 4000);
 });
