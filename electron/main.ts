@@ -50,6 +50,7 @@ import {
   saveBuddyPosition,
 } from "./buddy-position";
 import { runHelper } from "./helper-result";
+import { coversPoint } from "./window-occlusion";
 import type { Point } from "../src/buddy-drag";
 import {
   pointLabelSchema,
@@ -210,16 +211,16 @@ const broadcast = () =>
   BrowserWindow.getAllWindows().forEach((w) =>
     w.webContents.send("kite:update"),
   );
+// The four windows OpenMuse owns, in the order actions should consider them.
+function openMuseWindows() {
+  return [workspace, buddy, notch, companionChat].filter(
+    (win) => win && !win.isDestroyed(),
+  );
+}
 function pointApproval(action: Extract<DesktopAction, { type: "point" }>) {
   // Resolve before asking so the user isn't asked to approve a point that already can't land.
   const { shot } = resolvePoint(screenshots, screen.getAllDisplays(), action);
   return pointPrompt(action.label, shot.label);
-}
-function helperArgs(action: DesktopAction) {
-  if (action.type === "open-app") return ["--open-app", action.bundleId];
-  // Resolve again: the display can change, or the screenshot expire, while the dialog is open.
-  const { point } = resolvePoint(screenshots, screen.getAllDisplays(), action);
-  return ["--point", String(point.x), String(point.y)];
 }
 async function approvedAction(input: unknown) {
   const action = z
@@ -251,10 +252,33 @@ async function approvedAction(input: unknown) {
     cancelId: 0,
   });
   if (result.response !== 1) throw new Error("User declined action");
-  await runHelper(
-    () => exec(helper, helperArgs(action), helperTimeout),
-    action.type === "open-app" ? "Application opened" : "Point displayed",
+  if (action.type === "open-app") {
+    await runHelper(
+      () => exec(helper, ["--open-app", action.bundleId], helperTimeout),
+      "Application opened",
+    );
+    return;
+  }
+  // Resolve again: the display can change, or the screenshot expire, while the dialog is open.
+  const { point } = resolvePoint(screenshots, screen.getAllDisplays(), action);
+  // Our own windows would cover the ring and the target it points at.
+  const hidden = openMuseWindows().filter(
+    (win) => win.isVisible() && coversPoint(win.getBounds(), point),
   );
+  hidden.forEach((win) => win.hide());
+  try {
+    await runHelper(
+      () =>
+        exec(
+          helper,
+          ["--point", String(point.x), String(point.y)],
+          helperTimeout,
+        ),
+      "Point displayed",
+    );
+  } finally {
+    hidden.forEach((win) => win.showInactive());
+  }
 }
 
 async function permissions(): Promise<Permissions> {
