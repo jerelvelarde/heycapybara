@@ -163,6 +163,39 @@ test("MCP exposes real skill tools and validates native action arguments", async
       y: 20,
       label: "Save 👩‍💻 button",
     });
+    const overLongLabel = await request("tools/call", {
+      name: "point_on_screen",
+      arguments: {
+        screenshotId: "shot_1a2b3c4d",
+        x: 10,
+        y: 20,
+        label: "a".repeat(61),
+      },
+    });
+    assert.equal(overLongLabel.result.isError, true);
+    assert.equal(actions.length, 4);
+    const stringCoordinate = await request("tools/call", {
+      name: "point_on_screen",
+      arguments: {
+        screenshotId: "shot_1a2b3c4d",
+        x: "10",
+        y: 20,
+        label: "Save button",
+      },
+    });
+    assert.equal(stringCoordinate.result.isError, true);
+    assert.equal(actions.length, 4);
+    const malformedScreenshotId = await request("tools/call", {
+      name: "point_on_screen",
+      arguments: {
+        screenshotId: "shot_XYZ12345",
+        x: 10,
+        y: 20,
+        label: "Save button",
+      },
+    });
+    assert.equal(malformedScreenshotId.result.isError, true);
+    assert.equal(actions.length, 4);
     const pointOnScreenTool = list.result.tools.find(
       (tool: { name: string }) => tool.name === "point_on_screen",
     );

@@ -51,6 +51,11 @@ import {
 } from "./buddy-position";
 import { runHelper } from "./helper-result";
 import type { Point } from "../src/buddy-drag";
+import {
+  pointLabelSchema,
+  pointPrompt,
+  screenshotIdSchema,
+} from "../server/point-schema";
 import { startRuntime } from "../server/runtime";
 import {
   ScreenshotRegistry,
@@ -205,10 +210,10 @@ const broadcast = () =>
   BrowserWindow.getAllWindows().forEach((w) =>
     w.webContents.send("kite:update"),
   );
-function pointDetail(action: Extract<DesktopAction, { type: "point" }>) {
+function pointApproval(action: Extract<DesktopAction, { type: "point" }>) {
   // Resolve before asking so the user isn't asked to approve a point that already can't land.
   const { shot } = resolvePoint(screenshots, screen.getAllDisplays(), action);
-  return `Point at “${action.label}” on ${shot.label}`;
+  return pointPrompt(action.label, shot.label);
 }
 function helperArgs(action: DesktopAction) {
   if (action.type === "open-app") return ["--open-app", action.bundleId];
@@ -225,29 +230,22 @@ async function approvedAction(input: unknown) {
       }),
       z.object({
         type: z.literal("point"),
-        screenshotId: z.string().regex(/^shot_[0-9a-f]{8}$/),
+        screenshotId: screenshotIdSchema,
         x: z.number().finite(),
         y: z.number().finite(),
-        label: z
-          .string()
-          .trim()
-          .min(1)
-          .max(60)
-          .refine(
-            (label) => !/(?![\u200C\u200D])[\p{C}\p{Zl}\p{Zp}]/u.test(label),
-            "Use a short single-line label",
-          ),
+        label: pointLabelSchema,
       }),
     ])
     .parse(input);
-  const detail =
+  const prompt: { message: string; detail?: string } =
     action.type === "open-app"
-      ? `Open application ${action.bundleId}`
-      : pointDetail(action);
+      ? { message: `Open application ${action.bundleId}` }
+      : pointApproval(action);
   const result = await dialog.showMessageBox(workspace, {
     type: "question",
     title: "OpenMuse wants to take an action",
-    message: detail,
+    message: prompt.message,
+    detail: prompt.detail,
     buttons: ["Cancel", "Allow once"],
     defaultId: 0,
     cancelId: 0,

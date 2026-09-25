@@ -11,6 +11,7 @@ import { z } from "zod";
 import type { Store } from "../electron/store";
 import type { DesktopAction } from "../src/types";
 import { safeAgentError } from "./codex-agent";
+import { pointLabelSchema, screenshotIdSchema } from "./point-schema";
 
 export function createToolHandler(options: {
   store: Store;
@@ -115,19 +116,12 @@ export function createToolHandler(options: {
         description:
           "Show a pointer on something visible in a screenshot the user attached, after native approval. Pass that screenshot's id and x, y in its pixels (origin at the top-left). Does not click.",
         inputSchema: {
-          screenshotId: z.string().regex(/^shot_[0-9a-f]{8}$/),
+          screenshotId: screenshotIdSchema,
           x: z.number().finite(),
           y: z.number().finite(),
-          label: z
-            .string()
-            .trim()
-            .min(1)
-            .max(60)
-            .refine(
-              (label) => !/(?![\u200C\u200D])[\p{C}\p{Zl}\p{Zp}]/u.test(label),
-              "Use a short single-line label",
-            )
-            .describe('What you are pointing at, such as "Export button"'),
+          label: pointLabelSchema.describe(
+            'What you are pointing at, such as "Export button"',
+          ),
         },
       },
       async ({ screenshotId, x, y, label }) => {
