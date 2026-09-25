@@ -52,13 +52,23 @@ The CLI writes its own `.env` containing `CPK_INTELLIGENCE_API_KEY`. OpenMuse lo
 
 Create that stable container ID in your Intelligence project, enable skill delivery, and restart OpenMuse. The Learning screen has a **Verify connection** button that checks the published snapshot endpoint. Keep the container focused on one family of workflows. Container selection remains constant for every run; changing configuration requires a restart and new threads.
 
-The runtime routes the `default` agent to this container via `getLearningContainerId`. The authenticated local MCP bridge uses the same client and container to list and load published skills. It uses CopilotKit’s exported internal skill-registry adapter, so updates to CopilotKit require checking that interface. Configured credentials are **not** proof of a working connection. To verify:
+The runtime routes the `default` agent to this container via `getLearningContainerId`. The authenticated local MCP bridge uses the same client and container to list and load published skills. It uses CopilotKit’s exported internal skill-registry adapter, so updates to CopilotKit require checking that interface. Configured credentials are **not** proof of a working connection.
 
-1. Generate a skill from reviewed recording evidence or send a guidance message.
-2. Find the completed thread in Intelligence Rich Threads and confirm its container assignment.
-3. Run Learning manually, or wait for its configured schedule and eligibility threshold.
-4. Review insights, approve/publish a proposed skill, and ensure delivery is enabled.
-5. Start a new OpenMuse conversation. Confirm `load_learned_skill` can load the published skill.
+### How OpenMuse learns
+
+**Memory (no approval step).**
+
+1. **Teach it once.** Do the task with OpenMuse in chat. When it worked, press **Learn from this**. OpenMuse writes the lesson (the task, the OpenMuse tools it used in order, and its final report) to your Intelligence Memory. It also tells Intelligence the run worked, for Intelligence's own knowledge-base learning.
+2. **It is recalled.** Every new conversation starts with what Intelligence Memory recalls for the task, and the chat shows `Recalled from Intelligence Memory: …`. The agent can also read Intelligence's knowledge base through OpenMuse's local proxy. The project key never reaches Codex.
+3. **Intelligence learning on its own.** When Intelligence itself writes a memory from your conversations, the chat shows `Intelligence learned from your conversations: …`. When and how often this happens is up to Intelligence; CopilotKit 1.73.3 exposes no schedule or trigger for it.
+
+**Skills (approved in Intelligence).**
+
+4. **Start an analysis in Intelligence.** The chat shows how many conversations are ready and links to the page that starts one. CopilotKit 1.73.3 has no API for starting it.
+5. **Approve the skill in Intelligence.** The chat links to its review page. An unapproved skill is never delivered.
+6. **Use it.** About 10 seconds after delivery the chat shows `Learned "<name>"`, and new conversations start with the learned skills in context.
+
+Only tool names and statuses are added to the thread Intelligence stores, never tool arguments or results. OpenMuse checks Intelligence every 5 seconds for 30 minutes after it starts, after each run, after each lesson and after each step you open. Keep `CPK_INTELLIGENCE_SKILLS_REVISION` unset, or skill delivery stays pinned to one revision.
 
 [Automatic Learning](https://docs.copilotkit.ai/learning) · [Skill delivery](https://docs.copilotkit.ai/intelligence/learned-skills)
 
