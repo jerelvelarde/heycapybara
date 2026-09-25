@@ -54,7 +54,7 @@ If a capture comes back larger than its target, for example a 2x thumbnail, it i
    - the display is gone, or its bounds have changed since the capture;
    - the point is outside the image.
 
-   Each refusal names its cause. When the screenshot can no longer be used (unknown ID, too old, display gone or changed), it tells the model to ask for a new one; a point outside the image gives the image's size so the model can retry. The label is one line of 1 to 60 characters with no control or format characters, because it is shown verbatim in the approval prompt. The approval prompt now reads `Point at "<label>" on <display>` instead of raw coordinates.
+   Each refusal names its cause. When the screenshot can no longer be used (unknown ID, too old, display gone or changed), it tells the model to ask for a new one; a point outside the image gives the image's size so the model can retry. The label is one line of 1 to 60 characters with no control, private-use or unassigned characters, no format characters other than ZWNJ and ZWJ, and no line or paragraph separators, because it is shown verbatim in the approval prompt. The approval prompt now reads `Point at "<label>" on <display>` instead of raw coordinates.
 
 **Capture target.** This PR still captures only the primary display; PR 3 handles every display. It also removes the silent fallback to the first capture source: an image of the wrong display would put the pointer in the wrong place.
 
