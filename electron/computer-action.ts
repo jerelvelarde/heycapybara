@@ -18,6 +18,7 @@ import {
 } from "./approval";
 import type { ControlGrants } from "./control-grant";
 import type { PointWindow } from "./point-action";
+import { conceal, coversPoint, isMarkedTransparent } from "./window-occlusion";
 
 type Point = { x: number; y: number };
 export type ClickAction = Extract<DesktopAction, { type: "click" }>;
@@ -214,4 +215,187 @@ export async function openUrl(
   return {
     text: `OpenMuse opened ${url} in ${action.bundleId}. ${AFTER_INPUT_NOTE}`,
   };
+}
+
+// Keeps OpenMuse's own windows from taking input meant for the app under
+// them. conceal() makes an opaque window invisible and click-through. A
+// window marked transparent only turns invisible (markTransparent in
+// window-occlusion.ts explains why), so its opaque pixels would still catch
+// the click; those are hidden instead, and shown again afterwards without
+// activating OpenMuse. Hiding a window ends a sheet on it, but by now no
+// sheet is open: input waits until none is (PROMPT_OPEN_MESSAGE).
+export function clearAround(point: Point, windows: ActionWindow[]) {
+  const covering = windows.filter(
+    (win) => win.isVisible() && coversPoint(win.getBounds(), point),
+  );
+  const restoreFaded = conceal(
+    covering.filter((win) => !isMarkedTransparent(win)),
+  );
+  const hidden: ActionWindow[] = [];
+  const showHidden = () => {
+    let failed = false;
+    let firstError: unknown;
+    for (const win of hidden) {
+      try {
+        // Quitting can destroy a window while input is under way.
+        if (!win.isDestroyed()) win.showInactive();
+      } catch (error) {
+        if (!failed) {
+          failed = true;
+          firstError = error;
+        }
+      }
+    }
+    return { failed, firstError };
+  };
+  try {
+    for (const win of covering)
+      if (isMarkedTransparent(win)) {
+        win.hide();
+        hidden.push(win);
+      }
+  } catch (error) {
+    // The hide failure is what the caller needs to see, so a failure while
+    // undoing doesn't replace it.
+    showHidden();
+    try {
+      restoreFaded();
+    } catch {
+      // ignored: the hide error above takes precedence
+    }
+    throw error;
+  }
+  return () => {
+    const shown = showHidden();
+    let failed = shown.failed;
+    let firstError = shown.firstError;
+    try {
+      restoreFaded();
+    } catch (error) {
+      if (!failed) {
+        failed = true;
+        firstError = error;
+      }
+    }
+    if (failed) throw firstError;
+  };
+}
+
+// Resolves before asking, so the user is never asked to hand over control
+// for a point that already can't land, and again once control is granted:
+// while the prompt was open the display could change, or the screenshot
+// could expire or be evicted by newer captures (performPointAction does the
+// same).
+async function preparePointer(
+  action: ClickAction | ScrollAction,
+  run: AgentRun,
+  signal: AbortSignal,
+  deps: ComputerDeps,
+) {
+  const asked = deps.resolve(action);
+  await allowInput(run, signal, deps, action.label);
+  const { shot, point } = deps.resolve(action);
+  if (shot !== asked.shot) throw new Error(REPLACED_MESSAGE);
+  deps.grants.requireFresh(run, action.screenshotId);
+  startInput(run, deps);
+  return point;
+}
+
+// Clears OpenMuse's windows from the spot, sends the input and brings them
+// back. Once the input has gone, failing to bring a window back doesn't fail
+// the action: the model would send it again. undoFade keeps a failed fade's
+// record, so a later conceal() and restore() retries it.
+async function sendAt(
+  point: Point,
+  signal: AbortSignal,
+  deps: ComputerDeps,
+  input: () => Promise<void>,
+) {
+  const restore = clearAround(point, deps.windows());
+  try {
+    await send(signal, input);
+  } catch (error) {
+    try {
+      restore();
+    } catch {
+      // ignored: the input's own failure takes precedence
+    }
+    throw error;
+  }
+  try {
+    restore();
+  } catch {
+    // ignored: the input was sent; see the comment above
+  }
+}
+
+async function thenScreenshot(
+  summary: string,
+  noun: "click" | "scroll",
+  run: AgentRun,
+  signal: AbortSignal,
+  deps: ComputerDeps,
+): Promise<DesktopActionResult> {
+  // After Stop nothing reads the result, so no screenshot is taken.
+  if (signal.aborted) return { text: summary };
+  await deps.wait(SETTLE_MS);
+  if (signal.aborted) return { text: summary };
+  try {
+    const screenshot = await deps.capture();
+    deps.grants.captured(run, screenshot.id);
+    return {
+      text: `${summary} ${describeToolScreenshot(screenshot)} It was taken after the ${noun}: check it to see what happened, and use it for your next click or scroll.`,
+      screenshot,
+    };
+  } catch (error) {
+    // The input was sent, so this mustn't fail the action, or the model
+    // would send it again.
+    const reason =
+      error instanceof Error ? error.message : "Unknown capture error.";
+    return {
+      text: `${summary} OpenMuse couldn't take a screenshot afterwards: ${reason} Call take_screenshot before your next click or scroll.`,
+    };
+  }
+}
+
+const CLICK_KIND = ["", "", "double ", "triple "];
+
+export async function clickOnScreen(
+  action: ClickAction,
+  run: AgentRun,
+  signal: AbortSignal,
+  deps: ComputerDeps,
+): Promise<DesktopActionResult> {
+  const point = await preparePointer(action, run, signal, deps);
+  await sendAt(point, signal, deps, () =>
+    deps.click(point, action.button, action.clicks, signal),
+  );
+  const kind = CLICK_KIND[action.clicks] ?? "";
+  return thenScreenshot(
+    `OpenMuse sent a ${kind}${action.button} click to "${action.label}" at (${action.x}, ${action.y}) in ${action.screenshotId}.`,
+    "click",
+    run,
+    signal,
+    deps,
+  );
+}
+
+export async function scrollOnScreen(
+  action: ScrollAction,
+  run: AgentRun,
+  signal: AbortSignal,
+  deps: ComputerDeps,
+): Promise<DesktopActionResult> {
+  const point = await preparePointer(action, run, signal, deps);
+  await sendAt(point, signal, deps, () =>
+    deps.scroll(point, action.direction, action.amount, signal),
+  );
+  const notches = plural(action.amount, "notch", "notches");
+  return thenScreenshot(
+    `OpenMuse scrolled ${action.direction} ${notches} over "${action.label}" at (${action.x}, ${action.y}) in ${action.screenshotId}.`,
+    "scroll",
+    run,
+    signal,
+    deps,
+  );
 }
