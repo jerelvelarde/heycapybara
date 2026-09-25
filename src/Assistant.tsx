@@ -10,7 +10,7 @@ import {
   X,
 } from "lucide-react";
 import { validateSkillMarkdown } from "./skill-format";
-import type { Settings } from "./types";
+import type { ScreenshotAttachment, Settings } from "./types";
 export type AgentRequest = {
   id: string;
   prompt: string;
@@ -36,7 +36,7 @@ export function Assistant({
   const [input, setInput] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
-  const [image, setImage] = useState("");
+  const [image, setImage] = useState<ScreenshotAttachment | null>(null);
   const [phase, setPhase] = useState("");
   const [activities, setActivities] = useState<
     { id: string; summary: string }[]
@@ -50,7 +50,7 @@ export function Assistant({
     agent.threadId = crypto.randomUUID();
     agent.setMessages([]);
     setInput("");
-    setImage("");
+    setImage(null);
     setError("");
     setActivities([]);
     setPhase("");
@@ -122,13 +122,14 @@ export function Assistant({
             {
               type: "binary",
               mimeType: "image/png",
-              data: image.split(",")[1],
+              data: image.dataUrl.split(",")[1],
+              id: image.id,
             },
           ]
         : prompt,
     });
     setInput("");
-    setImage("");
+    setImage(null);
     let finished = false;
     let runFailed = false;
     let failureMessage = "";
@@ -319,11 +320,14 @@ export function Assistant({
       >
         {image && (
           <div className="attachment">
-            <img src={image} alt="Screen capture to send" />
+            <img
+              src={image.dataUrl}
+              alt={"Screen capture of " + image.label + " to send"}
+            />
             <button
               type="button"
               title="Remove screenshot"
-              onClick={() => setImage("")}
+              onClick={() => setImage(null)}
             >
               <X size={12} />
             </button>

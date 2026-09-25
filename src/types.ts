@@ -51,6 +51,13 @@ export type Snapshot = {
   settings: Settings;
   trayMode: CompanionTrayMode;
 };
+export type ScreenshotAttachment = {
+  id: string;
+  label: string;
+  width: number;
+  height: number;
+  dataUrl: string;
+};
 export type DesktopAction =
   | { type: "open-app"; bundleId: string }
   | {
@@ -90,7 +97,7 @@ export interface KiteAPI {
   deleteSkill(id: string): Promise<void>;
   exportSkill(id: string): Promise<boolean>;
   permissions(kind: "accessibility" | "screenCapture"): Promise<Permissions>;
-  screenshot(): Promise<string>;
+  screenshot(): Promise<ScreenshotAttachment>;
   action(action: DesktopAction): Promise<void>;
   buddyDrag(
     action: "begin" | "move" | "end",

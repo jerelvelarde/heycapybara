@@ -51,7 +51,18 @@ import {
 } from "./buddy-position";
 import type { Point } from "../src/buddy-drag";
 import { startRuntime } from "../server/runtime";
-import type { CompanionTrayMode, Permissions, Settings } from "../src/types";
+import {
+  ScreenshotRegistry,
+  captureSize,
+  fitsPromptBudget,
+  pngSize,
+} from "../server/screenshots";
+import type {
+  CompanionTrayMode,
+  Permissions,
+  ScreenshotAttachment,
+  Settings,
+} from "../src/types";
 
 // Preserve the installed app's data across the display-name rebrand.
 app.setPath("userData", join(app.getPath("appData"), "Kite"));
@@ -63,6 +74,7 @@ const helper = app.isPackaged
   ? join(process.resourcesPath, "kite-recorder")
   : join(root, "native/bin/kite-recorder");
 const exec = promisify(execFile);
+const screenshots = new ScreenshotRegistry();
 let workspace: BrowserWindow;
 let buddy: BrowserWindow;
 let notch: BrowserWindow;
@@ -722,9 +734,11 @@ app
       ]);
       return permissions();
     });
-    handle("screenshot", async () => {
+    handle("screenshot", async (): Promise<ScreenshotAttachment> => {
       if (!(await permissions()).screenCapture)
         throw new Error("Enable Screen Recording permission in Settings.");
+      const display = screen.getPrimaryDisplay();
+      const target = captureSize(display.size);
       const restoreWorkspace = workspace.isVisible();
       const restoreBuddy = buddy.isVisible();
       const restoreNotch = notch.isVisible();
@@ -737,15 +751,35 @@ app
         await new Promise((resolve) => setTimeout(resolve, 200));
         const sources = await desktopCapturer.getSources({
           types: ["screen"],
-          thumbnailSize: { width: 1440, height: 900 },
+          thumbnailSize: target,
         });
-        const primary =
-          sources.find(
-            (s) => s.display_id === String(screen.getPrimaryDisplay().id),
-          ) ?? sources[0];
-        if (!primary || primary.thumbnail.isEmpty())
+        // A capture of another display would put the pointer in the wrong place.
+        const source = sources.find(
+          (candidate) => candidate.display_id === String(display.id),
+        );
+        if (!source || source.thumbnail.isEmpty())
           throw new Error("Screen capture unavailable");
-        return primary.thumbnail.toDataURL();
+        let png = source.thumbnail.toPNG();
+        if (!fitsPromptBudget(pngSize(png)))
+          png = source.thumbnail.resize(target).toPNG();
+        const size = pngSize(png);
+        if (!fitsPromptBudget(size))
+          throw new Error(
+            "Screen capture is too large to send without resizing",
+          );
+        const shot = screenshots.add({
+          displayId: String(display.id),
+          label: display.label || "the main display",
+          bounds: display.bounds,
+          ...size,
+        });
+        return {
+          id: shot.id,
+          label: shot.label,
+          width: size.width,
+          height: size.height,
+          dataUrl: "data:image/png;base64," + png.toString("base64"),
+        };
       } finally {
         if (restoreWorkspace) workspace.show();
         if (restoreBuddy) buddy.showInactive();
