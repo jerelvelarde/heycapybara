@@ -70,3 +70,20 @@ export function ipcErrorMessage(error: unknown, fallback: string): string {
     .replace(ERROR_LABEL_PREFIX, "");
   return message || fallback;
 }
+
+// The text a chat bubble shows. An assistant message that only carries tool
+// calls (server/codex-events.ts emits one per OpenMuse tool step) has no text
+// and renders as its chips alone. A user message with a screenshot has no
+// plain string content. A user message this long is a record-to-skill prompt.
+export function displayText(message: {
+  role: string;
+  content?: unknown;
+}): string | null {
+  if (typeof message.content === "string") {
+    if (!message.content) return null;
+    return message.role === "user" && message.content.length > 2400
+      ? message.content.slice(0, 240) + "\n[Reviewed recording attached]"
+      : message.content;
+  }
+  return message.role === "user" ? "Screen context attached" : null;
+}
