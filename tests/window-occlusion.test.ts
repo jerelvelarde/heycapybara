@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import {
   coversPoint,
   conceal,
+  isMarkedTransparent,
   markTransparent,
   RING_MARGIN,
   type ConcealableWindow,
@@ -547,4 +548,17 @@ test("marking a window transparent while it is still faded does not stop restore
   restore();
   assert.equal(win.opacity(), 1);
   assert.equal(win.isIgnoringMouseEvents(), false);
+});
+
+test("isMarkedTransparent reports exactly the windows markTransparent was called on", () => {
+  const marked: ConcealableWindow = {
+    isDestroyed: () => false,
+    getOpacity: () => 1,
+    setOpacity: () => {},
+    setIgnoreMouseEvents: () => {},
+  };
+  const unmarked: ConcealableWindow = { ...marked };
+  markTransparent(marked);
+  assert.equal(isMarkedTransparent(marked), true);
+  assert.equal(isMarkedTransparent(unmarked), false);
 });
