@@ -9,6 +9,7 @@ import {
   reportedError,
   runHelper,
   helperStatus,
+  type HelperStatus,
 } from "../electron/helper-result";
 
 const exec = promisify(execFile);
@@ -44,15 +45,21 @@ test("an error event with a whitespace-only detail returns a generic message", (
   );
 });
 
-// A hand-built stand-in for the exec rejections not exercised as a real
-// process below: same shape (an Error with `stdout`, `code`, `signal` and
-// `killed`), used for stdout content -- a status line, an error event,
-// interleaved garbage -- that a real process is awkward to script
-// reliably. `runHelper` never reads `message`, so every row here shares
-// this one placeholder.
+// A hand-built stand-in for exec rejections below whose shape no real
+// process can be made to produce: either the stdout content -- a status
+// line, an error event, interleaved garbage -- is awkward or impossible
+// to script reliably, or the combination of fields (e.g. no `code`,
+// `signal` or `killed` at all) is one a real Node failure never actually
+// has. `runHelper` never reads `message`, so every row here shares this
+// one placeholder -- and it's deliberately path- and command-shaped
+// ("Command failed: /x/kite-recorder --point 1 2") so the `doesNotMatch`
+// leak checks below have real text to catch if `runHelper` ever started
+// reading it.
 function execFailure(overrides: {
   stdout?: string;
   code?: string | number | null;
+  errno?: number;
+  syscall?: string;
   signal?: string | null;
   killed?: boolean;
 }) {
@@ -62,12 +69,17 @@ function execFailure(overrides: {
   );
 }
 
-type HelperStatusValue = (typeof helperStatus)[keyof typeof helperStatus];
+// Both errnos `failureCause` maps to this message (ENOEXEC, exercised for
+// real below, and EBADARCH, which is hand built since no file this test
+// can portably create actually triggers it) resolve to the identical
+// text, so pinning it once here keeps both rows in sync.
+const unrunnableHelperMessage =
+  "The desktop helper isn't a valid program for this Mac. Rebuild it with npm run build:native, or reinstall OpenMuse Desktop.";
 
 type FailureCase = {
   name: string;
   run: () => Promise<{ stdout: string }>;
-  expectedStatus?: HelperStatusValue;
+  expectedStatus?: HelperStatus;
   message: RegExp | string;
 };
 
@@ -85,18 +97,45 @@ test("runHelper reports the right message for every failure shape", async () => 
     );
     await chmod(wrongFormatPath, 0o755);
 
+    // The whole design in `isHelperFailure`/`failureCause` (see
+    // electron/helper-result.ts) rests on this shape actually being what
+    // Node throws for an unrecognizable executable format: a synchronous
+    // throw (not a promise rejection), with `syscall` exactly "spawn" and
+    // no `stdout` property at all. Capture it directly, bypassing
+    // `runHelper`, so a change in Node's behavior fails loudly here
+    // rather than silently degrading the message the row below asserts.
+    let rawWrongFormatError: unknown;
+    try {
+      await exec(wrongFormatPath, []);
+      assert.fail("expected exec(wrongFormatPath, []) to throw");
+    } catch (error) {
+      rawWrongFormatError = error;
+    }
+    assert.ok(rawWrongFormatError instanceof Error);
+    assert.equal(
+      (rawWrongFormatError as { syscall?: unknown }).syscall,
+      "spawn",
+    );
+    assert.equal(Object.hasOwn(rawWrongFormatError as object, "stdout"), false);
+
     // One row per shape `runHelper` must turn into a message. The first
     // five run a real child process end to end, through the same
     // `promisify(execFile)` main.ts uses, so they exercise Node's actual
     // failure shapes instead of a stand-in: a missing path and a
     // non-executable file both reject asynchronously (ENOENT/EACCES,
     // `stdout` present); a file with no recognizable executable format
-    // rejects the way the rarer synchronous spawn errors
-    // (EPERM/ENOEXEC/EBADARCH) do, with no `stdout` at all -- whatever
-    // code this machine's Node actually reports for that is asserted
-    // below, not assumed; and a timeout and a maxBuffer overflow are both
-    // real too. The rest are hand built (see `execFailure` above) for
-    // stdout shapes a real process can't conveniently be made to produce.
+    // throws synchronously, the way the rarer spawn errors
+    // (EPERM/ENOEXEC/EBADARCH) do -- confirmed just above to be a throw,
+    // not a rejection, with no `stdout` at all; `runHelper` only sees it
+    // as a rejection because `run()` executes inside its own `try`. Which
+    // exact errno this machine's Node reports for it isn't assumed -- it
+    // varies -- but ENOEXEC and EBADARCH both map to the same friendly
+    // message asserted below. A timeout and a maxBuffer overflow are both
+    // real too. The rest are hand built: some are rejections built with
+    // `execFailure` above, for stdout content a real process can't
+    // conveniently be made to produce; others are `Promise.resolve` rows,
+    // standing in for a clean exit whose stdout content is itself the
+    // failure.
     const helperFailures: FailureCase[] = [
       {
         name: "a missing helper path (real, asynchronous ENOENT)",
@@ -111,7 +150,19 @@ test("runHelper reports the right message for every failure shape", async () => 
       {
         name: "a helper file with no recognizable executable format (real, synchronous spawn failure, no stdout)",
         run: () => exec(wrongFormatPath, []),
-        message: /^The desktop helper could not run \(.+\)$/,
+        message: unrunnableHelperMessage,
+      },
+      {
+        name: "a hand-built EBADARCH errno (-86) -- real hardware can't portably be made to produce this, but macOS reports it the same way as ENOEXEC",
+        run: () =>
+          Promise.reject(
+            execFailure({
+              code: "Unknown system error -86",
+              errno: -86,
+              syscall: "spawn",
+            }),
+          ),
+        message: unrunnableHelperMessage,
       },
       {
         name: "a real process killed by a timeout",
@@ -120,8 +171,14 @@ test("runHelper reports the right message for every failure shape", async () => 
       },
       {
         name: "a real process that overflows maxBuffer",
+        // `head` and `/dev/zero` are plain external commands, not shell
+        // syntax, so this overflows the same way whether `/bin/sh` is
+        // bash running in POSIX mode or dash. A brace expansion like
+        // `printf 'x%.0s' {1..5000}` depends on the shell: dash doesn't
+        // expand `{1..5000}`, so it prints one literal byte and this row
+        // fails with "expected a rejection" instead of overflowing.
         run: () =>
-          exec("/bin/sh", ["-c", "printf 'x%.0s' {1..5000}"], {
+          exec("/bin/sh", ["-c", "head -c 5000 /dev/zero"], {
             maxBuffer: 10,
           }),
         message: "The desktop helper produced more output than expected",
@@ -160,6 +217,24 @@ test("runHelper reports the right message for every failure shape", async () => 
         run: () =>
           Promise.reject(execFailure({ code: null, signal: "SIGKILL" })),
         message: "The desktop helper was stopped by SIGKILL",
+      },
+      {
+        name: "SIGTERM",
+        run: () =>
+          Promise.reject(execFailure({ code: null, signal: "SIGTERM" })),
+        message: "The desktop helper was stopped by SIGTERM",
+      },
+      {
+        name: "a crash signal (SIGTRAP), e.g. a Swift trap",
+        run: () =>
+          Promise.reject(execFailure({ code: null, signal: "SIGTRAP" })),
+        message: "The desktop helper crashed (SIGTRAP)",
+      },
+      {
+        name: "a crash signal (SIGSEGV)",
+        run: () =>
+          Promise.reject(execFailure({ code: null, signal: "SIGSEGV" })),
+        message: "The desktop helper crashed (SIGSEGV)",
       },
       {
         name: "a signal kill with a status line truncated mid-write",
@@ -277,9 +352,16 @@ test("runHelper resolves to stdout when the expected status is confirmed", async
 });
 
 test("runHelper reports an unrecognized string error code", async () => {
-  const err = Object.assign(new Error("spawn /x/kite-recorder EPERM"), {
-    stdout: "",
+  // EPERM is one of the rarer errors that can only be thrown
+  // synchronously (see the comment above `isHelperFailure` in
+  // electron/helper-result.ts), so, unlike the ENOENT/EACCES rows in the
+  // test above, a real EPERM failure carries no `stdout` at all and a
+  // bare `spawn EPERM` message with no path -- not the `spawn <path>
+  // <code>` shape an asynchronous failure has.
+  const err = Object.assign(new Error("spawn EPERM"), {
     code: "EPERM",
+    errno: -1,
+    syscall: "spawn",
   });
   let caught: unknown;
   try {
@@ -303,10 +385,15 @@ test("native/Recorder.swift reports each helperStatus value as a status event, a
       swiftSource.includes(`event("status", detail: "${detail}"`),
       `Recorder.swift does not emit a status event for "${detail}"`,
     );
-    assert.ok(
-      !mainSource.includes(`"${detail}"`),
-      `electron/main.ts still contains the literal string "${detail}"`,
-    );
+    // Check every way the literal could be spelled -- a single-quoted or
+    // template-literal string would desync main.ts from the shared
+    // constant just as quietly as the double-quoted form.
+    for (const quote of ['"', "'", "`"] as const) {
+      assert.ok(
+        !mainSource.includes(`${quote}${detail}${quote}`),
+        `electron/main.ts still contains the literal string ${quote}${detail}${quote}`,
+      );
+    }
   }
 });
 
@@ -320,8 +407,13 @@ test("native/Recorder.swift reports each helperStatus value as a status event, a
 // long-lived and streamed, not a one-shot command to wrap. `execFile`
 // must never be called directly either, only through the promisified
 // `exec` alias -- `promisify(execFile)` itself doesn't match that last
-// pattern, since "execFile" there is followed by `)`, not `(`.
-test("every exec(helper call in electron/main.ts is wrapped in runHelper(, and execFile is never called directly", async () => {
+// pattern, since "execFile" there is followed by `)`, not `(`. Neither
+// `exec(` pattern matches `execFileSync(`, `execSync(` or `spawnSync(`
+// (none of them contain the literal substring "exec("), so a synchronous
+// helper call would slip past both counts; it gets its own separate,
+// simpler check instead, since the helper must never be run synchronously
+// at all, wrapped or not.
+test("every exec(helper call in electron/main.ts is wrapped in runHelper(, execFile is never called directly, and the helper is never spawned synchronously", async () => {
   const source = await readFile(
     new URL("../electron/main.ts", import.meta.url),
     "utf8",
@@ -341,5 +433,10 @@ test("every exec(helper call in electron/main.ts is wrapped in runHelper(, and e
     count(/\bexecFile\s*\(/g),
     0,
     "execFile must never be called directly; use the promisified exec alias",
+  );
+  assert.equal(
+    count(/\b(?:execFileSync|execSync|spawnSync)\(\s*helper\b/g),
+    0,
+    "the helper must never be run synchronously (execFileSync/execSync/spawnSync)",
   );
 });
