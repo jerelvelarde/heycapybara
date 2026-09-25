@@ -6,6 +6,8 @@ The default capybara companion uses OpenMuse’s original warm tan artwork, incl
 
 A macOS desktop companion powered by the official Codex SDK, with AG-UI and a record-to-skill workflow. Electron hosts the floating sprite, compact chat, first-run setup window, and workspace; a Swift helper observes activity across native applications during explicitly started recordings.
 
+<img width="1655" height="924" alt="image" src="https://github.com/user-attachments/assets/e01617f4-96bc-47ab-a6ba-419cb8ec2417" />
+
 ## Run
 
 Requires macOS (Apple Silicon), Node 22+, and Xcode Command Line Tools (`xcode-select --install`).
