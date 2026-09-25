@@ -934,3 +934,12 @@ Add a `## Pointer screenshot contract — 2026-09-24` section to `docs/verificat
 git add docs/verification.md
 git commit -m "docs: record pointer contract verification"
 ```
+
+## Changes after review
+
+Review found five things the code blocks above did not cover. Each was fixed in its own commit:
+
+- `0aae2a0` — `screenPoint` maps `Math.floor(point.x) + 0.5` (and the same for y), so a fractional point in the last half-pixel stays inside the display. `captureSize` also rejects non-finite sizes instead of looping forever.
+- `7dc5b1c`, `0525dc8` — `approvedAction` calls `runHelper(() => exec(helper, args))` from `electron/helper-result.ts`. It reports the helper's own JSON error, or a cause built from the exit code or signal, and never Node's `Command failed: <path>` message.
+- `f494a92` — both `label` schemas also require `.regex(/^[^\p{C}]+$/u, "Use a short single-line label")`, so control and format characters cannot reshape the approval prompt.
+- `8b4fdbf` — the screenshot handler resizes whenever the measured PNG `exceeds` the target, for example a 2x thumbnail, not only when it is over the Codex budget.

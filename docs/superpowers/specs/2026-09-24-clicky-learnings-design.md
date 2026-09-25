@@ -40,12 +40,12 @@ Deferred: the capybara flying to its target (a click-through overlay at screen-s
 - Longest side at most 1920 px.
 - Tile count within 2,500.
 
-A 1512×982 display is captured at 1512×982, and a 2560×1440 display at 1920×1080.
+If a capture comes back larger than its target, for example a 2x thumbnail, it is resized to the target. A 1512×982 display is captured at 1512×982, and a 2560×1440 display at 1920×1080.
 
 **Contract.**
 
 1. The main process captures a display and measures the PNG it produced by reading the header, instead of trusting the requested size.
-2. It registers `{id, displayId, label, bounds, width, height, capturedAt}` in an in-memory registry that keeps the 16 most recent captures. IDs look like `shot_1a2b3c4d`, so an ID from an earlier session can never match a new capture.
+2. It registers `{id, displayId, label, bounds, width, height, capturedAt}` in an in-memory registry that keeps the 16 most recent captures. IDs look like `shot_1a2b3c4d`, so an ID from an earlier session is vanishingly unlikely to match a new capture.
 3. The screenshot IPC call returns `{id, label, width, height, dataUrl}`. The renderer puts the ID on the image part (AG-UI binary content allows `id`).
 4. The Codex adapter adds a note for each image and names the image by position, for example `Image 1 in this message is screenshot shot_1a2b3c4d of Built-in Retina Display, 1512×982 pixels`. Position is used because the Codex SDK joins every text part into one prompt and passes images separately, in order. The wording is written on the server, so neither the renderer nor the stored thread message carries prompt text. Images without a known ID get a note saying they can't be pointed into.
 5. `point_on_screen` takes `{screenshotId, x, y, label}`, with x and y in the image's pixels. The main process converts the center of that pixel to global screen points. It refuses when:
@@ -54,7 +54,7 @@ A 1512×982 display is captured at 1512×982, and a 2560×1440 display at 1920×
    - the display is gone, or its bounds have changed since the capture;
    - the point is outside the image.
 
-   Each refusal tells the model to ask for a new screenshot. The approval prompt now reads `Point at "<label>" on <display>` instead of raw coordinates.
+   Each refusal names its cause. When the screenshot can no longer be used (unknown ID, too old, display gone or changed), it tells the model to ask for a new one; a point outside the image gives the image's size so the model can retry. The label is one line of 1 to 60 characters with no control or format characters, because it is shown verbatim in the approval prompt. The approval prompt now reads `Point at "<label>" on <display>` instead of raw coordinates.
 
 **Capture target.** This PR still captures only the primary display; PR 3 handles every display. It also removes the silent fallback to the first capture source: an image of the wrong display would put the pointer in the wrong place.
 
