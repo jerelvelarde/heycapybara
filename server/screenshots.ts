@@ -31,7 +31,12 @@ export function fitsPromptBudget({ width, height }: Size) {
 }
 
 export function captureSize(display: Size): Size {
-  if (!(display.width > 0 && display.height > 0))
+  if (!(
+    Number.isFinite(display.width) &&
+    Number.isFinite(display.height) &&
+    display.width > 0 &&
+    display.height > 0
+  ))
     throw new Error("Invalid display size");
   let scale = Math.min(
     1,
@@ -122,8 +127,8 @@ export function screenPoint(
     );
   // Target the centre of the pixel so edge pixels stay inside the display.
   return {
-    x: bounds.x + ((point.x + 0.5) * bounds.width) / shot.width,
-    y: bounds.y + ((point.y + 0.5) * bounds.height) / shot.height,
+    x: bounds.x + ((Math.floor(point.x) + 0.5) * bounds.width) / shot.width,
+    y: bounds.y + ((Math.floor(point.y) + 0.5) * bounds.height) / shot.height,
   };
 }
 

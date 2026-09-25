@@ -68,6 +68,10 @@ test("captures keep the display's shape and pass through Codex unchanged", () =>
     );
   }
   assert.throws(() => captureSize({ width: 0, height: 900 }), /display size/);
+  assert.throws(
+    () => captureSize({ width: Number.POSITIVE_INFINITY, height: 900 }),
+    /display size/,
+  );
 });
 
 test("PNG size comes from the image header", () => {
@@ -123,6 +127,13 @@ test("image pixels map to the centre of the matching screen point", () => {
     screenPoint(secondary, { x: 100, y: 100 }, secondary.bounds, 1_000_000),
     { x: -1819.5, y: -99.5 },
   );
+  const edge = screenPoint(shot, { x: 1385.9, y: 899.9 }, display, 1_000_000);
+  assert.deepEqual(
+    edge,
+    screenPoint(shot, { x: 1385, y: 899 }, display, 1_000_000),
+  );
+  assert.ok(edge.x < 1512);
+  assert.ok(edge.y < 982);
 });
 
 test("pointing refuses stale, moved, missing or out-of-range screenshots", () => {
