@@ -6,12 +6,16 @@ import {
   describeScreenshot,
   exceeds,
   fitsPromptBudget,
+  fitThumbnail,
   isFresh,
   pngSize,
   resolvePoint,
+  sameBounds,
   screenPoint,
   unreferencedImageNote,
   type Screenshot,
+  type Size,
+  type Thumbnail,
 } from "../server/screenshots";
 import { pngHeader } from "./png-fixture";
 
@@ -25,6 +29,23 @@ const shot: Screenshot = {
   height: 900,
   capturedAt: 1_000_000,
 };
+
+// A fake Electron NativeImage thumbnail. `resizeResult` lets a test force
+// what the resized image reports back, independent of the size requested.
+function fakeThumbnail(initial: Size, resizeResult?: Size) {
+  const resizeCalls: Size[] = [];
+  const thumbnail: Thumbnail = {
+    toPNG: () => Buffer.from(pngHeader(initial.width, initial.height)),
+    resize: (size: Size) => {
+      resizeCalls.push(size);
+      const result = resizeResult ?? size;
+      return {
+        toPNG: () => Buffer.from(pngHeader(result.width, result.height)),
+      };
+    },
+  };
+  return { thumbnail, resizeCalls };
+}
 
 test("the prompt budget matches Codex's high-detail limits", () => {
   assert.equal(fitsPromptBudget({ width: 1920, height: 1200 }), true);
@@ -66,6 +87,10 @@ test("captures keep the display's shape and pass through Codex unchanged", () =>
     () => captureSize({ width: Number.POSITIVE_INFINITY, height: 900 }),
     /display size/,
   );
+});
+
+test("captureSize's error names the invalid size", () => {
+  assert.throws(() => captureSize({ width: 0, height: 900 }), /0×900/);
 });
 
 test("a capture larger than its target is detected in either dimension", () => {
@@ -110,6 +135,38 @@ test("PNG size comes from the image header", () => {
   badChunkType.set([0x49, 0x48, 0x44, 0x58], 12); // "IHDX"
   assert.throws(() => pngSize(badChunkType), /not a PNG/);
   assert.throws(() => pngSize(pngHeader(10, 10).subarray(0, 23)), /not a PNG/);
+});
+
+test("fitThumbnail leaves an already-fitting thumbnail alone", () => {
+  const { thumbnail, resizeCalls } = fakeThumbnail({
+    width: 1512,
+    height: 982,
+  });
+  const result = fitThumbnail(thumbnail, { width: 1512, height: 982 });
+  assert.equal(resizeCalls.length, 0);
+  assert.deepEqual(result.size, { width: 1512, height: 982 });
+});
+
+test("fitThumbnail resizes a 2x thumbnail down to the target exactly once", () => {
+  const { thumbnail, resizeCalls } = fakeThumbnail({
+    width: 3024,
+    height: 1964,
+  });
+  const result = fitThumbnail(thumbnail, { width: 1512, height: 982 });
+  assert.equal(resizeCalls.length, 1);
+  assert.deepEqual(resizeCalls[0], { width: 1512, height: 982 });
+  assert.deepEqual(result.size, { width: 1512, height: 982 });
+});
+
+test("fitThumbnail throws when the resized image is still too large for the model", () => {
+  const { thumbnail } = fakeThumbnail(
+    { width: 3024, height: 1964 },
+    { width: 4000, height: 4000 },
+  );
+  assert.throws(
+    () => fitThumbnail(thumbnail, { width: 1512, height: 982 }),
+    /too large for the model/,
+  );
 });
 
 test("the registry issues random ids and keeps only recent captures", () => {
@@ -157,6 +214,15 @@ test("the registry keeps the documented default of 16 captures", () => {
 test("the registry requires a positive integer limit", () => {
   assert.throws(() => new ScreenshotRegistry(0), /at least one capture/);
   assert.throws(() => new ScreenshotRegistry(1.5), /at least one capture/);
+});
+
+test("sameBounds compares all four fields", () => {
+  const bounds = { x: 0, y: 0, width: 1512, height: 982 };
+  assert.equal(sameBounds(bounds, { ...bounds }), true);
+  assert.equal(sameBounds(bounds, { ...bounds, x: 100 }), false);
+  assert.equal(sameBounds(bounds, { ...bounds, y: -50 }), false);
+  assert.equal(sameBounds(bounds, { ...bounds, width: 1800 }), false);
+  assert.equal(sameBounds(bounds, { ...bounds, height: 1000 }), false);
 });
 
 test("image pixels map to the centre of the matching screen point", () => {

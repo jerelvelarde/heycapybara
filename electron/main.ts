@@ -61,10 +61,9 @@ import { startRuntime } from "../server/runtime";
 import {
   ScreenshotRegistry,
   captureSize,
-  exceeds,
-  fitsPromptBudget,
-  pngSize,
+  fitThumbnail,
   resolvePoint,
+  sameBounds,
 } from "../server/screenshots";
 import type {
   CompanionTrayMode,
@@ -807,20 +806,25 @@ app
         const source = sources.find(
           (candidate) => candidate.display_id === String(display.id),
         );
-        if (!source || source.thumbnail.isEmpty())
-          throw new Error("Screen capture unavailable");
-        let png = source.thumbnail.toPNG();
-        // A 2x thumbnail would send more pixels than the display has points.
-        if (exceeds(pngSize(png), target))
-          png = source.thumbnail.resize(target).toPNG();
-        const size = pngSize(png);
-        if (!fitsPromptBudget(size))
+        if (!source)
           throw new Error(
-            "Screen capture is still too large for the model after resizing",
+            `Couldn't find a screen source for ${display.label || "Main display"}. Try again, or reconnect the display.`,
           );
+        if (source.thumbnail.isEmpty())
+          throw new Error(
+            "Screen capture came back empty. If you just granted Screen Recording, quit and reopen OpenMuse Desktop.",
+          );
+        const { png, size } = fitThumbnail(source.thumbnail, target);
+        // The display can change while we waited and captured; catch it here
+        // rather than register bounds that no longer match the image.
+        const current = screen
+          .getAllDisplays()
+          .find((candidate) => candidate.id === display.id);
+        if (!current || !sameBounds(current.bounds, display.bounds))
+          throw new Error("The display changed during the capture. Try again.");
         const shot = screenshots.add({
           displayId: String(display.id),
-          label: display.label || "the main display",
+          label: display.label || "Main display",
           bounds: display.bounds,
           ...size,
         });

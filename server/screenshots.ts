@@ -37,7 +37,7 @@ export function captureSize(display: Size): Size {
     display.width > 0 &&
     display.height > 0
   ))
-    throw new Error("Invalid display size");
+    throw new Error(`Invalid display size ${display.width}×${display.height}`);
   let scale = Math.min(
     1,
     CAPTURE_MAX_DIMENSION / Math.max(display.width, display.height),
@@ -74,6 +74,25 @@ export function pngSize(png: Uint8Array): Size {
   return { width, height };
 }
 
+export type Thumbnail = {
+  toPNG(): Buffer;
+  resize(size: Size): { toPNG(): Buffer };
+};
+
+// Electron can return a thumbnail larger than requested, for example at 2x.
+// Resizing to the target keeps one image pixel per display point (or within
+// the 1920 px cap) and keeps the image inside Codex's budget.
+export function fitThumbnail(thumbnail: Thumbnail, target: Size) {
+  let png = thumbnail.toPNG();
+  if (exceeds(pngSize(png), target)) png = thumbnail.resize(target).toPNG();
+  const size = pngSize(png);
+  if (!fitsPromptBudget(size))
+    throw new Error(
+      `Screen capture is still ${size.width}×${size.height} after resizing, which is too large for the model`,
+    );
+  return { png, size };
+}
+
 export class ScreenshotRegistry {
   private entries = new Map<string, Screenshot>();
   constructor(
@@ -107,6 +126,12 @@ export class ScreenshotRegistry {
 
 export type ScreenshotLookup = Pick<ScreenshotRegistry, "get">;
 
+export function sameBounds(a: Rect, b: Rect) {
+  return (
+    a.x === b.x && a.y === b.y && a.width === b.width && a.height === b.height
+  );
+}
+
 export function screenPoint(
   shot: Screenshot,
   point: { x: number; y: number },
@@ -122,12 +147,7 @@ export function screenPoint(
       `${shot.label} is no longer connected. Ask the user to attach a new screenshot.`,
     );
   const { bounds } = shot;
-  if (
-    current.x !== bounds.x ||
-    current.y !== bounds.y ||
-    current.width !== bounds.width ||
-    current.height !== bounds.height
-  )
+  if (!sameBounds(current, bounds))
     throw new Error(
       `${shot.label} changed position or resolution since the screenshot. Ask the user to attach a new one.`,
     );
