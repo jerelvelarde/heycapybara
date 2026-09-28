@@ -49,6 +49,7 @@ import {
   saveBuddyPosition,
 } from "./buddy-position";
 import { runHelper, helperStatus, withInput } from "./helper-result";
+import { nameAccessibilityApp } from "./accessibility-error";
 import { performPointAction } from "./point-action";
 import {
   askApproval,
@@ -337,6 +338,18 @@ function captureNow(): Promise<ScreenshotAttachment> {
   });
 }
 
+// Wraps runHelper for the commands that need Accessibility (--click,
+// --scroll, --type, --keys). The helper's refusal names OpenMuse Desktop;
+// the development build names Electron instead, the app macOS holds the
+// permission for there (electron/accessibility-error.ts).
+async function namingAccessibilityApp(pending: Promise<string>) {
+  try {
+    return await pending;
+  } catch (error) {
+    throw nameAccessibilityApp(error, app.isPackaged);
+  }
+}
+
 // What the computer-use actions (electron/computer-action.ts) run on.
 // openMuseWindows() includes the setup window while it exists, so a click
 // or scroll under it clears it too instead of landing on OpenMuse.
@@ -350,50 +363,67 @@ const computer: ComputerDeps = {
   capture: async () => toActionScreenshot(await captureNow()),
   wait: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
   click: async (point, button, clicks, signal) => {
-    await runHelper(
-      () =>
-        exec(
-          helper,
-          ["--click", String(point.x), String(point.y), button, String(clicks)],
-          { ...helperTimeout, signal },
-        ),
-      helperStatus.clickSent,
+    await namingAccessibilityApp(
+      runHelper(
+        () =>
+          exec(
+            helper,
+            [
+              "--click",
+              String(point.x),
+              String(point.y),
+              button,
+              String(clicks),
+            ],
+            { ...helperTimeout, signal },
+          ),
+        helperStatus.clickSent,
+      ),
     );
   },
   scroll: async (point, direction, amount, signal) => {
-    await runHelper(
-      () =>
-        exec(
-          helper,
-          [
-            "--scroll",
-            String(point.x),
-            String(point.y),
-            direction,
-            String(amount),
-          ],
-          { ...helperTimeout, signal },
-        ),
-      helperStatus.scrollSent,
+    await namingAccessibilityApp(
+      runHelper(
+        () =>
+          exec(
+            helper,
+            [
+              "--scroll",
+              String(point.x),
+              String(point.y),
+              direction,
+              String(amount),
+            ],
+            { ...helperTimeout, signal },
+          ),
+        helperStatus.scrollSent,
+      ),
     );
   },
   // The text goes on stdin: any process on the Mac can read another's
   // arguments.
   type: async (text, signal) => {
-    await runHelper(
-      () =>
-        withInput(exec(helper, ["--type"], { ...typingTimeout, signal }), text),
-      helperStatus.textTyped,
+    await namingAccessibilityApp(
+      runHelper(
+        () =>
+          withInput(
+            exec(helper, ["--type"], { ...typingTimeout, signal }),
+            text,
+          ),
+        helperStatus.textTyped,
+      ),
     );
   },
   keys: async (key, modifiers, signal) => {
-    await runHelper(
-      () =>
-        exec(helper, ["--keys", key, ...modifiers], {
-          ...helperTimeout,
-          signal,
-        }),
-      helperStatus.keysPressed,
+    await namingAccessibilityApp(
+      runHelper(
+        () =>
+          exec(helper, ["--keys", key, ...modifiers], {
+            ...helperTimeout,
+            signal,
+          }),
+        helperStatus.keysPressed,
+      ),
     );
   },
   openUrl: async (url, bundleId, signal) => {
