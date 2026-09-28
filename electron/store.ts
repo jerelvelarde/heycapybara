@@ -30,6 +30,10 @@ export class Store {
   recordings: Recording[] = [];
   skills: Skill[] = [];
   active: Recording | null = null;
+  // Generated once per install and persisted below, so every run, memory and
+  // knowledge-base call in this install shares one Intelligence user id
+  // without colliding with anyone else's (server/runtime.ts).
+  installUserId!: string;
   private writes = Promise.resolve();
   constructor(public readonly root: string) {}
   private async write(folder: string, id: string, value: unknown) {
@@ -65,6 +69,31 @@ export class Store {
     for (const r of this.recordings.filter((r) => !r.stoppedAt)) {
       r.stoppedAt = r.events.at(-1)?.timestamp ?? r.startedAt;
       await this.write("recordings", r.id, r);
+    }
+    this.installUserId = await this.loadInstallUserId();
+  }
+  // Mirrors runtime.ts's own workspace.json: a single file directly under
+  // root, created on first use and read back verbatim after. Not one of the
+  // recordings/skills id-keyed collections above, so it bypasses `write()`.
+  private async loadInstallUserId(): Promise<string> {
+    const file = join(this.root, "install.json");
+    try {
+      const saved = JSON.parse(await readFile(file, "utf8"));
+      if (typeof saved.userId !== "string" || !saved.userId)
+        throw new Error("Invalid install file");
+      return saved.userId;
+    } catch (error) {
+      if (!(
+        error instanceof Error &&
+        "code" in error &&
+        error.code === "ENOENT"
+      ))
+        throw error;
+      const userId = `openmuse-${randomUUID()}`;
+      const temp = file + ".tmp";
+      await writeFile(temp, JSON.stringify({ userId }), { mode: 0o600 });
+      await rename(temp, file);
+      return userId;
     }
   }
   async flush() {

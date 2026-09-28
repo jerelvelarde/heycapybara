@@ -8,16 +8,23 @@ import {
   X,
 } from "lucide-react";
 import { Assistant } from "./Assistant";
-import type { CompanionTrayMode, Recording, Settings } from "./types";
+import type {
+  CompanionTrayMode,
+  LearningStatus,
+  Recording,
+  Settings,
+} from "./types";
 
 export function CompanionChat({
   settings,
   mode,
   active,
+  learning,
 }: {
   settings: Settings;
   mode: CompanionTrayMode;
   active: Recording | null;
+  learning: LearningStatus;
 }) {
   const [error, setError] = useState("");
   const [title, setTitle] = useState("");
@@ -94,6 +101,7 @@ export function CompanionChat({
           onDone={() => {}}
           onBusy={setChatBusy}
           newConversationSignal={newConversationSignal}
+          learning={learning}
         />
       </div>
       {mode === "record" && (
