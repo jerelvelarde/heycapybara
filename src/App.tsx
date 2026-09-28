@@ -933,7 +933,7 @@ function Workspace({
                   className="button secondary"
                   disabled={working || data.learning.phase === "off"}
                   onClick={() =>
-                    void perform(() => window.kite!.watchLearning())
+                    void perform(() => window.kite!.checkLearning())
                   }
                 >
                   Check learning now

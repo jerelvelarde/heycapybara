@@ -20,6 +20,7 @@ function status(overrides: Partial<LearningStatus> = {}): LearningStatus {
     memories: 0,
     newMemories: [],
     memoryError: null,
+    memoryUnavailable: false,
     insight: null,
     checkedAt: null,
     ...overrides,

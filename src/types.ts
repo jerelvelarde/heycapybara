@@ -67,6 +67,9 @@ export type LearningStatus = {
   // was last told (lessons OpenMuse saved are not counted).
   newMemories: string[];
   memoryError: string | null;
+  // Intelligence refused Memory for this organization or license, so no
+  // lesson can be saved or recalled this session.
+  memoryUnavailable: boolean;
   // The newest Insight's statement, when Intelligence has one.
   insight: string | null;
   checkedAt: string | null;
@@ -181,6 +184,8 @@ export interface KiteAPI {
   openIntelligence(): Promise<void>;
   /** Check Intelligence now and keep checking for a while. */
   watchLearning(): Promise<void>;
+  /** "Check learning now": like watchLearning, and asks a refused Memory again. */
+  checkLearning(): Promise<void>;
   /** Stop announcing what is newly learned. */
   dismissLearned(): Promise<void>;
   /** Open the Intelligence page for the current skills-path step. */

@@ -3,10 +3,13 @@ import assert from "node:assert/strict";
 import {
   LESSON_GRANT,
   MEMORY_TIMEOUTS,
+  MEMORY_UNAVAILABLE,
+  MemoryUnavailableError,
   NOTES_BEGIN,
   NOTES_END,
   READ_GRANT,
   createMemoryAccess,
+  isMemoryRefusal,
   memoryNotes,
   memoryPreview,
   type MemoryClient,
@@ -210,4 +213,234 @@ test("a memory preview is its first line, at most 120 characters", () => {
   const long = memoryPreview("y".repeat(200));
   assert.equal(long.length, 120);
   assert.ok(long.endsWith("…"));
+});
+
+// CopilotKitIntelligence's PlatformRequestError is not exported from
+// @copilotkit/runtime/v2, so this rebuilds it as 1.73.3 constructs it
+// (intelligence-platform/client.mjs): #request reads the body as text and
+// throws `new PlatformRequestError("Intelligence platform error <status>:
+// <text or statusText>", status)`, leaving `retryable` undefined.
+class PlatformRequestError extends Error {
+  constructor(
+    message: string,
+    readonly status: number,
+    readonly retryable?: boolean,
+  ) {
+    super(message);
+    this.name = "PlatformRequestError";
+  }
+}
+function platformError(status: number, body: string) {
+  return new PlatformRequestError(
+    `Intelligence platform error ${status}: ${body}`,
+    status,
+  );
+}
+const NOT_ENTITLED = JSON.stringify({
+  error: {
+    code: "MEMORY_NOT_ENTITLED",
+    message: "Memory is not enabled for this organization or license.",
+    category: "permission",
+    retryable: false,
+  },
+  requestId: "req-123",
+  traceId: "trace-456",
+});
+
+test("the Memory entitlement refusal the client throws is recognized", () => {
+  assert.equal(isMemoryRefusal(platformError(403, NOT_ENTITLED)), true);
+  // Any permanent permission refusal, whatever its code or status.
+  assert.equal(
+    isMemoryRefusal(
+      platformError(
+        402,
+        JSON.stringify({
+          error: {
+            code: "LICENSE_EXPIRED",
+            category: "permission",
+            retryable: false,
+          },
+        }),
+      ),
+    ),
+    true,
+  );
+  // A body carried as its own field is read too.
+  const withBody = Object.assign(new Error("Forbidden"), {
+    status: 403,
+    body: NOT_ENTITLED,
+  });
+  assert.equal(isMemoryRefusal(withBody), true);
+});
+
+test("other failures are not a Memory refusal", () => {
+  assert.equal(isMemoryRefusal(platformError(403, "forbidden")), false);
+  assert.equal(
+    isMemoryRefusal(
+      platformError(
+        403,
+        JSON.stringify({
+          error: { code: "FORBIDDEN", category: "permission", retryable: true },
+        }),
+      ),
+    ),
+    false,
+  );
+  assert.equal(
+    isMemoryRefusal(
+      platformError(
+        503,
+        JSON.stringify({
+          error: {
+            code: "MEMORY_NOT_ENTITLED",
+            category: "unavailable",
+            retryable: true,
+          },
+        }),
+      ),
+    ),
+    false,
+  );
+  assert.equal(isMemoryRefusal(new Error(NOT_ENTITLED)), false);
+  assert.equal(isMemoryRefusal("MEMORY_NOT_ENTITLED"), false);
+});
+
+// A Memory client that refuses every call as an unentitled project does.
+function refusingClient() {
+  let calls = 0;
+  let refuse = true;
+  const answer = async <T>(value: T) => {
+    calls += 1;
+    if (refuse) throw platformError(403, NOT_ENTITLED);
+    return value;
+  };
+  const row = {
+    id: "m1",
+    kind: "operational",
+    scope: "user",
+    content: "Keep",
+    sourceThreadIds: ["thread-1"],
+    invalidatedAt: null,
+  };
+  const client: MemoryClient = {
+    listMemories: () => answer({ memories: [row] }),
+    recallMemories: () => answer({ memories: [{ ...row, score: 1 }] }),
+    createMemory: () => answer({ ...row, absorbed: false }),
+  };
+  return {
+    client,
+    calls: () => calls,
+    enable: () => {
+      refuse = false;
+    },
+  };
+}
+
+const refusal = (work: Promise<unknown>) =>
+  work.then(
+    () => assert.fail("expected a refusal"),
+    (reason: unknown) => {
+      assert.ok(reason instanceof MemoryUnavailableError);
+      return reason;
+    },
+  );
+
+test("an entitlement refusal says why, without its ids or body", async () => {
+  const { client } = refusingClient();
+  const error = await refusal(createMemoryAccess(client, "u").list());
+  assert.equal(error.message, MEMORY_UNAVAILABLE);
+  assert.equal(error.refusedNow, true);
+  assert.doesNotMatch(error.message, /req-123|trace-456|MEMORY_NOT_ENTITLED/);
+});
+
+test("after one entitlement refusal, list, recall and save ask Intelligence no more", async () => {
+  const { client, calls } = refusingClient();
+  const access = createMemoryAccess(client, "u");
+  assert.equal(access.unavailable, false);
+  await refusal(access.list());
+  assert.equal(calls(), 1);
+  assert.equal(access.unavailable, true);
+  for (const attempt of [
+    () => access.list(),
+    () => access.recall("label spam"),
+    () => access.saveLesson({ threadId: "t1", content: "How to" }),
+  ]) {
+    const error = await refusal(attempt());
+    assert.equal(error.message, MEMORY_UNAVAILABLE);
+    assert.equal(error.refusedNow, false);
+  }
+  assert.equal(calls(), 1, "no request after the refusal");
+});
+
+test("a refusal heard after the timeout still stops the next call", async () => {
+  let refuse: (error: Error) => void = () => {};
+  let calls = 0;
+  const client: MemoryClient = {
+    listMemories: () =>
+      new Promise((_resolve, reject) => {
+        calls += 1;
+        refuse = reject;
+      }),
+    recallMemories: async () => assert.fail("recall must not be called"),
+    createMemory: async () => assert.fail("save must not be called"),
+  };
+  const access = createMemoryAccess(client, "u", {
+    list: 1,
+    recall: 1,
+    save: 1,
+  });
+  await assert.rejects(access.list(), /did not answer/);
+  refuse(platformError(403, NOT_ENTITLED));
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(access.unavailable, true);
+  await refusal(access.recall("x"));
+  assert.equal(calls, 1);
+});
+
+test("recheck asks Intelligence exactly once more", async () => {
+  const { client, calls, enable } = refusingClient();
+  const access = createMemoryAccess(client, "u");
+  await refusal(access.list());
+  access.recheck();
+  // The one probe goes out and is refused again; the next call stays local.
+  assert.equal((await refusal(access.list())).refusedNow, true);
+  assert.equal((await refusal(access.recall("x"))).refusedNow, false);
+  assert.equal(calls(), 2);
+  // Once Memory is enabled, a recheck lets it back in for good.
+  enable();
+  access.recheck();
+  assert.equal((await access.list()).length, 1);
+  assert.equal(access.unavailable, false);
+  await access.recall("x");
+  assert.equal(calls(), 4);
+});
+
+test("recheck while Memory works changes nothing", async () => {
+  const { client, calls } = fakeMemoryClient();
+  const access = createMemoryAccess(client, "u");
+  access.recheck();
+  await access.list();
+  await access.list();
+  assert.equal(calls.length, 2);
+  assert.equal(access.unavailable, false);
+});
+
+test("a failure that is not a refusal keeps Memory in use", async () => {
+  let calls = 0;
+  const client: MemoryClient = {
+    listMemories: async () => {
+      calls += 1;
+      throw platformError(503, "upstream unavailable");
+    },
+    recallMemories: async () => assert.fail("recall must not be called"),
+    createMemory: async () => assert.fail("save must not be called"),
+  };
+  const access = createMemoryAccess(client, "u");
+  for (let attempt = 0; attempt < 2; attempt += 1)
+    await assert.rejects(access.list(), (error: unknown) => {
+      assert.ok(!(error instanceof MemoryUnavailableError));
+      return true;
+    });
+  assert.equal(calls, 2);
+  assert.equal(access.unavailable, false);
 });

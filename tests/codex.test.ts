@@ -2184,6 +2184,50 @@ test("unavailable skills or memories are reported and the run continues", async 
   }
 });
 
+test("a Memory refused before this thread is skipped without a notice", async () => {
+  const { CodexRunner } = await import("../server/codex-agent");
+  const { MemoryUnavailableError } = await import("../server/memory");
+  const { ScreenshotRegistry } = await import("../server/screenshots");
+  const { mkdtemp, rm } = await import("node:fs/promises");
+  const { tmpdir } = await import("node:os");
+  const { join } = await import("node:path");
+  const root = await mkdtemp(join(tmpdir(), "kite-context-refused-test-"));
+  // The first thread hears the refusal; the next ones fail at once.
+  const reasons = [
+    new MemoryUnavailableError(true),
+    new MemoryUnavailableError(false),
+  ];
+  const runner = new CodexRunner({
+    runs: new RunRegistry(),
+    statePath: root,
+    screenshots: new ScreenshotRegistry(),
+    learnedSkills: async () => [],
+    recallMemories: async () => {
+      throw reasons.shift() ?? new MemoryUnavailableError(false);
+    },
+    getConfig: contextConfig,
+    createClient: recordingClient({}),
+  });
+  const notices = async (threadId: string) => {
+    const found = [];
+    for await (const event of runner.run(
+      contextInput(threadId, "Label this email"),
+      new AbortController().signal,
+    ))
+      if (event.type === "kite.notice") found.push(event.value.summary);
+    return found;
+  };
+  try {
+    assert.deepEqual(await notices("refused-first"), [
+      "Intelligence Memory is unavailable for this conversation: Intelligence Memory isn't enabled for this organization or license.",
+    ]);
+    assert.deepEqual(await notices("refused-second"), []);
+    assert.deepEqual(await notices("refused-third"), []);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 // A Memory client whose calls never answer, as a hung bare fetch in
 // @copilotkit/runtime 1.73.3 would not.
 const hungMemory = {

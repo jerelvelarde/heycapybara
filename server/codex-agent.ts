@@ -22,7 +22,12 @@ import {
 import { Observable } from "rxjs";
 import { codexEvents, type KiteNotice } from "./codex-events";
 import { learnedSkillCatalog, type DeliveredSkill } from "./learned-skills";
-import { memoryNotes, memoryPreview, type MemoryNote } from "./memory";
+import {
+  MemoryUnavailableError,
+  memoryNotes,
+  memoryPreview,
+  type MemoryNote,
+} from "./memory";
 import type { RunRegistry } from "./run-registry";
 import {
   describeScreenshot,
@@ -161,13 +166,20 @@ async function newThreadContext(
     );
   else if (skills.value?.length)
     parts.push(text(learnedSkillCatalog(skills.value)));
-  if (memories.status === "rejected")
-    unavailable(
-      "memory-unavailable",
-      "Intelligence Memory is unavailable for this conversation: " +
-        safeAgentError(memories.reason),
-    );
-  else if (memories.value?.length) {
+  if (memories.status === "rejected") {
+    // A Memory Intelligence already refused for good is said once, where the
+    // refusal was heard (this notice, or the Learning tab), not in every new
+    // thread after it: the recall is skipped silently.
+    const refusedBefore =
+      memories.reason instanceof MemoryUnavailableError &&
+      !memories.reason.refusedNow;
+    if (!refusedBefore)
+      unavailable(
+        "memory-unavailable",
+        "Intelligence Memory is unavailable for this conversation: " +
+          safeAgentError(memories.reason),
+      );
+  } else if (memories.value?.length) {
     parts.push(text(memoryNotes(memories.value)));
     notices.push({
       type: "kite.notice",

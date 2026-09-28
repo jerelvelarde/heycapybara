@@ -320,6 +320,12 @@ export function Assistant({
       void send(request.prompt, request.mode, true);
     }
   }, [request, isReady]);
+  // No "Learn from this" once Intelligence has refused Memory: the save could
+  // only fail. A preview already open stays, and Save then shows the reason.
+  const lessonShown =
+    lesson !== "none" &&
+    !busy &&
+    !(lesson === "offered" && learning?.memoryUnavailable);
   return (
     <aside className="assistant">
       <header>
@@ -416,7 +422,7 @@ export function Assistant({
             ))}
           </details>
         )}
-        {lesson !== "none" && !busy && (
+        {lessonShown && (
           <div
             className={
               lesson === "preview" || lesson === "sending"

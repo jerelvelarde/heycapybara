@@ -8,10 +8,14 @@ import { learningRead, memory } from "./learning-fixtures";
 // Stands in for setTimeout: a scheduled poll runs only when a test fires it.
 function fakeSchedule() {
   const queue: { run: () => Promise<void>; cancelled: boolean }[] = [];
+  // The wait asked for by every poll scheduled, in order.
+  const delays: number[] = [];
   return {
-    schedule(run: () => Promise<void>) {
+    delays,
+    schedule(run: () => Promise<void>, ms: number) {
       const entry = { run, cancelled: false };
       queue.push(entry);
+      delays.push(ms);
       return () => {
         entry.cancelled = true;
       };
@@ -32,12 +36,14 @@ function fakeSchedule() {
 function setup(reads: (LearningRead | Error)[]) {
   let clock = 0;
   let calls = 0;
+  const rechecks: boolean[] = [];
   const timers = fakeSchedule();
   const changes: LearningStatus[] = [];
   const watcher = new LearningWatcher({
-    source: () => async () => {
+    source: () => async (options) => {
       const next = reads[Math.min(calls, reads.length - 1)];
       calls += 1;
+      rechecks.push(options?.recheck === true);
       if (next instanceof Error) throw next;
       return next;
     },
@@ -51,6 +57,7 @@ function setup(reads: (LearningRead | Error)[]) {
     watcher,
     timers,
     changes,
+    rechecks,
     calls: () => calls,
     advance: (ms: number) => {
       clock += ms;
@@ -248,4 +255,92 @@ test("a read that resolves after stop() does not notify", async () => {
   release(learningRead({ pendingCandidateCount: 1 }));
   await reading;
   assert.equal(calls, 0);
+});
+
+test("a source that keeps failing backs the polls off, and recovers on success", async () => {
+  const failing = learningRead(null, {
+    errors: { snapshot: "Couldn't read Intelligence learning status: 503" },
+  });
+  const { watcher, timers } = setup([
+    failing,
+    failing,
+    failing,
+    failing,
+    learningRead(),
+  ]);
+  await watcher.watch();
+  for (let poll = 0; poll < 4; poll += 1) await timers.fire();
+  assert.deepEqual(timers.delays, [5000, 30_000, 120_000, 120_000, 5000]);
+});
+
+test("a reader that keeps throwing backs off the same way", async () => {
+  const { watcher, timers } = setup([new Error("socket hang up")]);
+  await watcher.watch();
+  await timers.fire();
+  await timers.fire();
+  assert.deepEqual(timers.delays, [5000, 30_000, 120_000]);
+});
+
+test("a source that fails only now and then keeps the usual interval", async () => {
+  const failing = learningRead(null, {
+    errors: { snapshot: "Couldn't read Intelligence learning status: 503" },
+  });
+  const { watcher, timers } = setup([
+    failing,
+    learningRead(),
+    failing,
+    learningRead(),
+  ]);
+  await watcher.watch();
+  for (let poll = 0; poll < 3; poll += 1) await timers.fire();
+  assert.deepEqual(timers.delays, [5000, 5000, 5000, 5000]);
+});
+
+test("a Memory Intelligence refused asks nothing, so it does not slow the polls", async () => {
+  const refused = {
+    ...learningRead(
+      {},
+      { memories: null, errors: { memories: "Memory isn't enabled." } },
+    ),
+    memoryUnavailable: true,
+  };
+  const { watcher, timers } = setup([refused]);
+  await watcher.watch();
+  await timers.fire();
+  await timers.fire();
+  assert.deepEqual(timers.delays, [5000, 5000, 5000]);
+  assert.equal(watcher.status.phase, "setup");
+  assert.equal(watcher.status.memoryUnavailable, true);
+});
+
+test("Check learning now asks the reader to recheck once, and polls do not", async () => {
+  const { watcher, timers, rechecks } = setup([learningRead()]);
+  await watcher.watch();
+  await watcher.watch({ recheck: true });
+  await timers.fire();
+  await watcher.watch();
+  assert.deepEqual(rechecks, [false, true, false, false]);
+});
+
+test("Check learning now during a read follows it with one that rechecks", async () => {
+  const releases: (() => void)[] = [];
+  const rechecks: boolean[] = [];
+  const watcher = new LearningWatcher({
+    source: () => (options) => {
+      rechecks.push(options?.recheck === true);
+      return new Promise<LearningRead>((resolve) => {
+        releases.push(() => resolve(learningRead()));
+      });
+    },
+    onChange: () => {},
+    schedule: fakeSchedule().schedule,
+  });
+  const first = watcher.watch();
+  const checked = watcher.watch({ recheck: true });
+  releases[0]();
+  await first;
+  await new Promise((resolve) => setImmediate(resolve));
+  releases[1]();
+  await checked;
+  assert.deepEqual(rechecks, [false, true]);
 });

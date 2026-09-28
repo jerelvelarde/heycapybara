@@ -276,6 +276,7 @@ export async function startRuntime(
             }),
           skills: deliveredSkills,
           memories: memory ? () => memory.list() : undefined,
+          recheckMemories: memory ? () => memory.recheck() : undefined,
         })
       : undefined,
     // For "Learn from this" (electron/main.ts saveLesson).

@@ -39,6 +39,7 @@ const api: KiteAPI = {
   openWorkspace: () => invoke("kite:openWorkspace"),
   openIntelligence: () => invoke("kite:openIntelligence"),
   watchLearning: () => invoke("kite:watchLearning"),
+  checkLearning: () => invoke("kite:checkLearning"),
   dismissLearned: () => invoke("kite:dismissLearned"),
   openLearningStep: () => invoke("kite:openLearningStep"),
   saveLesson: (lesson) => invoke("kite:saveLesson", lesson),

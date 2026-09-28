@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import type { RunAgentInput } from "@ag-ui/core";
 import {
   LEARNING_UNCHECKED,
+  MEMORY_UNAVAILABLE_STATUS,
   createLearningReader,
   describeLearning,
   learningError,
@@ -15,6 +16,7 @@ import {
   memory,
   type SnapshotOverrides,
 } from "./learning-fixtures";
+import { MEMORY_UNAVAILABLE, MemoryUnavailableError } from "../server/memory";
 
 const now = new Date("2026-09-25T12:00:00Z");
 const none = { skills: new Set<string>(), memories: new Set<string>() };
@@ -398,4 +400,70 @@ test("only an HTTPS link in the current status can be opened", () => {
       }),
     /Refusing to open http:\/\/localhost:3000: Intelligence links must use HTTPS\./,
   );
+});
+
+test("Memory Intelligence won't enable is a setup step with the fixed reason", () => {
+  const status = describeLearning(
+    {
+      ...learningRead(
+        {},
+        { memories: null, errors: { memories: MEMORY_UNAVAILABLE } },
+      ),
+      memoryUnavailable: true,
+    },
+    none,
+    now,
+  );
+  assert.equal(status.phase, "setup");
+  assert.equal(
+    status.message,
+    "Intelligence Memory isn't enabled for this organization or license. Lessons can't be saved or recalled until it is.",
+  );
+  assert.equal(status.message, MEMORY_UNAVAILABLE_STATUS);
+  assert.equal(status.link, null);
+  assert.equal(status.memories, null);
+  assert.equal(status.memoryError, MEMORY_UNAVAILABLE);
+  assert.equal(status.memoryUnavailable, true);
+});
+
+test("the skills path still leads while Memory is refused", () => {
+  const status = describeLearning(
+    {
+      ...learningRead(
+        { pendingCandidateCount: 1 },
+        { memories: null, errors: { memories: MEMORY_UNAVAILABLE } },
+      ),
+      memoryUnavailable: true,
+    },
+    none,
+    now,
+  );
+  assert.equal(status.phase, "review");
+  assert.equal(status.memoryUnavailable, true);
+  assert.equal(status.memoryError, MEMORY_UNAVAILABLE);
+});
+
+test("a learning read reports a refused Memory by its reason alone", async () => {
+  let rechecks = 0;
+  const reader = createLearningReader({
+    containerId: "desktop-workflows",
+    inspect: async () => inspectorSnapshot(),
+    skills: async () => [],
+    memories: async () => {
+      throw new MemoryUnavailableError(true, {
+        cause: new Error('403: {"requestId":"req-123"}'),
+      });
+    },
+    recheckMemories: () => {
+      rechecks += 1;
+    },
+  });
+  const read = await reader();
+  assert.equal(read.memoryUnavailable, true);
+  assert.equal(read.memories, null);
+  assert.equal(read.errors.memories, MEMORY_UNAVAILABLE);
+  assert.equal(read.errors.skills, null);
+  assert.equal(rechecks, 0);
+  await reader({ recheck: true });
+  assert.equal(rechecks, 1);
 });

@@ -2,7 +2,12 @@ import type { CopilotKitIntelligence } from "@copilotkit/runtime/v2";
 import type { LearningStatus } from "../src/types";
 import { safeAgentError, type StreamRunner } from "./codex-agent";
 import type { DeliveredSkill } from "./learned-skills";
-import { memoryPreview, type MemoryNote } from "./memory";
+import {
+  MEMORY_UNAVAILABLE,
+  MemoryUnavailableError,
+  memoryPreview,
+  type MemoryNote,
+} from "./memory";
 
 /** The Learning projection Intelligence returns (InspectorLearningSnapshotV1). */
 export type InspectorLearning = Awaited<
@@ -20,8 +25,16 @@ export type LearningRead = {
     skills: string | null;
     memories: string | null;
   };
+  // Intelligence refused Memory for this organization or license
+  // (MemoryUnavailableError), so the memories source asks no more.
+  memoryUnavailable?: boolean;
 };
-export type LearningReader = () => Promise<LearningRead>;
+/** `recheck` lets a Memory refused earlier be asked once more. */
+export type LearningReader = (options?: {
+  recheck?: boolean;
+}) => Promise<LearningRead>;
+
+export const MEMORY_UNAVAILABLE_STATUS = `${MEMORY_UNAVAILABLE} Lessons can't be saved or recalled until it is.`;
 export type LearningBaseline = {
   skills: ReadonlySet<string>;
   memories: ReadonlySet<string>;
@@ -36,6 +49,7 @@ export const LEARNING_OFF: LearningStatus = {
   memories: null,
   newMemories: [],
   memoryError: null,
+  memoryUnavailable: false,
   insight: null,
   checkedAt: null,
 };
@@ -49,6 +63,7 @@ export const LEARNING_UNCHECKED: LearningStatus = {
   memories: null,
   newMemories: [],
   memoryError: null,
+  memoryUnavailable: false,
   insight: null,
   checkedAt: null,
 };
@@ -90,7 +105,9 @@ function setupMessage(
  * moment the demo is about. A new memory needs no learning container, so it
  * is reported even when the skills path is not set up. Otherwise the
  * skills-path steps follow in order: the ones that need a person (review,
- * then starting an analysis) before the ones that are waiting.
+ * then starting an analysis) before the ones that are waiting. Memory that
+ * Intelligence won't enable is a setup step too, shown once the skills path
+ * has nothing more pressing.
  */
 export function describeLearning(
   read: LearningRead,
@@ -109,6 +126,7 @@ export function describeLearning(
     memories: read.memories ? read.memories.length : null,
     newMemories,
     memoryError: errors.memories,
+    memoryUnavailable: read.memoryUnavailable === true,
     insight: snapshot?.insightsPage.items[0]?.statement ?? null,
     checkedAt: now.toISOString(),
   };
@@ -175,6 +193,13 @@ export function describeLearning(
       message: `${plural(snapshot.pendingThreadCount, "conversation")} ready to learn from. Start an analysis in Intelligence.`,
       link: link("runs", snapshot.links.runs),
     };
+  if (read.memoryUnavailable)
+    return {
+      ...common,
+      phase: "setup",
+      message: MEMORY_UNAVAILABLE_STATUS,
+      link: null,
+    };
   if (snapshot.run.latest?.status === "failed")
     return {
       ...common,
@@ -221,19 +246,27 @@ export function createLearningReader(sources: {
   inspect?: () => Promise<InspectorLearning>;
   skills?: () => Promise<readonly DeliveredSkill[]>;
   memories?: () => Promise<readonly MemoryNote[]>;
+  // Called before a read that asks for a recheck: MemoryAccess.recheck.
+  recheckMemories?: () => void;
 }): LearningReader {
   async function settle<T>(label: string, work?: () => Promise<T>) {
-    if (!work) return { value: null, error: `${label}: not connected.` };
+    if (!work)
+      return { value: null, error: `${label}: not connected.`, refused: false };
     try {
-      return { value: await work(), error: null };
+      return { value: await work(), error: null, refused: false };
     } catch (error) {
+      // A fixed reason, never the refusal's body with its request ids.
+      if (error instanceof MemoryUnavailableError)
+        return { value: null, error: MEMORY_UNAVAILABLE, refused: true };
       return {
         value: null,
         error: `${label}: ${safeAgentError(error instanceof Error ? error : new Error(String(error)))}`,
+        refused: false,
       };
     }
   }
-  return async () => {
+  return async (options) => {
+    if (options?.recheck) sources.recheckMemories?.();
     const [snapshot, skills, memories] = await Promise.all([
       settle("Couldn't read Intelligence learning status", sources.inspect),
       settle("Couldn't read learned skills", sources.skills),
@@ -249,6 +282,7 @@ export function createLearningReader(sources: {
         skills: skills.error,
         memories: memories.error,
       },
+      memoryUnavailable: memories.refused,
     };
   };
 }

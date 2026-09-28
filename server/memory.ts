@@ -29,7 +29,70 @@ export type MemoryAccess = {
     lesson: { threadId: string; content: string },
     signal?: AbortSignal,
   ): Promise<{ id: string; absorbed: boolean }>;
+  /** True once Intelligence has refused Memory for good this session. */
+  readonly unavailable: boolean;
+  /** Let the next call ask Intelligence again ("Check learning now"). */
+  recheck(): void;
 };
+
+export const MEMORY_UNAVAILABLE =
+  "Intelligence Memory isn't enabled for this organization or license.";
+
+/**
+ * Intelligence refused Memory in a way that will not change on retry: the
+ * project has no Memory entitlement. The message is fixed, so no request id,
+ * trace id or response body reaches the user. `refusedNow` is true only for
+ * the call that heard the refusal; later calls fail with it at once.
+ */
+export class MemoryUnavailableError extends Error {
+  readonly refusedNow: boolean;
+  constructor(refusedNow: boolean, options?: ErrorOptions) {
+    super(MEMORY_UNAVAILABLE, options);
+    this.name = "MemoryUnavailableError";
+    this.refusedNow = refusedNow;
+  }
+}
+
+function parseBody(text: string): unknown {
+  try {
+    return JSON.parse(text);
+  } catch {
+    return undefined;
+  }
+}
+
+function errorBody(error: Error & { status: number }): unknown {
+  const body: unknown = (error as { body?: unknown }).body;
+  if (typeof body === "string") return parseBody(body);
+  if (body && typeof body === "object") return body;
+  // CopilotKitIntelligence (@copilotkit/runtime 1.73.3, #request in
+  // intelligence-platform/client.mjs) throws a PlatformRequestError whose only
+  // copy of the body is its message: `Intelligence platform error <status>:
+  // <body text>`. `retryable` is left undefined there.
+  const prefix = `Intelligence platform error ${error.status}: `;
+  return error.message.startsWith(prefix)
+    ? parseBody(error.message.slice(prefix.length))
+    : undefined;
+}
+
+/**
+ * Whether `error` is Intelligence saying Memory is not enabled for this
+ * project: HTTP 403 with code MEMORY_NOT_ENTITLED, or any refusal whose body
+ * marks it a permission error that is not retryable.
+ */
+export function isMemoryRefusal(error: unknown): boolean {
+  if (!(error instanceof Error)) return false;
+  const status = (error as { status?: unknown }).status;
+  if (typeof status !== "number") return false;
+  const body = errorBody(error as Error & { status: number });
+  if (!body || typeof body !== "object") return false;
+  const nested = (body as { error?: unknown }).error;
+  const detail = (
+    nested && typeof nested === "object" ? nested : body
+  ) as Record<string, unknown>;
+  if (status === 403 && detail.code === "MEMORY_NOT_ENTITLED") return true;
+  return detail.retryable === false && detail.category === "permission";
+}
 
 // How long each call may take, in milliseconds. Recall sits in front of
 // every new thread, so it gets the shortest wait.
@@ -101,17 +164,55 @@ const note = (memory: MemorySummary): MemoryNote => ({
  * same person's next conversation. No review step applies to any of these.
  * Every call is bounded by `timeouts` and ends at once when its signal
  * aborts.
+ *
+ * Once Intelligence refuses Memory for good (isMemoryRefusal), every later
+ * call rejects with MemoryUnavailableError without a request, until
+ * recheck() lets exactly one call ask again. The client logs each failed
+ * request itself, so this is what keeps a refusing project from filling the
+ * log.
  */
 export function createMemoryAccess(
   client: MemoryClient,
   userId: string,
   timeouts: MemoryTimeouts = MEMORY_TIMEOUTS,
 ): MemoryAccess {
+  let refused = false;
+  let probe = false;
+  function guarded<T>(
+    call: () => Promise<T>,
+    ms: number,
+    signal?: AbortSignal,
+  ): Promise<T> {
+    if (refused) {
+      if (!probe) return Promise.reject(new MemoryUnavailableError(false));
+      probe = false;
+    }
+    // Classified on the request itself, not the bounded wait, so a refusal
+    // that lands after the timeout still stops the next call.
+    const work = call().then(
+      (value) => {
+        refused = false;
+        return value;
+      },
+      (error: unknown) => {
+        if (!isMemoryRefusal(error)) throw error;
+        refused = true;
+        throw new MemoryUnavailableError(true, { cause: error });
+      },
+    );
+    return withinTime(work, ms, signal);
+  }
   return {
+    get unavailable() {
+      return refused;
+    },
+    recheck() {
+      probe = refused;
+    },
     list: async (signal) =>
       (
-        await withinTime(
-          client.listMemories({ userId, memoryGrant: READ_GRANT }),
+        await guarded(
+          () => client.listMemories({ userId, memoryGrant: READ_GRANT }),
           timeouts.list,
           signal,
         )
@@ -120,13 +221,14 @@ export function createMemoryAccess(
         .map(note),
     recall: async (query, signal) =>
       (
-        await withinTime(
-          client.recallMemories({
-            userId,
-            memoryGrant: READ_GRANT,
-            query: query.slice(0, 1000),
-            limit: 5,
-          }),
+        await guarded(
+          () =>
+            client.recallMemories({
+              userId,
+              memoryGrant: READ_GRANT,
+              query: query.slice(0, 1000),
+              limit: 5,
+            }),
           timeouts.recall,
           signal,
         )
@@ -134,15 +236,16 @@ export function createMemoryAccess(
         .filter(live)
         .map(note),
     saveLesson: async ({ threadId, content }, signal) => {
-      const saved = await withinTime(
-        client.createMemory({
-          userId,
-          memoryGrant: LESSON_GRANT,
-          content,
-          kind: "operational",
-          scope: "user",
-          sourceThreadIds: [threadId],
-        }),
+      const saved = await guarded(
+        () =>
+          client.createMemory({
+            userId,
+            memoryGrant: LESSON_GRANT,
+            content,
+            kind: "operational",
+            scope: "user",
+            sourceThreadIds: [threadId],
+          }),
         timeouts.save,
         signal,
       );

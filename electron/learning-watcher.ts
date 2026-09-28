@@ -24,6 +24,11 @@ const realSchedule: Schedule = (run, ms) => {
  *
  * `source` is read on every poll, so a runtime whose Intelligence client is
  * replaced (a new key) is picked up without rebuilding the watcher.
+ *
+ * A source that keeps failing slows the polls: after consecutive failures of
+ * the same source the next poll waits `intervalMs`, then each of `backoffMs`
+ * in turn (30 seconds, then 2 minutes), until a read of it succeeds. A Memory
+ * that Intelligence refused for good makes no request, so it is not counted.
  */
 export class LearningWatcher {
   #status: LearningStatus;
@@ -36,12 +41,16 @@ export class LearningWatcher {
   #cancel: (() => void) | undefined;
   #reading: Promise<void> | undefined;
   #stopped = false;
+  #recheck = false;
+  // Consecutive failed reads, per source ("read" is the reader throwing).
+  readonly #failures = new Map<string, number>();
   readonly #source: () => LearningReader | undefined;
   readonly #onChange: (status: LearningStatus) => void;
   readonly #now: () => number;
   readonly #schedule: Schedule;
   readonly #intervalMs: number;
   readonly #windowMs: number;
+  readonly #backoffMs: readonly number[];
 
   constructor(options: {
     source: () => LearningReader | undefined;
@@ -50,6 +59,7 @@ export class LearningWatcher {
     schedule?: Schedule;
     intervalMs?: number;
     windowMs?: number;
+    backoffMs?: readonly number[];
   }) {
     this.#source = options.source;
     this.#onChange = options.onChange;
@@ -57,6 +67,7 @@ export class LearningWatcher {
     this.#schedule = options.schedule ?? realSchedule;
     this.#intervalMs = options.intervalMs ?? 5000;
     this.#windowMs = options.windowMs ?? 30 * 60_000;
+    this.#backoffMs = options.backoffMs ?? [30_000, 2 * 60_000];
     this.#status = options.source() ? LEARNING_UNCHECKED : LEARNING_OFF;
   }
 
@@ -64,11 +75,19 @@ export class LearningWatcher {
     return this.#status;
   }
 
-  /** Reads now (or joins the read in flight) and keeps polling for the window. */
-  watch(): Promise<void> {
+  /**
+   * Reads now (or joins the read in flight) and keeps polling for the window.
+   * `recheck` ("Check learning now") also asks a refused Memory once more; a
+   * read already in flight is followed by one that does.
+   */
+  watch(options?: { recheck?: boolean }): Promise<void> {
     if (this.#stopped) return Promise.resolve();
     this.#until = this.#now() + this.#windowMs;
-    if (this.#reading) return this.#reading;
+    if (options?.recheck) this.#recheck = true;
+    if (this.#reading)
+      return options?.recheck
+        ? this.#reading.then(() => (this.#recheck ? this.watch() : undefined))
+        : this.#reading;
     this.#cancel?.();
     this.#cancel = undefined;
     return this.#tick();
@@ -134,20 +153,46 @@ export class LearningWatcher {
       this.#cancel = this.#schedule(() => {
         this.#cancel = undefined;
         return this.#tick();
-      }, this.#intervalMs);
+      }, this.#delay());
     });
     this.#reading = reading;
     return reading;
   }
 
+  /** The wait before the next poll, given the longest failing streak. */
+  #delay() {
+    const streak = Math.max(0, ...this.#failures.values());
+    if (streak < 2) return this.#intervalMs;
+    return (
+      this.#backoffMs[Math.min(streak - 2, this.#backoffMs.length - 1)] ??
+      this.#intervalMs
+    );
+  }
+
+  #count(source: string, failed: boolean) {
+    if (failed)
+      this.#failures.set(source, (this.#failures.get(source) ?? 0) + 1);
+    else this.#failures.delete(source);
+  }
+
   async #read() {
     const reader = this.#source();
     if (!reader) {
+      this.#failures.clear();
       this.#publish(LEARNING_OFF);
       return;
     }
+    const recheck = this.#recheck;
+    this.#recheck = false;
     try {
-      const read = await reader();
+      const read = await reader(recheck ? { recheck } : undefined);
+      this.#count("read", false);
+      this.#count("snapshot", read.errors.snapshot !== null);
+      this.#count("skills", read.errors.skills !== null);
+      this.#count(
+        "memories",
+        read.errors.memories !== null && !read.memoryUnavailable,
+      );
       if (read.skills)
         this.#skillBaseline ??= new Set(read.skills.map((skill) => skill.name));
       if (read.memories)
@@ -157,6 +202,7 @@ export class LearningWatcher {
       this.#last = read;
       this.#publish(this.#describe(read));
     } catch (error) {
+      this.#count("read", true);
       this.#publish(learningError(error, this.#status, new Date(this.#now())));
     }
   }

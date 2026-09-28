@@ -1141,6 +1141,7 @@ app
       content: z.string().min(1).max(4000),
     });
     handle("watchLearning", () => learning!.watch());
+    handle("checkLearning", () => learning!.watch({ recheck: true }));
     handle("dismissLearned", () => learning!.acknowledge());
     handle("openLearningStep", async () => {
       const url = safeLearningUrl(learning!.status);
@@ -1161,7 +1162,13 @@ app
         );
       // Before the save: a poll can list the lesson before its id comes back.
       learning!.expectLesson(parsed.data.threadId);
-      const saved = await runtime.memory.saveLesson(parsed.data);
+      const memory = runtime.memory;
+      const saved = await memory.saveLesson(parsed.data).catch((error) => {
+        // Intelligence refused Memory: let the Learning status say so now,
+        // and stop offering "Learn from this".
+        if (memory.unavailable) void learning!.watch();
+        throw error;
+      });
       learning!.remember(saved.id);
       void learning!.watch();
       return saved;
