@@ -92,7 +92,7 @@ export function App() {
         runtimeUrl={data.settings.runtimeUrl}
         useSingleEndpoint
         headers={{ Authorization: "Bearer " + data.settings.runtimeToken }}
-        showDevConsole={false}
+        enableInspector={false}
       >
         <CompanionChat
           settings={data.settings}
@@ -106,7 +106,7 @@ export function App() {
       runtimeUrl={data.settings.runtimeUrl}
       useSingleEndpoint
       headers={{ Authorization: "Bearer " + data.settings.runtimeToken }}
-      showDevConsole={false}
+      enableInspector={false}
     >
       <Workspace
         data={data}
