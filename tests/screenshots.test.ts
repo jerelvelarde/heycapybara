@@ -7,6 +7,7 @@ import {
   ScreenshotRegistry,
   captureSize,
   describeScreenshot,
+  describeToolScreenshot,
   exceeds,
   fitsPromptBudget,
   fitThumbnail,
@@ -529,6 +530,15 @@ test("the model is told which image is which screenshot, and its pixel size", ()
     unreferencedImageNote(3),
     /^Image 3 in this message has no screen reference/,
   );
+});
+
+test("a screenshot returned by a tool is described with its id, display and pixel size", () => {
+  const text = describeToolScreenshot(shot);
+  assert.match(text, /^The image in this result is screenshot shot_0000000a/);
+  assert.match(text, /Built-in Retina Display/);
+  assert.match(text, new RegExp(`${shot.width}.${shot.height} pixels`));
+  assert.match(text, /screenshotId "shot_0000000a"/);
+  assert.match(text, /origin at the top-left/);
 });
 
 test("the pinned Codex SDK version matches what the image limits were checked against", async () => {

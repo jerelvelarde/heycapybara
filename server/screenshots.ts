@@ -244,6 +244,15 @@ export function describeScreenshot(shot: Screenshot, imageNumber: number) {
   return `Image ${imageNumber} in this message is screenshot ${shot.id} of ${shot.label}, ${shot.width}×${shot.height} pixels. To point at something in it, call point_on_screen with screenshotId "${shot.id}", a short label, and x, y in that image's pixels (origin at the top-left, x rightward, y downward).`;
 }
 
+// The note for a screenshot a tool returns (take_screenshot, or the one a
+// click or scroll returns). The image comes right after it in the same
+// result.
+export function describeToolScreenshot(
+  shot: Pick<Screenshot, "id" | "label" | "width" | "height">,
+) {
+  return `The image in this result is screenshot ${shot.id} of ${shot.label}, ${shot.width}×${shot.height} pixels. To click, scroll or point at something in it, pass screenshotId "${shot.id}" and x, y in that image's pixels (origin at the top-left, x rightward, y downward).`;
+}
+
 export function unreferencedImageNote(imageNumber: number) {
   return `Image ${imageNumber} in this message has no screen reference, so point_on_screen cannot target it.`;
 }

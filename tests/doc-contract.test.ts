@@ -20,6 +20,9 @@ import { RING_MARGIN } from "../electron/window-occlusion";
 import { pointPrompt } from "../server/point-schema";
 import * as shots from "../server/screenshots";
 import { otherId } from "./test-ids";
+import { openUrlPrompt } from "../electron/computer-action";
+import { CONTROL_ALLOW, CONTROL_MESSAGE } from "../electron/control-grant";
+import { TYPE_MAX_LENGTH } from "../server/computer-schema";
 
 // The docs quote what the code says. Each message below comes from the real
 // code with sample values, which are then swapped for the docs' placeholders,
@@ -346,5 +349,14 @@ test("the README and the spec state the limits the code enforces", async () => {
 test("the spec states the ring margin the code uses", async () => {
   assertQuotes(await read(SPEC), "The spec", [
     `\`RING_MARGIN\` (${RING_MARGIN} pt`,
+  ]);
+});
+
+test("the README quotes the control prompt, its button, the web page prompt and the typing limit as the code has them", async () => {
+  assertQuotes(await read("../README.md"), "The README", [
+    code(CONTROL_MESSAGE),
+    `**${CONTROL_ALLOW}**`,
+    code(openUrlPrompt("https://example.com/", "com.example.App").message),
+    `${TYPE_MAX_LENGTH} characters`,
   ]);
 });

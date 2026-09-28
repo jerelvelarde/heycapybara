@@ -1,6 +1,7 @@
 // The helper prints one JSON object per line. Failures are `error` events.
-// A `status` event confirms success for the one-shot `--point` and
-// `--open-app` commands; the long-running recorder mode also prints
+// A `status` event confirms success for the one-shot `--point`,
+// `--open-app`, `--open-url`, `--click`, `--scroll`, `--type` and `--keys`
+// commands; the long-running recorder mode also prints
 // `status` lines as it starts and stops, outside of `runHelper` (e.g.
 // "Ready; waiting for start command" and "Already recording"). The query
 // commands (`--permissions`, `--request-accessibility`, `--request-screen`)
@@ -15,6 +16,7 @@
 // confirmation, decides for everything else.
 
 import { constants as osConstants } from "node:os";
+import type { PromiseWithChild } from "node:child_process";
 
 type HelperEvent = { kind?: unknown; detail?: unknown };
 
@@ -59,7 +61,7 @@ function reportsStatus(stdout: string, detail: HelperStatus): boolean {
   return false;
 }
 
-// The exact status strings the native helper reports for the two one-shot
+// The exact status strings the native helper reports for the one-shot
 // commands that confirm success this way. electron/main.ts imports these
 // constants instead of repeating the literal strings, and
 // tests/helper-result.test.ts checks that native/Recorder.swift's source
@@ -70,9 +72,28 @@ function reportsStatus(stdout: string, detail: HelperStatus): boolean {
 export const helperStatus = {
   pointDisplayed: "Point displayed",
   appOpened: "Application opened",
+  webPageOpened: "Web page opened",
+  clickSent: "Click sent",
+  scrollSent: "Scroll sent",
+  textTyped: "Text typed",
+  keysPressed: "Keys pressed",
 } as const;
 
 export type HelperStatus = (typeof helperStatus)[keyof typeof helperStatus];
+
+// The subset of helperStatus confirming a command that posts real input
+// (click, scroll, type, keys) or opens a real page (open-url), as opposed to
+// one that only shows something (--point, --open-app). runHelper reads a
+// call's expectedStatus to tell which kind it is, rather than taking a
+// separate flag: every input-command caller already passes one of these, so
+// no existing call site needs to change.
+const inputCommandStatus = new Set<HelperStatus>([
+  helperStatus.clickSent,
+  helperStatus.scrollSent,
+  helperStatus.textTyped,
+  helperStatus.keysPressed,
+  helperStatus.webPageOpened,
+]);
 
 type ExecFailure = Error & {
   stdout?: unknown;
@@ -128,7 +149,11 @@ export async function runHelper(
   } catch (error) {
     if (!isHelperFailure(error)) throw error;
     failureMessage =
-      reportedError(String(error.stdout ?? "")) ?? failureCause(error);
+      reportedError(String(error.stdout ?? "")) ??
+      failureCause(
+        error,
+        expectedStatus !== undefined && inputCommandStatus.has(expectedStatus),
+      );
   }
   if (failureMessage !== undefined) throw new Error(failureMessage);
   const reported = reportedError(stdout);
@@ -169,8 +194,11 @@ const unrunnableHelperErrnos = new Set<number>([
   -86, // EBADARCH; macOS-only, and not in os.constants.errno
 ]);
 
-function failureCause(failure: ExecFailure) {
-  if (failure.killed === true) return "The desktop helper timed out";
+function failureCause(failure: ExecFailure, isInputCommand: boolean) {
+  if (failure.killed === true)
+    return isInputCommand
+      ? "The desktop helper timed out; some input may already have been sent. Take a screenshot before retrying."
+      : "The desktop helper timed out";
   if (typeof failure.signal === "string" && failure.signal)
     return crashSignals.has(failure.signal)
       ? `The desktop helper crashed (${failure.signal})`
@@ -189,4 +217,20 @@ function failureCause(failure: ExecFailure) {
   if (typeof failure.code === "number")
     return `The desktop helper exited with code ${failure.code} and gave no reason. Try again; if it keeps failing, rebuild it with npm run build:native.`;
   return "The desktop helper failed and gave no reason. Try again; if it keeps failing, rebuild it with npm run build:native.";
+}
+
+// Writes `input` to the helper's stdin and closes it, for a command that
+// takes its argument there rather than on argv, which any process on the
+// Mac can read. A helper that exits before reading makes the write fail with
+// EPIPE; that error is dropped, because an `error` event with no listener
+// would crash the main process, and the helper's own exit already says what
+// went wrong.
+export function withInput<T>(
+  pending: PromiseWithChild<T>,
+  input: string,
+): PromiseWithChild<T> {
+  const { stdin } = pending.child;
+  stdin?.on("error", () => {});
+  stdin?.end(input);
+  return pending;
 }

@@ -1,4 +1,11 @@
-export type ApprovalPrompt = { message: string; detail?: string };
+// `allow` names the button that approves. It defaults to "Allow once", which
+// fits every prompt for a single action; the control prompt, which covers a
+// whole task, names its own (electron/control-grant.ts).
+export type ApprovalPrompt = {
+  message: string;
+  detail?: string;
+  allow?: string;
+};
 
 export type ApprovalDialogOptions = {
   type: "question";
@@ -51,9 +58,10 @@ export type ApprovalDeps = {
 
 // The model reads this message, not the user, so it must say not to retry
 // rather than invite one - a bare "declined" leaves the model free to ask
-// again right away. Both callers throw this constant for a declined prompt:
-// `electron/main.ts` for an open-app request, and `electron/point-action.ts`
-// for a point.
+// again right away. Every caller throws this constant for a declined prompt:
+// `electron/main.ts` for an open-app request, `electron/point-action.ts` for
+// a point, `electron/control-grant.ts` for control of the Mac, and
+// `electron/computer-action.ts` for a web page.
 export const DECLINED_MESSAGE =
   "The user declined. Don't retry unless they ask.";
 
@@ -91,7 +99,7 @@ export async function askApproval(
   // Return binding from being the default - so Escape declines, and Return
   // does nothing. Return can never allow the action.
   //
-  // Only "Allow once" approves. Everything else that closes the box
+  // Only the allow button approves. Everything else that closes the box
   // resolves as Cancel: the signal aborting, and the host window hiding,
   // which ends its sheet. Neither is the user declining, so each gets its
   // own error instead of reading as "no". A request that is already
@@ -104,7 +112,7 @@ export async function askApproval(
     title: "OpenMuse wants to take an action",
     message: prompt.message,
     detail: prompt.detail,
-    buttons: ["Cancel", "Allow once"],
+    buttons: ["Cancel", prompt.allow ?? "Allow once"],
     defaultId: 0,
     cancelId: 0,
     ...(signal ? { signal } : {}),
