@@ -17,7 +17,7 @@ export type CaptureDeps = {
   screenCaptureAllowed(): Promise<boolean>;
   primaryDisplay(): { id: number; label: string; size: Size; bounds: Rect };
   displays(): { id: number; bounds: Rect }[];
-  conceal(): () => void; // fades the visible OpenMuse windows, returns restore
+  conceal(): () => void; // fades the visible OpenFuse windows, returns restore
   wait(ms: number): Promise<void>;
   sources(target: Size): Promise<CaptureSource[]>;
   rebuild(png: Buffer, size: Size): Buffer;
@@ -69,7 +69,7 @@ export async function captureScreenshot(
 ): Promise<ScreenshotAttachment> {
   if (!(await deps.screenCaptureAllowed()))
     throw new Error(
-      "Allow Screen Recording for OpenMuse Desktop in System Settings > Privacy & Security > Screen & System Audio Recording, then quit and reopen OpenMuse Desktop.",
+      "Allow Screen Recording for OpenFuse Desktop in System Settings > Privacy & Security > Screen & System Audio Recording, then quit and reopen OpenFuse Desktop.",
     );
   const display = deps.primaryDisplay();
   const target = captureSize(display.size);
@@ -93,7 +93,7 @@ export async function captureScreenshot(
     const sources = await withTimeout(
       deps.sources(target),
       deps.sourcesTimeoutMs,
-      "Screen capture didn't respond. Try again, or quit and reopen OpenMuse Desktop.",
+      "Screen capture didn't respond. Try again, or quit and reopen OpenFuse Desktop.",
     );
     // The pixels are already captured, so the concealed windows can come
     // back now rather than staying invisible through the PNG work and the
@@ -111,7 +111,7 @@ export async function captureScreenshot(
       );
     if (source.thumbnail.isEmpty())
       throw new Error(
-        "Screen capture came back empty. If you just granted Screen Recording, quit and reopen OpenMuse Desktop.",
+        "Screen capture came back empty. If you just granted Screen Recording, quit and reopen OpenFuse Desktop.",
       );
     // A 2x capture needs rebuilding at the target's own pixel size, not a
     // plain resize; main.ts holds the concrete `rebuild` implementation,

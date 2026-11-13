@@ -59,7 +59,7 @@ export function Buddy({
       <button
         className={"buddy-sprite" + (dragging ? " dragging" : "")}
         title="Click to chat · drag to move"
-        aria-label="Chat with OpenMuse or drag to move companion"
+        aria-label="Chat with OpenFuse or drag to move companion"
         onPointerDown={(event) => {
           if (event.button !== 0 || !event.isPrimary) return;
           // Recover if macOS interrupted the previous gesture before release.
@@ -124,8 +124,8 @@ export function Buddy({
       </button>
       <div className="buddy-actions" aria-label="Companion actions">
         <button
-          title="Chat with OpenMuse"
-          aria-label="Chat with OpenMuse"
+          title="Chat with OpenFuse"
+          aria-label="Chat with OpenFuse"
           onClick={() => openMode("chat")}
         >
           <MessageCircle size={18} />

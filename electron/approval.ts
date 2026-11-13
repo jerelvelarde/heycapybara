@@ -16,7 +16,7 @@ export type ApprovalDialogOptions = {
 // A window that can host the approval dialog as an attached sheet.
 export type SheetHost = { isVisible(): boolean; isDestroyed(): boolean };
 
-// Picks which OpenMuse window should host the approval sheet. The companion
+// Picks which OpenFuse window should host the approval sheet. The companion
 // chat wins when it's on screen; otherwise the sheet falls back to the main
 // workspace window, and `mustShow` tells the caller to bring that window on
 // screen first, so the user can see the sheet. Only quitting destroys the
@@ -31,14 +31,14 @@ export function approvalHost<W extends SheetHost>({
   if (!companionChat.isDestroyed() && companionChat.isVisible()) {
     return { host: companionChat, mustShow: false };
   }
-  if (workspace.isDestroyed()) throw new Error("OpenMuse is closing.");
+  if (workspace.isDestroyed()) throw new Error("OpenFuse is closing.");
   return { host: workspace, mustShow: !workspace.isVisible() };
 }
 
 export type ApprovalDeps = {
-  // Makes OpenMuse the active app even when another app is in front.
+  // Makes OpenFuse the active app even when another app is in front.
   activate(): void;
-  // Must attach the box to an OpenMuse window as a sheet: on macOS, a
+  // Must attach the box to an OpenFuse window as a sheet: on macOS, a
   // message box with no parent window blocks the whole main process until
   // it's answered.
   showMessageBox(options: ApprovalDialogOptions): Promise<{ response: number }>;
@@ -71,13 +71,13 @@ export async function askApproval(
   deps: ApprovalDeps,
   signal?: AbortSignal,
 ) {
-  // Shown as a sheet attached to an OpenMuse window, never as a
+  // Shown as a sheet attached to an OpenFuse window, never as a
   // free-floating alert. A parentless message box on macOS runs its own
   // synchronous loop until it's answered, which would stall the in-process
   // runtime server, the MCP endpoint, every IPC handler, and all timers for
   // as long as the prompt stays open.
   //
-  // OpenMuse activates first, so the sheet doesn't open behind whatever app
+  // OpenFuse activates first, so the sheet doesn't open behind whatever app
   // the user is in (approve in main.ts also bounces the Dock icon when the
   // sheet is on the workspace, the only host another app's windows can
   // cover).
@@ -95,13 +95,13 @@ export async function askApproval(
   // resolves as Cancel: the signal aborting, and the host window hiding,
   // which ends its sheet. Neither is the user declining, so each gets its
   // own error instead of reading as "no". A request that is already
-  // cancelled never activates OpenMuse or shows the box at all.
+  // cancelled never activates OpenFuse or shows the box at all.
   if (signal?.aborted)
     throw new Error("The request was cancelled before the user answered.");
   deps.activate();
   const { response } = await deps.showMessageBox({
     type: "question",
-    title: "OpenMuse wants to take an action",
+    title: "OpenFuse wants to take an action",
     message: prompt.message,
     detail: prompt.detail,
     buttons: ["Cancel", "Allow once"],

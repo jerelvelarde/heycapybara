@@ -1,15 +1,15 @@
 # Verification log
 
-## OpenMuse Desktop / HeyCapybara rebrand — 2026-09-23
+## OpenFuse Desktop / HeyCapybara rebrand — 2026-09-23
 
-- Preserved the original illustration composition and layout while applying OpenMuse's blue/white palette. Native screenshots verified the generated capybara and original Kite in the hero.
+- Preserved the original illustration composition and layout while applying OpenFuse's blue/white palette. Native screenshots verified the generated capybara and original Kite in the hero.
 - Native Settings UI switched between both companions; a full quit/relaunch retained Kite and displayed it in the floating buddy. Restored Capybara as the saved choice afterward.
 - Dragging the capybara saved a new position, and clicking it opened the workspace.
 - Model connection restored through the secure session-only field; the UI reported Connected and cleared the input.
 - All 26 tests, formatting, ESLint and explicit typecheck passed. Full Swift/renderer/Electron package passed with the new capybara icon.
 - Strict recursive signing verification passed with sealed bundle metadata/resources and identity `com.kite.sprite`. This corrects the previous unbound Electron signature. Current Accessibility and Screen Recording checks still report not granted: reapproval for the newly signed build remains necessary before capture can be tested.
 - Independent source review found two regressions (low-contrast keyboard focus and stale packaged verification path); both were fixed and re-reviewed.
-- New public repository is `jerelvelarde/heycapybara`. Remote `heykite` remains at `c432d48f7f3ef1bcbfa638fbd95202aa54e16945`; no upstream OpenMuse PR was opened.
+- New public repository is `jerelvelarde/heycapybara`. Remote `heykite` remains at `c432d48f7f3ef1bcbfa638fbd95202aa54e16945`; no upstream OpenFuse PR was opened.
 
 ## Codex upgrade — 2026-09-23
 
@@ -41,7 +41,7 @@ The original build was unsigned; the current packaging pipeline ad-hoc signs and
 
 ## Original mascot correction — 2026-09-23
 
-- Replaced the violet approximation with the exact OpenMuse tan capybara asset. SHA-256 matches upstream: `3a323215d0976583d0c3d0748df06bce75db9b05cc955901709b18e3b64e9b34`. Upstream MIT notice retained.
+- Replaced the violet approximation with the exact OpenFuse tan capybara asset. SHA-256 matches upstream: `3a323215d0976583d0c3d0748df06bce75db9b05cc955901709b18e3b64e9b34`. Upstream MIT notice retained.
 - Formatting, lint, typecheck, all 26 tests and full signed packaging pass.
 - Relaunch is awaiting the user's macOS Documents-folder permission response. TCC logs identify a new ad-hoc code hash and a pending Documents request; the main process is blocked in file open before windows are created. The updated launch has therefore not yet been visually verified.
 - Notch onboarding and the native .app drag tile are researched and proposed in `superpowers/specs/2026-09-23-notch-onboarding-proposal.md`, not implemented pending design approval.
@@ -50,7 +50,7 @@ The original build was unsigned; the current packaging pipeline ad-hoc signs and
 
 The notch tour and the notch placement are removed, and the floating companion (Capybara or Kite) is the only placement. A first-launch setup window (Welcome → Permissions → Ready) replaces the tour, and a recording and setup never run at the same time. An opt-in version of the notch onboarding was implemented on `jerel/kite-os-learning` (PR #1, since merged into `main`) and is removed here. Design: `superpowers/specs/2026-09-24-clean-onboarding-design.md`.
 
-Since the last review, OpenMuse decides whether to show setup before anything creates the library, refuses a recording or the companion's tray while a setup replay is saving, shows the main process's own error text in every window, and no longer holds up a quit with a load-failure dialog.
+Since the last review, OpenFuse decides whether to show setup before anything creates the library, refuses a recording or the companion's tray while a setup replay is saving, shows the main process's own error text in every window, and no longer holds up a quit with a load-failure dialog.
 
 - These checks ran after merging `main` (PR #1 and the pointer/screenshot contract, PR #2) into this branch. Formatting, lint, typecheck, 247 unit tests (this branch’s and those that came with `main`; the same count in two runs), the native helper build and the renderer/Electron build pass. The development smoke (`npm run smoke`) passed twice in a row with the same ledger, quoted below.
 - Verifying on the merged tree exposed two ways a quit could hang, now fixed. A display change that macOS sends while the app quits reached the destroyed companion window, and Electron showed its uncaught-exception dialog; a diagnostic that repeats the smoke’s short launches hit it in 4 of 6 quits, and 0 of 6 after the fix. Startup also awaited the "⌘⇧K is in use" warning as a sheet on the hidden workspace, so a taken shortcut stalled startup; the shortcut is now registered last and retried, and a conflict is logged instead of shown in a dialog.
@@ -85,7 +85,7 @@ The smoke’s ledger from the second of those runs, verbatim. The entries marked
 ✓ Settings hides System Settings for granted permissions
 ✓ Replay setup reopens setup and hides the companion
 ✓ closing setup skips it
-✓ Start using OpenMuse finishes setup
+✓ Start using OpenFuse finishes setup
 ✓ replay refused while a recording is starting
 ✓ recording refused while setup is reopening
 ✓ companion tray refused while setup is reopening

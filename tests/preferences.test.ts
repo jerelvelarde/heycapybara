@@ -23,7 +23,7 @@ import {
 const unreadable = (path: string) => (error: unknown) =>
   error instanceof Error &&
   error.message.startsWith(`Could not read ${path}: `) &&
-  error.message.endsWith(" Fix or delete this file, then reopen OpenMuse.");
+  error.message.endsWith(" Fix or delete this file, then reopen OpenFuse.");
 const unsaved = (path: string) => (error: unknown) =>
   error instanceof Error &&
   error.message.startsWith(`Could not save ${path}: `) &&
@@ -213,7 +213,7 @@ test("startup fails with the library path when it cannot check the library", asy
         error instanceof Error &&
         error.message.startsWith(`Could not open ${library}: `) &&
         error.message.endsWith(
-          " Make sure this folder can be opened, then reopen OpenMuse.",
+          " Make sure this folder can be opened, then reopen OpenFuse.",
         ) &&
         (error.cause as NodeJS.ErrnoException).code === "ENOTDIR",
     );

@@ -23,7 +23,7 @@ const rows = [
     kind: "screenCapture",
     title: "Screen Recording",
     detail: "Attach a screenshot to a message when you choose.",
-    hint: "macOS may ask to reopen OpenMuse.",
+    hint: "macOS may ask to reopen OpenFuse.",
     icon: Monitor,
   },
 ] as const;
@@ -118,7 +118,7 @@ export function Onboarding({ data }: { data: Snapshot }) {
               Meet your new work buddy.
             </h1>
             <p>
-              Show OpenMuse a workflow once, and it becomes a skill you can use
+              Show OpenFuse a workflow once, and it becomes a skill you can use
               again.
             </p>
             <div className="onboarding-actions">
@@ -246,7 +246,7 @@ export function Onboarding({ data }: { data: Snapshot }) {
                   )
                 }
               >
-                Start using OpenMuse <ArrowRight size={15} />
+                Start using OpenFuse <ArrowRight size={15} />
               </button>
               <button
                 className="text-button"

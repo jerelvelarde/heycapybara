@@ -17,7 +17,7 @@ function launch(dir) {
     ...(process.argv.includes("--packaged")
       ? {
           executablePath:
-            "release/mac-arm64/OpenMuse Desktop.app/Contents/MacOS/OpenMuse Desktop",
+            "release/mac-arm64/OpenFuse Desktop.app/Contents/MacOS/OpenFuse Desktop",
           args: [],
         }
       : { args: ["."] }),
@@ -50,7 +50,7 @@ const permissionRows = [
   ["screenCapture", "Screen Recording", "Privacy_ScreenCapture"],
 ];
 const ACCESSIBILITY_REFUSAL =
-  "Enable Accessibility for OpenMuse Desktop in System Settings, then retry.";
+  "Enable Accessibility for OpenFuse Desktop in System Settings, then retry.";
 // The message a renderer gets when zod refuses an IPC argument: the issues as indented JSON.
 const zodMessage = (...issues) => JSON.stringify(issues, null, 2);
 
@@ -350,7 +350,7 @@ async function firstLaunch({ dir: dataDir, launchApp }) {
   // Measure the setup window's placement before anything (e.g. a later show()) could perturb it.
   const windowInfo = await setupWindowTitleAndBounds();
   if (!windowInfo) throw new Error("Setup window disappeared");
-  if (windowInfo.title !== "Welcome to OpenMuse")
+  if (windowInfo.title !== "Welcome to OpenFuse")
     throw new Error(`Unexpected setup window title: ${windowInfo.title}`);
   const expectedX = Math.round(
     windowInfo.workArea.x +
@@ -459,7 +459,7 @@ async function firstLaunch({ dir: dataDir, launchApp }) {
     ).toBeDisabled();
     await page.getByRole("button", { name: "Close", exact: true }).click();
     await expect(
-      page.getByRole("heading", { name: "Show OpenMuse your way." }),
+      page.getByRole("heading", { name: "Show OpenFuse your way." }),
     ).toHaveCount(0);
   } finally {
     await app.evaluate(({ BrowserWindow }, id) => {
@@ -880,7 +880,7 @@ async function firstLaunch({ dir: dataDir, launchApp }) {
   );
   covered("closing setup skips it");
 
-  // Finishing setup via "Start using OpenMuse" (never exercised above) must also complete cleanly.
+  // Finishing setup via "Start using OpenFuse" (never exercised above) must also complete cleanly.
   await expectChange(
     appState,
     { windows: { setup: "closed", buddy: true } },
@@ -910,14 +910,14 @@ async function firstLaunch({ dir: dataDir, launchApp }) {
       onboardingComplete: false,
       preferences: { onboardingComplete: false },
     },
-    () => replay2.getByRole("button", { name: "Start using OpenMuse" }).click(),
+    () => replay2.getByRole("button", { name: "Start using OpenFuse" }).click(),
     {
       windows: { setup: "closed", buddy: true },
       onboardingComplete: true,
       preferences: { onboardingComplete: true },
     },
   );
-  covered("Start using OpenMuse finishes setup");
+  covered("Start using OpenFuse finishes setup");
 
   const buddy = await waitForWindow(app, "buddy");
   const chat = await waitForWindow(app, "chat");
@@ -998,7 +998,7 @@ async function firstLaunch({ dir: dataDir, launchApp }) {
   covered("companion tray refused while setup is reopening");
 
   await buddy
-    .getByRole("button", { name: /Chat with OpenMuse or drag/ })
+    .getByRole("button", { name: /Chat with OpenFuse or drag/ })
     .hover();
   await expect
     .poll(() =>
@@ -1017,7 +1017,7 @@ async function firstLaunch({ dir: dataDir, launchApp }) {
     .toBe("none");
   await buddy.emulateMedia({ reducedMotion: "no-preference" });
   await expect(
-    buddy.getByRole("button", { name: "Chat with OpenMuse", exact: true }),
+    buddy.getByRole("button", { name: "Chat with OpenFuse", exact: true }),
   ).toBeVisible();
   await expect(
     buddy.getByRole("button", { name: "Record a workflow", exact: true }),
@@ -1025,17 +1025,17 @@ async function firstLaunch({ dir: dataDir, launchApp }) {
   await buddy.screenshot({ path: "artifacts/pet-hover.png" });
   covered("companion hover greets and respects reduced motion");
 
-  const askOpenMuse = chat.getByRole("textbox", { name: "Ask OpenMuse" });
+  const askOpenFuse = chat.getByRole("textbox", { name: "Ask OpenFuse" });
   await expectChange(
     () => visibility(app),
     { chat: false },
     () =>
-      buddy.getByRole("button", { name: /Chat with OpenMuse or drag/ }).click(),
+      buddy.getByRole("button", { name: /Chat with OpenFuse or drag/ }).click(),
     { chat: true },
   );
-  await expect(askOpenMuse).toBeVisible();
+  await expect(askOpenFuse).toBeVisible();
   await chat.screenshot({ path: "artifacts/pet-chat.png" });
-  await askOpenMuse.fill("Remember this draft");
+  await askOpenFuse.fill("Remember this draft");
   await expectChange(
     () => visibility(app),
     { chat: true },
@@ -1121,14 +1121,14 @@ async function firstLaunch({ dir: dataDir, launchApp }) {
 
   await chat.getByRole("button", { name: "Close chat" }).click();
   await buddy
-    .getByRole("button", { name: /Chat with OpenMuse or drag/ })
+    .getByRole("button", { name: /Chat with OpenFuse or drag/ })
     .click();
-  await expect(askOpenMuse).toHaveValue("Remember this draft");
+  await expect(askOpenFuse).toHaveValue("Remember this draft");
   const keyPrompt = chat.getByText(
     "Connect your OpenAI API key in Settings to start this session.",
   );
   const composer = async () => ({
-    draft: await askOpenMuse.inputValue(),
+    draft: await askOpenFuse.inputValue(),
     keyPrompt: await keyPrompt.count(),
   });
   await expectChange(
@@ -1185,7 +1185,7 @@ async function firstLaunch({ dir: dataDir, launchApp }) {
   await page.getByRole("button", { name: "Overview", exact: true }).click();
   const recordDialog = async () => ({
     open: await page
-      .getByRole("heading", { name: "Show OpenMuse your way." })
+      .getByRole("heading", { name: "Show OpenFuse your way." })
       .count(),
   });
   await expectChange(

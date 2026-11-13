@@ -58,7 +58,7 @@ function unreadablePreferencesError(path: string, error: unknown): Error {
         ? error.message
         : String(error);
   return new Error(
-    `Could not read ${path}: ${sentence(reason)} Fix or delete this file, then reopen OpenMuse.`,
+    `Could not read ${path}: ${sentence(reason)} Fix or delete this file, then reopen OpenFuse.`,
     { cause: error },
   );
 }
@@ -74,7 +74,7 @@ function unsavablePreferencesError(path: string, error: unknown): Error {
 // Startup shows this message in its error dialog. The library holds the user's recordings and skills, so it never suggests deleting it.
 function unopenableLibraryError(libraryPath: string, error: unknown): Error {
   return new Error(
-    `Could not open ${libraryPath}: ${fileSystemReason(error)} Make sure this folder can be opened, then reopen OpenMuse.`,
+    `Could not open ${libraryPath}: ${fileSystemReason(error)} Make sure this folder can be opened, then reopen OpenFuse.`,
     { cause: error },
   );
 }

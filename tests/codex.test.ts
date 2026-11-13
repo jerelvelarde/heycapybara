@@ -1460,7 +1460,7 @@ test("screenshot notes cover every state, checked in the documented order", asyn
       imageSize: { width: 1386, height: 900 },
       referenceId: "unknown",
       opening:
-        "Image 1 in this message names a screenshot OpenMuse doesn't have",
+        "Image 1 in this message names a screenshot OpenFuse doesn't have",
     },
     {
       name: "no id",
@@ -1475,7 +1475,7 @@ test("screenshot notes cover every state, checked in the documented order", asyn
       imageSize: { width: 1386, height: 900 },
       referenceId: "valid",
       opening:
-        "Image 1 in this message names a screenshot OpenMuse doesn't have",
+        "Image 1 in this message names a screenshot OpenFuse doesn't have",
     },
   ];
   for (const row of rows) {

@@ -59,7 +59,7 @@ test("passes the exact dialog options for a prompt with a detail", async () => {
   );
   assert.deepEqual(received, {
     type: "question",
-    title: "OpenMuse wants to take an action",
+    title: "OpenFuse wants to take an action",
     message: "The agent wants to show a pointer on Display A",
     detail: "The agent says it points at: Save button",
     buttons: ["Cancel", "Allow once"],
@@ -143,7 +143,7 @@ test("forwards the signal in the dialog options, so aborting it closes the box",
   assert.equal(received?.signal, controller.signal);
 });
 
-test("a request cancelled before asking rejects without activating OpenMuse or showing the box", async () => {
+test("a request cancelled before asking rejects without activating OpenFuse or showing the box", async () => {
   const events: string[] = [];
   const controller = new AbortController();
   controller.abort();
@@ -317,7 +317,7 @@ for (const { name, chat } of [
           companionChat: chat,
           workspace: makeSheetHost(false, true),
         }),
-      { message: "OpenMuse is closing." },
+      { message: "OpenFuse is closing." },
     );
   });
 }

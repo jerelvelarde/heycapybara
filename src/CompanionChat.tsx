@@ -57,7 +57,7 @@ export function CompanionChat({
           ) : (
             <span className="companion-kite-mark">✦</span>
           )}
-          {mode === "record" ? "Record a workflow" : "Chat with OpenMuse"}
+          {mode === "record" ? "Record a workflow" : "Chat with OpenFuse"}
         </span>
         <div>
           {mode === "chat" && (

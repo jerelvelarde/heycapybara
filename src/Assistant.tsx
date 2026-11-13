@@ -298,7 +298,7 @@ export function Assistant({
             .filter((m) => m.role === "user" || m.role === "assistant")
             .map((m) => (
               <div key={m.id} className={"message " + m.role}>
-                <small>{m.role === "user" ? "YOU" : "OPENMUSE"}</small>
+                <small>{m.role === "user" ? "YOU" : "OPENFUSE"}</small>
                 <p>
                   {typeof m.content === "string"
                     ? m.content.length > 2400 && m.role === "user"
@@ -357,10 +357,10 @@ export function Assistant({
           </div>
         )}
         <textarea
-          aria-label="Ask OpenMuse"
+          aria-label="Ask OpenFuse"
           value={input}
           onChange={(e) => setInput(e.target.value)}
-          placeholder="Ask OpenMuse anything…"
+          placeholder="Ask OpenFuse anything…"
           onKeyDown={(e) => {
             if (e.key === "Enter" && !e.shiftKey) {
               e.preventDefault();
