@@ -2,7 +2,7 @@
 
 An OpenFuse-inspired macOS desktop companion, developed in [jerelvelarde/heycapybara](https://github.com/jerelvelarde/heycapybara). The original [heykite](https://github.com/jerelvelarde/heykite) repository is preserved as the archive. This is a standalone contribution candidate, not an official OpenFuse release.
 
-The default capybara companion uses OpenFuse’s original warm tan artwork, including its original face and proportions. Choose **Settings → Desktop companion → Kite** for the original sprite. Both choices share drag/click behavior, and your choice is remembered between launches. The interface keeps the original friendly layout with colors from [OpenFuse](https://github.com/CopilotKit/openmuse/blob/main/apps/mobile/src/ui.tsx).
+The default capybara companion uses OpenFuse’s original warm tan artwork, including its original face and proportions. Choose **Settings → Desktop companion → Kite** for the original sprite. Both choices share drag/click behavior, and your choice is remembered between launches. The interface keeps the original friendly layout with colors from [OpenFuse](https://github.com/CopilotKit/openfuse/blob/main/apps/mobile/src/ui.tsx).
 
 A macOS desktop companion powered by the official Codex SDK, with AG-UI and a record-to-skill workflow. Electron hosts the floating sprite, compact chat, first-run setup window, and workspace; a Swift helper observes activity across native applications during explicitly started recordings.
 
