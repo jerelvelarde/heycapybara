@@ -435,7 +435,7 @@ await expect
 In `README.md`:
 
 - In the paragraph starting "A macOS desktop companion powered by the official Codex SDK", change "Electron hosts the floating sprite, compact chat, optional notch companion, and workspace" to "Electron hosts the floating sprite, compact chat, and workspace".
-- Replace the paragraph starting "On first launch, OpenMuse shows the floating capybara." with: "On first launch, OpenMuse shows the floating capybara. Grant Accessibility when you want to record workflows across apps; Screen Recording is optional and used only for screenshots you explicitly attach. Both can be enabled from **Settings → macOS permissions**. If OpenMuse is already listed but recording still fails, toggle its permission off and on and restart rather than adding a duplicate."
+- Replace the paragraph starting "On first launch, OpenFuse shows the floating capybara." with: "On first launch, OpenFuse shows the floating capybara. Grant Accessibility when you want to record workflows across apps; Screen Recording is optional and used only for screenshots you explicitly attach. Both can be enabled from **Settings → macOS permissions**. If OpenFuse is already listed but recording still fails, toggle its permission off and on and restart rather than adding a duplicate."
 - In the paragraph starting "Drag the sprite to move it", delete the last two sentences ("Use **Settings → Desktop companion → Notch** if you prefer the notch placement. The capybara and Kite artwork choices work in either placement.").
 
 - [x] **Step 10: Run the full check suite**
@@ -593,7 +593,7 @@ function makeOnboardingWindow() {
     minimizable: false,
     maximizable: false,
     fullscreenable: false,
-    title: "Welcome to OpenMuse",
+    title: "Welcome to OpenFuse",
     titleBarStyle: "hiddenInset",
     backgroundColor: "#ffffff",
     webPreferences: {
@@ -612,7 +612,7 @@ function makeOnboardingWindow() {
       });
   void loaded.catch((error: unknown) =>
     dialog.showErrorBox(
-      "OpenMuse setup could not load",
+      "OpenFuse setup could not load",
       error instanceof Error ? error.message : "Unknown loading error",
     ),
   );
@@ -693,7 +693,7 @@ const rows = [
     kind: "screenCapture",
     title: "Screen Recording",
     detail: "Attach a screenshot to a message when you choose.",
-    hint: "macOS may ask to reopen OpenMuse.",
+    hint: "macOS may ask to reopen OpenFuse.",
     icon: Monitor,
   },
 ] as const;
@@ -778,7 +778,7 @@ export function Onboarding({ data }: { data: Snapshot }) {
               Meet your new work buddy.
             </h1>
             <p>
-              Show OpenMuse a workflow once, and it becomes a skill you can use
+              Show OpenFuse a workflow once, and it becomes a skill you can use
               again.
             </p>
             <div className="onboarding-actions">
@@ -899,7 +899,7 @@ export function Onboarding({ data }: { data: Snapshot }) {
                   )
                 }
               >
-                Start using OpenMuse <ArrowRight size={15} />
+                Start using OpenFuse <ArrowRight size={15} />
               </button>
               <button
                 className="text-button"
@@ -1282,9 +1282,9 @@ await expect
 
 - [x] **Step 11: Describe first launch in the README**
 
-In `README.md`, replace the paragraph starting "On first launch, OpenMuse shows the floating capybara." with:
+In `README.md`, replace the paragraph starting "On first launch, OpenFuse shows the floating capybara." with:
 
-"On first launch, OpenMuse opens a short setup window: a welcome, the two macOS permissions it uses, and where to find your companion. Accessibility is needed to record workflows across apps; Screen Recording is optional and used only for screenshots you explicitly attach. **Allow** asks macOS directly, and each permission shows as allowed once it is on in System Settings. If OpenMuse is already listed but recording still fails, toggle its permission off and on and restart rather than adding a duplicate. Closing the window skips setup; replay it from **Settings → Desktop companion** or the menu-bar item. When setup ends, the floating capybara appears."
+"On first launch, OpenFuse opens a short setup window: a welcome, the two macOS permissions it uses, and where to find your companion. Accessibility is needed to record workflows across apps; Screen Recording is optional and used only for screenshots you explicitly attach. **Allow** asks macOS directly, and each permission shows as allowed once it is on in System Settings. If OpenFuse is already listed but recording still fails, toggle its permission off and on and restart rather than adding a duplicate. Closing the window skips setup; replay it from **Settings → Desktop companion** or the menu-bar item. When setup ends, the floating capybara appears."
 
 - [x] **Step 12: Run the full check suite**
 
@@ -1308,7 +1308,7 @@ Wave reviews and the final integration review found problems in this plan's code
 - `src/Onboarding.tsx`: `allow()` records a request only after `permissions(kind)` resolves, so a failed request keeps **Allow**. A `go(next)` helper clears the action error on every screen change.
 - The waiting spinner uses the shared `.spin` class; `@keyframes onboarding-spin` is gone.
 - `scripts/smoke.mjs`: the onboarding screenshots pass `animations: "disabled"` and wait for the sprite image to decode. The `kite:permissions` stub answers with a snapshot of the machine's permission status, read once before the stub is installed, not a live read on every call; it answers after 400 ms, as macOS would (`f8bf647`). The smoke calls `openPermissionSettings` for each kind and expects exactly that kind's pane, and an unknown name is refused and opens nothing, so both panes are checked whatever the Mac has granted (`0845568`).
-- `electron/main.ts`: the screenshot handler also hides the setup window during capture. It restores the window with `showInactive()` before the other windows, so the workspace ends up in front once both are shown again. At first it restored the window only if it had been visible and still existed; `fe21dde` below restores it whenever it still exists. `makeOnboardingWindow` blocks `page-title-updated`, so the window keeps the title "Welcome to OpenMuse" instead of the page's `<title>`.
+- `electron/main.ts`: the screenshot handler also hides the setup window during capture. It restores the window with `showInactive()` before the other windows, so the workspace ends up in front once both are shown again. At first it restored the window only if it had been visible and still existed; `fe21dde` below restores it whenever it still exists. `makeOnboardingWindow` blocks `page-title-updated`, so the window keeps the title "Welcome to OpenFuse" instead of the page's `<title>`.
 - Task 1 Step 10 first expected `grep -rn -i "notch"` to print nothing, which cannot hold: the legacy-migration comment, enum, test and smoke assertion keep the word on purpose. The step now says so.
 
 A further code-review round (`git log --oneline 6a86bfb..7aa5308`) corrected:
@@ -1352,7 +1352,7 @@ Corrections that no round above recorded:
 
 Merged with `main` after PR #1 (`b98c668`) and the pointer/screenshot contract (PR #2, `1c68d2e`) landed there:
 
-- The screenshot handler is now `main`'s concealing `captureScreenshot` pipeline (`electron/screen-capture.ts`), so the setup-window hide and restore described above (`1f898e0`, `75ad705`, `fe21dde`) is gone. The setup window takes the removed notch window's place in `openMuseWindows()`, so captures and pointer overlays fade it out and back in like the other OpenMuse windows, and a replay during a capture leaves the companion hidden because nothing is re-shown.
+- The screenshot handler is now `main`'s concealing `captureScreenshot` pipeline (`electron/screen-capture.ts`), so the setup-window hide and restore described above (`1f898e0`, `75ad705`, `fe21dde`) is gone. The setup window takes the removed notch window's place in `openFuseWindows()`, so captures and pointer overlays fade it out and back in like the other OpenFuse windows, and a replay during a capture leaves the companion hidden because nothing is re-shown.
 - `kite:action` and `KiteAPI.action` stay removed, and the unit suite now includes `main`'s tests (247 in total).
 - ⌘⇧K is registered after the menu bar item and the Dock handler, retried 1 s and then 3 s later, and a failure is only logged: on macOS a parentless alert freezes the main process until it is dismissed. Startup used to await that warning as a sheet on the workspace, which this branch keeps hidden at launch, so a taken shortcut stalled setup and later the quit.
 - `restoreVisibleBuddy` returns early once the companion window is destroyed. macOS sends display changes while the app quits; touching the destroyed window threw, and Electron's uncaught-exception dialog held the quit up (4 of 6 short launches in a diagnostic, 0 of 6 after the fix).

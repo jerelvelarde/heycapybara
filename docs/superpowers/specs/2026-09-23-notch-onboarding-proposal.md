@@ -14,11 +14,11 @@ Sources:
 
 ## Proposed behavior
 
-Use OpenMuse's original tan capybara without modifying its face or colors. Preserve the blue/white workspace, illustration layout and alternate Kite choice.
+Use OpenFuse's original tan capybara without modifying its face or colors. Preserve the blue/white workspace, illustration layout and alternate Kite choice.
 
 On first launch, show a compact panel beneath the hardware notch: Welcome, Accessibility, optional Screen Recording, Ready. Explain only capabilities the app actually has. There is no microphone or Google sign-in step because neither is implemented in this application. Existing installations get the new tour once; Settings can replay it. Closing the panel does not claim setup or permission completion.
 
-Accessibility offers Open System Settings, a draggable OpenMuse Desktop app tile, and Refresh status. A native outgoing file drag carries the running .app bundle, not an image or a copied executable. macOS controls the subsequent toggle and authentication. A packaged app is required for this tile; development explains that requirement and provides the ordinary permission controls. Keep a visible helper panel available while Settings is foreground. Provide Show app in Finder as a fallback.
+Accessibility offers Open System Settings, a draggable OpenFuse Desktop app tile, and Refresh status. A native outgoing file drag carries the running .app bundle, not an image or a copied executable. macOS controls the subsequent toggle and authentication. A packaged app is required for this tile; development explains that requirement and provides the ordinary permission controls. Keep a visible helper panel available while Settings is foreground. Provide Show app in Finder as a fallback.
 
 Screen Recording explains that screenshots are shared only when attached. Allow skipping it. After opening Settings, refresh actual permission status on focus and while the setup step is visible, with at most one check in flight. Distinguish granted, not granted, pending request and failed check. Never infer approval from opening Settings or dropping a tile. Allow retries and explain restart requirements.
 

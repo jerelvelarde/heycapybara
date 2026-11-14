@@ -124,7 +124,7 @@ test("a denied permission throws before anything is concealed or captured", asyn
   assert.ok(caught instanceof Error);
   assert.equal(
     caught.message,
-    "Allow Screen Recording for OpenMuse Desktop in System Settings > Privacy & Security > Screen & System Audio Recording, then quit and reopen OpenMuse Desktop.",
+    "Allow Screen Recording for OpenFuse Desktop in System Settings > Privacy & Security > Screen & System Audio Recording, then quit and reopen OpenFuse Desktop.",
   );
   assert.deepEqual(events, []);
 });
@@ -162,7 +162,7 @@ test("a sources call that never settles is refused once the timeout elapses, and
   assert.ok(caught instanceof Error);
   assert.equal(
     caught.message,
-    "Screen capture didn't respond. Try again, or quit and reopen OpenMuse Desktop.",
+    "Screen capture didn't respond. Try again, or quit and reopen OpenFuse Desktop.",
   );
   assert.equal(events.filter((e) => e === "restore").length, 1);
 });
@@ -275,7 +275,7 @@ test("an empty thumbnail is refused without ever encoding it, and still restores
   assert.ok(caught instanceof Error);
   assert.equal(
     caught.message,
-    "Screen capture came back empty. If you just granted Screen Recording, quit and reopen OpenMuse Desktop.",
+    "Screen capture came back empty. If you just granted Screen Recording, quit and reopen OpenFuse Desktop.",
   );
   assert.equal(events.filter((e) => e === "register").length, 0);
   assert.equal(events.filter((e) => e === "restore").length, 1);

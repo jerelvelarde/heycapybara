@@ -28,7 +28,7 @@ const RELIED_ON_BEHAVIOUR = [
   // electron/main.ts's approve(): why openWorkspace() leaves a companion
   // chat that is hosting a sheet on screen instead of hiding it.
   "hiding a window ends its sheet",
-  // electron/approval.ts: why the prompt's own message names OpenMuse
+  // electron/approval.ts: why the prompt's own message names OpenFuse
   // instead of leaving that to the dialog's title.
   "the message box ignores the `title` option",
   // electron/approval.ts: why Cancel is both the default and the cancel

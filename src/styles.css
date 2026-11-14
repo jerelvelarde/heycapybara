@@ -1896,7 +1896,7 @@ body:has(.companion-chat),
   overflow: auto;
 }
 
-/* OpenMuse's soft blue surfaces keep the original friendly orbit composition. */
+/* OpenFuse's soft blue surfaces keep the original friendly orbit composition. */
 .sidebar {
   background: var(--white);
 }

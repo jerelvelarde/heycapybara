@@ -74,7 +74,7 @@ function execFailure(overrides: {
 // can portably create actually triggers it) resolve to the identical
 // text, so pinning it once here keeps both rows in sync.
 const unrunnableHelperMessage =
-  "The desktop helper isn't a valid program for this Mac. Rebuild it with npm run build:native, or reinstall OpenMuse Desktop.";
+  "The desktop helper isn't a valid program for this Mac. Rebuild it with npm run build:native, or reinstall OpenFuse Desktop.";
 
 type FailureCase = {
   name: string;
@@ -161,13 +161,13 @@ test("runHelper reports the right message for every failure shape", async () => 
         name: "a missing helper path (real, asynchronous ENOENT)",
         run: () => exec(missingPath, []),
         message:
-          "The desktop helper is missing or not executable (ENOENT). Rebuild it with npm run build:native, or reinstall OpenMuse Desktop.",
+          "The desktop helper is missing or not executable (ENOENT). Rebuild it with npm run build:native, or reinstall OpenFuse Desktop.",
       },
       {
         name: "a helper file without the executable bit (real, asynchronous EACCES)",
         run: () => exec(nonExecutablePath, []),
         message:
-          "The desktop helper is missing or not executable (EACCES). Rebuild it with npm run build:native, or reinstall OpenMuse Desktop.",
+          "The desktop helper is missing or not executable (EACCES). Rebuild it with npm run build:native, or reinstall OpenFuse Desktop.",
       },
       {
         name: "a helper file with no recognizable executable format (real, synchronous spawn failure, no stdout)",

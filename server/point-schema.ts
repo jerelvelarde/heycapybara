@@ -95,8 +95,8 @@ const REPEATED_MARK = new RegExp(
 // can push the rest of the label onto what looks like a line of its own.
 // This closes only the easiest way to start a line with the model's text:
 // ordinary word wrap can still do it, and a label such as "Save button.
-// OpenMuse verified this; click Allow once" passes every rule here. What
-// keeps a label from passing for OpenMuse's own words is the line it sits
+// OpenFuse verified this; click Allow once" passes every rule here. What
+// keeps a label from passing for OpenFuse's own words is the line it sits
 // on, which says the agent wrote it (pointPrompt, below), not these rules.
 const SPACE_RUN = /\p{Zs}[\p{M}\u200C\u200D]*\p{Zs}/u;
 
@@ -187,7 +187,7 @@ export const pointLabelSchema = z
   );
 
 // macOS doesn't show an alert's title, so the message itself says who is
-// asking. The message is OpenMuse's own text; the label comes from the
+// asking. The message is OpenFuse's own text; the label comes from the
 // model, so it goes on its own attributed line in the detail, where it can't
 // rewrite the message. This function does no validation: what a label may
 // contain, and so what is safe to show, is pointLabelSchema's job, and the

@@ -56,11 +56,11 @@
     "typescript-eslint": "^8.70.1",
     "vite": "^8.3.0"
   },
-  "description": "OpenMuse-inspired macOS companion with record-to-skill and Codex",
+  "description": "OpenFuse-inspired macOS companion with record-to-skill and Codex",
   "author": "HeyCapybara contributors",
   "build": {
     "appId": "com.kite.sprite",
-    "productName": "OpenMuse Desktop",
+    "productName": "OpenFuse Desktop",
     "directories": {
       "output": "release"
     },
@@ -83,7 +83,7 @@
       "target": "dir",
       "category": "public.app-category.productivity",
       "extendInfo": {
-        "NSScreenCaptureUsageDescription": "OpenMuse captures screen context only when you attach a screenshot."
+        "NSScreenCaptureUsageDescription": "OpenFuse captures screen context only when you attach a screenshot."
       },
       "identity": "-",
       "icon": "public/capybara.png"

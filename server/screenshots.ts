@@ -249,7 +249,7 @@ export function unreferencedImageNote(imageNumber: number) {
 }
 
 export function unknownImageNote(imageNumber: number) {
-  return `Image ${imageNumber} in this message names a screenshot OpenMuse doesn't have, so point_on_screen can't target it. Ask the user to attach a new one if you need to point.`;
+  return `Image ${imageNumber} in this message names a screenshot OpenFuse doesn't have, so point_on_screen can't target it. Ask the user to attach a new one if you need to point.`;
 }
 
 export function mismatchedImageNote(imageNumber: number) {

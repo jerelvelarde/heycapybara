@@ -176,14 +176,14 @@ function failureCause(failure: ExecFailure) {
       ? `The desktop helper crashed (${failure.signal})`
       : `The desktop helper was stopped by ${failure.signal}`;
   if (failure.code === "ENOENT" || failure.code === "EACCES")
-    return `The desktop helper is missing or not executable (${failure.code}). Rebuild it with npm run build:native, or reinstall OpenMuse Desktop.`;
+    return `The desktop helper is missing or not executable (${failure.code}). Rebuild it with npm run build:native, or reinstall OpenFuse Desktop.`;
   if (failure.code === "ERR_CHILD_PROCESS_STDIO_MAXBUFFER")
     return "The desktop helper produced more output than expected";
   if (
     typeof failure.errno === "number" &&
     unrunnableHelperErrnos.has(failure.errno)
   )
-    return "The desktop helper isn't a valid program for this Mac. Rebuild it with npm run build:native, or reinstall OpenMuse Desktop.";
+    return "The desktop helper isn't a valid program for this Mac. Rebuild it with npm run build:native, or reinstall OpenFuse Desktop.";
   if (typeof failure.code === "string" && failure.code)
     return `The desktop helper could not run (${failure.code})`;
   if (typeof failure.code === "number")

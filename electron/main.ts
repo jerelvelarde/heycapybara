@@ -76,7 +76,7 @@ import { captureScreenshot, singleFlight } from "./screen-capture";
 
 // Preserve the installed app's data across the display-name rebrand.
 app.setPath("userData", join(app.getPath("appData"), "Kite"));
-app.setName("OpenMuse Desktop");
+app.setName("OpenFuse Desktop");
 if (process.env.KITE_DATA_DIR)
   app.setPath("userData", process.env.KITE_DATA_DIR);
 const root = app.getAppPath();
@@ -201,7 +201,7 @@ const broadcast = () =>
 // Every window listed here gets concealed for screenshots and the pointer;
 // a window left out of this list still shows up in captures and is never
 // cleared before the pointer ring appears over it.
-function openMuseWindows() {
+function openFuseWindows() {
   return [workspace, buddy, onboarding, companionChat].filter(
     (win): win is BrowserWindow => !!win && !win.isDestroyed(),
   );
@@ -212,7 +212,7 @@ function openMuseWindows() {
 const approvalHosts = new Map<BrowserWindow, number>();
 async function approve(prompt: ApprovalPrompt, signal?: AbortSignal) {
   const { host, mustShow } = approvalHost({ companionChat, workspace });
-  // -1, as bounce() itself returns when OpenMuse is already active, means
+  // -1, as bounce() itself returns when OpenFuse is already active, means
   // there is no bounce to cancel.
   let bounce = -1;
   approvalHosts.set(host, (approvalHosts.get(host) ?? 0) + 1);
@@ -233,7 +233,7 @@ async function approve(prompt: ApprovalPrompt, signal?: AbortSignal) {
             // workspace (see its return above), so this is always about the
             // workspace, never the companion chat.
             //
-            // app.show() undoes Cmd+H: that hides every OpenMuse window,
+            // app.show() undoes Cmd+H: that hides every OpenFuse window,
             // including one hosting no sheet at all, and makes each of them
             // report as not visible, so approvalHost() picks the workspace
             // and asks for it to be shown even though nothing the user did
@@ -265,7 +265,7 @@ async function approve(prompt: ApprovalPrompt, signal?: AbortSignal) {
       signal,
     );
   } finally {
-    // A critical bounce lasts until OpenMuse is activated, so a prompt that
+    // A critical bounce lasts until OpenFuse is activated, so a prompt that
     // ends while it's in the background - Stop does this; whether a bare
     // tool-call timeout does too is unverified - would leave the icon
     // bouncing for nothing.
@@ -321,7 +321,7 @@ async function approvedAction(input: unknown, signal?: AbortSignal) {
     {
       resolve: () => resolvePoint(screenshots, screen.getAllDisplays(), action),
       confirm: approve,
-      windows: openMuseWindows,
+      windows: openFuseWindows,
       showPointer: async (point) => {
         await runHelper(
           () =>
@@ -403,7 +403,7 @@ async function startRecording(title: string) {
   try {
     if (!(await permissions()).accessibility)
       throw new Error(
-        "Enable Accessibility for OpenMuse Desktop in System Settings, then retry.",
+        "Enable Accessibility for OpenFuse Desktop in System Settings, then retry.",
       );
     const recording = await store.start(title);
     const child = spawn(helper, [], { stdio: ["pipe", "pipe", "pipe"] });
@@ -462,7 +462,7 @@ async function startRecording(title: string) {
             await dialog.showMessageBox({
               type: "error",
               message:
-                "Could not finalize the recording. Retry Stop or restart OpenMuse Desktop.",
+                "Could not finalize the recording. Retry Stop or restart OpenFuse Desktop.",
             });
           });
       }
@@ -523,7 +523,7 @@ function makeWindow(isBuddy: boolean) {
     x: position?.x,
     y: position?.y,
     show: false,
-    title: "OpenMuse Desktop",
+    title: "OpenFuse Desktop",
     backgroundColor: isBuddy ? "#00000000" : "#fcfcfc",
     transparent,
     frame: !isBuddy,
@@ -596,7 +596,7 @@ function makeCompanionChatWindow() {
     // Quitting aborts a load that is still running; a dialog then would hold up the quit.
     if ((app as typeof app & { quitting?: boolean }).quitting) return;
     dialog.showErrorBox(
-      "OpenMuse chat could not load",
+      "OpenFuse chat could not load",
       error instanceof Error ? error.message : "Unknown loading error",
     );
   });
@@ -622,7 +622,7 @@ function makeOnboardingWindow() {
     minimizable: false,
     maximizable: false,
     fullscreenable: false,
-    title: "Welcome to OpenMuse",
+    title: "Welcome to OpenFuse",
     titleBarStyle: "hiddenInset",
     backgroundColor: "#ffffff",
     webPreferences: {
@@ -637,7 +637,7 @@ function makeOnboardingWindow() {
   });
   win.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
   win.webContents.on("will-navigate", (event) => event.preventDefault());
-  // Keep "Welcome to OpenMuse" instead of index.html's <title>.
+  // Keep "Welcome to OpenFuse" instead of index.html's <title>.
   win.on("page-title-updated", (event) => event.preventDefault());
   const loaded = process.env.KITE_DEV_URL
     ? win.loadURL(process.env.KITE_DEV_URL + "?onboarding=1")
@@ -652,14 +652,14 @@ function makeOnboardingWindow() {
       (app as typeof app & { quitting?: boolean }).quitting
     )
       return;
-    console.error("OpenMuse setup could not load", error);
+    console.error("OpenFuse setup could not load", error);
     // The closed handler clears `onboarding`, so the next sync builds a fresh window.
     win.destroy();
     void dialog.showMessageBox({
       type: "error",
-      message: "OpenMuse setup could not load",
+      message: "OpenFuse setup could not load",
       detail:
-        "Choose Replay setup from the OpenMuse menu bar icon to try again.",
+        "Choose Replay setup from the OpenFuse menu bar icon to try again.",
     });
   });
   win.once("ready-to-show", () => {
@@ -683,7 +683,7 @@ function makeOnboardingWindow() {
         type: "error",
         message: "Could not skip setup",
         detail:
-          "OpenMuse could not save your settings. Check free disk space and folder permissions, then close this window again.",
+          "OpenFuse could not save your settings. Check free disk space and folder permissions, then close this window again.",
       });
     });
   });
@@ -783,7 +783,7 @@ app
     );
     handle("chooseWorkspace", async () => {
       const result = await dialog.showOpenDialog(workspace, {
-        title: "Choose OpenMuse's working folder",
+        title: "Choose OpenFuse's working folder",
         message: "Codex can edit files and run commands in this folder.",
         properties: ["openDirectory", "createDirectory"],
         defaultPath: settings.workspace,
@@ -901,7 +901,7 @@ app
           primaryDisplay: () => screen.getPrimaryDisplay(),
           displays: () => screen.getAllDisplays(),
           conceal: () =>
-            conceal(openMuseWindows().filter((win) => win.isVisible())),
+            conceal(openFuseWindows().filter((win) => win.isVisible())),
           wait: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
           sources: (target) =>
             desktopCapturer.getSources({
@@ -1002,10 +1002,10 @@ app
       .resize({ width: 18, height: 18 });
     icon.setTemplateImage(true);
     tray = new Tray(icon);
-    tray.setToolTip("OpenMuse Desktop");
+    tray.setToolTip("OpenFuse Desktop");
     tray.setContextMenu(
       Menu.buildFromTemplate([
-        { label: "Open OpenMuse", click: openWorkspace },
+        { label: "Open OpenFuse", click: openWorkspace },
         { label: "Show companion", click: syncCompanionWindows },
         {
           label: "Replay setup",
@@ -1030,7 +1030,7 @@ app
           },
         },
         { type: "separator" },
-        { label: "Quit OpenMuse Desktop", click: () => app.quit() },
+        { label: "Quit OpenFuse Desktop", click: () => app.quit() },
       ]),
     );
     app.on("activate", () => {
@@ -1043,14 +1043,14 @@ app
     void registerWorkspaceShortcut().then((registered) => {
       if (!registered && !(app as typeof app & { quitting?: boolean }).quitting)
         console.warn(
-          "⌘⇧K is in use by another app; open OpenMuse from the menu bar.",
+          "⌘⇧K is in use by another app; open OpenFuse from the menu bar.",
         );
     });
   })
   .catch(async (error) => {
     await dialog.showMessageBox({
       type: "error",
-      message: "OpenMuse Desktop could not start",
+      message: "OpenFuse Desktop could not start",
       detail: error instanceof Error ? error.message : "Unknown startup error",
     });
     app.quit();
